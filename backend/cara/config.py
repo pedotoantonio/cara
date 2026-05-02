@@ -19,6 +19,24 @@ class Settings(BaseSettings):
 
     redis_url: str = Field(validation_alias="REDIS_URL")
 
+    # TTS (Piper) — server-side speech synthesis. Voices live as ONNX files in
+    # `tts_voices_dir` and are downloaded on demand from HuggingFace
+    # `rhasspy/piper-voices` the first time a voice is requested.
+    tts_voices_dir: str = Field(default="/app/tts/piper/voices", validation_alias="TTS_VOICES_DIR")
+    tts_default_voice: str = Field(
+        default="piper:it_IT-paola-medium", validation_alias="TTS_DEFAULT_VOICE"
+    )
+    tts_cache_ttl_seconds: int = Field(default=3600, validation_alias="TTS_CACHE_TTL_SECONDS")
+    tts_cache_max_chars: int = Field(default=400, validation_alias="TTS_CACHE_MAX_CHARS")
+    tts_enabled: bool = Field(default=True, validation_alias="TTS_ENABLED")
+
+    # Content Discovery Agent (CDA) — see /opt/cara/docs/cda-extension-spec.md.
+    # Empty SearXNG URL falls back to the DDG HTML provider.
+    cda_searxng_url: str = Field(default="", validation_alias="CDA_SEARXNG_URL")
+    cda_default_search_timeout: float = Field(
+        default=8.0, validation_alias="CDA_SEARCH_TIMEOUT"
+    )
+
     minio_endpoint: str = Field(validation_alias="MINIO_ENDPOINT")
     minio_access_key: str = Field(validation_alias="MINIO_ROOT_USER")
     minio_secret_key: str = Field(validation_alias="MINIO_ROOT_PASSWORD")
@@ -144,7 +162,8 @@ class Settings(BaseSettings):
             "[TOOL: add_shopping title=\"<prodotto>\"]   per aggiungere alla lista della spesa\n"
             "[TOOL: add_note title=\"<titolo>\" body=\"<testo>\"]   per salvare una nota\n"
             "[TOOL: get_news category=\"italia|mondo|tech|sport|all\"]   per leggere le notizie\n"
-            "[TOOL: play_radio station=\"rai-radio-1|rai-radio-2|rai-radio-3|bbc-world-service|...\"]   per accendere la radio\n"
+            "[TOOL: play_radio station=\"rai-radio-1|rai-radio-2|...\"]   accendi una radio gia' nel catalogo\n"
+            "[TOOL: discover query=\"<libera>\" kind=\"audio_stream|article|video|podcast|image|document\"]   per cercare un contenuto qualunque su internet (radio nuove, video YouTube, articoli, podcast, immagini)\n"
             "[TOOL: who_is_home]   per sapere chi e' in casa (riconoscimento facciale via telecamere)\n\n"
             "Subito dopo la riga del tool, scrivi UNA breve frase di conferma.\n\n"
             "Esempi:\n"
@@ -166,6 +185,14 @@ class Settings(BaseSettings):
             "CARA: [TOOL: play_radio station=\"rai-radio-2\"]\nVa bene.\n\n"
             "Utente: chi e' in casa adesso?\n"
             "CARA: [TOOL: who_is_home]\nGuardo subito.\n\n"
+            "Utente: fammi ascoltare radio capital\n"
+            "CARA: [TOOL: discover query=\"radio capital\" kind=\"audio_stream\"]\nCerco e accendo.\n\n"
+            "Utente: cerca un articolo sulla riforma fiscale\n"
+            "CARA: [TOOL: discover query=\"riforma fiscale 2026\" kind=\"article\"]\nGuardo subito.\n\n"
+            "Utente: fammi vedere il trailer di Avatar 3\n"
+            "CARA: [TOOL: discover query=\"trailer Avatar 3\" kind=\"video\"]\nLo cerco.\n\n"
+            "Utente: l'ultima puntata di caterpillar\n"
+            "CARA: [TOOL: discover query=\"Caterpillar Rai Radio 2 podcast\" kind=\"podcast\"]\nVado a prenderla.\n\n"
             "Utente: ciao come stai\n"
             "CARA: Ciao! Sto bene, grazie. Come posso aiutarti?\n\n"
             "Per qualsiasi altra richiesta, rispondi normalmente senza tool. "

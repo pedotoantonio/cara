@@ -45,6 +45,13 @@ DEFAULTS: dict[str, Any] = {
     "voice_rate": None,            # 0.5–2.0 sensible, default 1.0
     "voice_pitch": None,           # 0.0–2.0, default 1.0
     "voice_volume": None,          # 0.0–1.0, default 1.0
+    # Content Discovery Agent (CDA) — see /opt/cara/docs/cda-extension-spec.md.
+    "cda_enabled": True,           # master switch for the discover tool
+    "cda_replace_legacy_pages": False,  # Radio/News pages read from KB when on
+    "cda_ytdlp_youtube_enabled": False, # extract YouTube streams via yt-dlp
+    "cda_safe_search_for_minors": True, # force safe search for child/teen
+    "cda_domain_blacklist": None,  # list[str] of always-blocked domains
+    "cda_domain_whitelist_for_child": None,  # allowed domains for child role
 }
 
 

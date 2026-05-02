@@ -17,6 +17,7 @@ const NAV = [
   { to: '/notes', label: 'Note', icon: '📝' },
   { to: '/news', label: 'News', icon: '📰' },
   { to: '/radio', label: 'Radio', icon: '📻' },
+  { to: '/discoveries', label: 'Scoperte', icon: '🌐' },
   { to: '/settings', label: 'Impost.', icon: '⚙️' },
 ];
 

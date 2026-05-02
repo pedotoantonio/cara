@@ -6,6 +6,7 @@ import type { User } from './api/auth';
 import { getVoiceConfig } from './api/voice';
 import { AppShell } from './components/AppShell';
 import { Login } from './components/Login';
+import { CdaPlayerProvider } from './lib/cdaPlayer';
 import { RadioPlayerProvider } from './lib/radioPlayer';
 import { ReactionsProvider, useReactions } from './lib/reactions';
 import { setSoundsEnabled, setVolume } from './lib/sounds';
@@ -47,6 +48,7 @@ function BirthdayWatcher({ user }: { user: User }) {
 }
 import { AdminPage } from './routes/AdminPage';
 import { ChatPage } from './routes/ChatPage';
+import { DiscoveriesPage } from './routes/DiscoveriesPage';
 import { FaceLabPage } from './routes/FaceLabPage';
 import { HomePage } from './routes/HomePage';
 import { NewsPage } from './routes/NewsPage';
@@ -112,6 +114,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <RadioPlayerProvider>
+      <CdaPlayerProvider>
       <ReactionsProvider>
       <BirthdayWatcher user={auth.user} />
       <Routes>
@@ -127,6 +130,7 @@ export default function App() {
           <Route path="notes" element={<NotesPage />} />
           <Route path="news" element={<NewsPage />} />
           <Route path="radio" element={<RadioPage />} />
+          <Route path="discoveries" element={<DiscoveriesPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="face-lab" element={<FaceLabPage />} />
           <Route path="settings" element={<SettingsPage />} />
@@ -134,6 +138,7 @@ export default function App() {
         </Route>
       </Routes>
       </ReactionsProvider>
+      </CdaPlayerProvider>
       </RadioPlayerProvider>
     </BrowserRouter>
   );

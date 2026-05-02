@@ -122,11 +122,13 @@ services:
     volumes:
       - ./data/uploads:/app/uploads
       - ./data/models:/app/models:ro
+      - ./data/tts:/app/tts                      # Piper voice ONNX files (auto-downloaded)
       - /home/apedo/cara-poc-rkllm/runtime-v1.1.0/lib/librkllmrt.so:/usr/lib/rkllm/librkllmrt.so:ro
     environment:
       LD_LIBRARY_PATH: /usr/lib/rkllm
       LLM_MODEL_PATH: /app/models/qwen2.5-1.5b-instruct-w8a8.rkllm
       LLM_RUNTIME_LIB_PATH: /usr/lib/rkllm/librkllmrt.so
+      TTS_VOICES_DIR: /app/tts/piper/voices
       # NB: tested UVICORN_WORKERS=2 on 2026-05-01 — both workers loaded fine
       # (2× 1.5B fits in ~3 GB NPU memory) but throughput per session DROPPED
       # from 9 to 3-4 tok/s with TTFT 3s vs 0.3s, even on a single in-flight

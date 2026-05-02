@@ -14,6 +14,7 @@ import {
 } from '../api/admin';
 import type { User } from '../api/auth';
 import { listVoices, setVoiceConfig, speak, ttsAvailable } from '../lib/speech';
+import { listPiperVoices, type PiperVoice } from '../lib/piperTts';
 
 const FEATURE_FLAGS: Array<{ key: string; label: string; help: string }> = [
   { key: 'internet_enabled', label: 'Accesso internet', help: 'Master switch per news/radio/web' },
@@ -30,6 +31,10 @@ const FEATURE_FLAGS: Array<{ key: string; label: string; help: string }> = [
   { key: 'cloud_llm_enabled', label: 'LLM cloud (fallback)', help: 'Riservato' },
   { key: 'validation_enabled', label: 'Validazione risposte (self-critique)', help: 'Raddoppia latenza' },
   { key: 'cognitive_mode', label: 'Cognitive mode (prompt esteso)', help: 'Per modelli 3B+' },
+  { key: 'cda_enabled', label: 'Content Discovery Agent', help: 'Tool [discover] per trovare contenuti su internet' },
+  { key: 'cda_replace_legacy_pages', label: 'Radio/News dalla KB', help: 'Pagine leggono da cda_content_items invece dei feed hardcoded' },
+  { key: 'cda_ytdlp_youtube_enabled', label: 'yt-dlp per video YouTube', help: 'Estrae stream invece di usare embed (zona grigia ToS)' },
+  { key: 'cda_safe_search_for_minors', label: 'Safe Search per minori', help: 'Forza filtro nei profili child/teen' },
 ];
 
 const PROMPT_FIELDS: Array<{
@@ -96,11 +101,11 @@ export function AdminPage() {
   const [saving, setSaving] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // Voice list available on this device — populates the datalist below.
-  // Voices may load asynchronously, so refresh after first paint.
+  // Browser voices available on this device — used as suggestions for the
+  // "voce del browser" engine. Loaded asynchronously by the browser.
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   useEffect(() => {
-    if (!ttsAvailable()) return;
+    if (!ttsAvailable() || !('speechSynthesis' in window)) return;
     setAvailableVoices(listVoices());
     const sy = window.speechSynthesis;
     const onChange = () => setAvailableVoices(listVoices());
@@ -112,6 +117,14 @@ export function AdminPage() {
     return () => {
       sy.onvoiceschanged = prev;
     };
+  }, []);
+
+  // Server-side Piper voices catalog (the "Voce di CARA" engine).
+  const [piperVoices, setPiperVoices] = useState<PiperVoice[]>([]);
+  useEffect(() => {
+    listPiperVoices()
+      .then(setPiperVoices)
+      .catch(() => setPiperVoices([]));
   }, []);
 
   useEffect(() => {
@@ -218,6 +231,18 @@ export function AdminPage() {
     });
   }
 
+  // Quickly preview a single Piper voice from the catalog (without writing
+  // it to the global "name" field — handy to compare voices side by side).
+  function previewPiperVoice(piperId: string) {
+    speak('Ciao, sono CARA. Senti come suono?', {
+      lang: 'it',
+      rate: voice.rate,
+      pitch: voice.pitch,
+      volume: voice.volume,
+      voiceName: piperId,
+    });
+  }
+
   function resetVoice() {
     setVoice(VOICE_DEFAULT);
   }
@@ -317,27 +342,79 @@ export function AdminPage() {
         </section>
 
         {/* Voice (TTS) tuning */}
-        <section className="rounded-2xl bg-slate-800/60 border border-slate-700 p-5 space-y-3">
+        <section className="rounded-2xl bg-slate-800/60 border border-slate-700 p-5 space-y-4">
           <header className="space-y-1">
             <h2 className="text-sm font-medium">Voce di CARA</h2>
             <p className="text-xs text-slate-500">
-              La sintesi vocale gira nel browser di chi usa CARA: i nomi voce qui sotto sono quelli
-              installati su <em>questo</em> dispositivo. Su iPhone/iPad scegli "Paola" per la voce
-              italiana premium. Tono e velocità sono universali.
+              CARA può parlare in due modi: <strong className="text-slate-300">"voce di CARA"</strong>{' '}
+              (Piper sul server, stessa su tutti i dispositivi della famiglia, italiana nativa) oppure
+              <strong className="text-slate-300">"voce del browser"</strong> (es. Paola di iPhone, qualità
+              top quando il dispositivo ce l'ha). Ogni utente sceglie quale usare in <em>Impostazioni</em>;
+              qui sotto puoi configurare le preferenze di default.
             </p>
           </header>
 
-          <div className="space-y-1">
-            <label className="block text-xs text-slate-400">
-              Nome voce preferita{' '}
-              <span className="text-slate-600">(vuoto = scelta automatica)</span>
-            </label>
+          {/* Piper voice catalog */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-medium text-slate-300 uppercase tracking-wide">
+              "Voce di CARA" (Piper, server)
+            </h3>
+            {piperVoices.length === 0 ? (
+              <p className="text-xs text-slate-500">
+                Catalogo Piper non disponibile (TTS server non avviato o ancora in caricamento).
+              </p>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-[11px] text-slate-500">
+                  Le voci si scaricano automaticamente al primo utilizzo (~20–60 MB ciascuna). Default
+                  configurato in <code className="text-emerald-300">.env</code> con{' '}
+                  <code className="text-emerald-300">TTS_DEFAULT_VOICE</code>.
+                </p>
+                <ul className="space-y-1">
+                  {piperVoices.map((pv) => (
+                    <li
+                      key={pv.id}
+                      className="flex items-center gap-2 rounded-lg bg-slate-900/40 border border-slate-700/40 px-3 py-2 text-xs"
+                    >
+                      <span className="flex-1 min-w-0">
+                        <span className="text-slate-100">{pv.display_name}</span>{' '}
+                        <span className="text-slate-500">
+                          {pv.locale} · {pv.gender ?? '—'} · {pv.quality}
+                          {pv.size_mb ? ` · ${pv.size_mb} MB` : ''} · {pv.license}
+                        </span>
+                        {pv.description && (
+                          <span className="block text-slate-600">{pv.description}</span>
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => previewPiperVoice(pv.id)}
+                        className="rounded-lg bg-slate-900 hover:bg-slate-700 border border-slate-700 px-2 py-1"
+                      >
+                        ▶
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          {/* Browser voice preference */}
+          <div className="space-y-1 pt-2 border-t border-slate-700/50">
+            <h3 className="text-xs font-medium text-slate-300 uppercase tracking-wide">
+              "Voce del browser" — voce preferita
+            </h3>
+            <p className="text-[11px] text-slate-500">
+              Suggerimento usato dai client che hanno scelto la voce del browser. Su iPhone/iPad
+              "Paola" è la voce italiana premium.
+            </p>
             <input
               type="text"
               list="cara-admin-voice-list"
               value={voice.name}
               onChange={(e) => setVoice({ ...voice, name: e.target.value })}
-              placeholder="es. Paola"
+              placeholder="es. Paola (vuoto = scelta automatica)"
               className="w-full rounded-xl bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
             />
             <datalist id="cara-admin-voice-list">

@@ -2,11 +2,26 @@
 
 from fastapi import APIRouter
 
-from cara.api.v1 import admin, auth, chat, conversations, family, files, news, notes, radio, shopping, tasks, voice
+from cara.api.v1 import (
+    admin,
+    auth,
+    cda,
+    chat,
+    conversations,
+    family,
+    files,
+    news,
+    notes,
+    radio,
+    shopping,
+    tasks,
+    voice,
+)
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(admin.router)
 router.include_router(auth.router)
+router.include_router(cda.router)
 router.include_router(chat.router)
 router.include_router(conversations.router)
 router.include_router(family.router)

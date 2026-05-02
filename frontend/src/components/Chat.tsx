@@ -17,6 +17,7 @@ import {
   ttsAvailable,
   type ListenHandle,
 } from '../lib/speech';
+import { useCdaPlayer } from '../lib/cdaPlayer';
 import { useRadioPlayer } from '../lib/radioPlayer';
 import { ensureSomeProse, executeTools, parseToolCalls } from '../lib/tools';
 import type { Conversation, Message } from '../types/chat';
@@ -50,6 +51,7 @@ export function Chat({ user }: ChatProps) {
   const [listening, setListening] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile drawer
   const radioPlayer = useRadioPlayer();
+  const cdaPlayer = useCdaPlayer();
   const [pendingFiles, setPendingFiles] = useState<{ id: string; filename: string; kind: string }[]>([]);
   const [uploading, setUploading] = useState(false);
   const abortRef = useRef<(() => void) | null>(null);
@@ -183,6 +185,7 @@ export function Chat({ user }: ChatProps) {
                 void executeTools(parsed.toolCalls, {
                   radio: { playStation: radioPlayer.playStation, stop: radioPlayer.stop },
                   speak: voiceEnabled ? (text: string) => speak(text, { lang: 'it' }) : undefined,
+                  openContent: cdaPlayer.open,
                 }).then((results) => {
                   toolResults = results.map((r) => ({ ok: r.ok, detail: r.detail }));
                   setMessages((ms2) => {

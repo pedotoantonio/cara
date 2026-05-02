@@ -1,9 +1,16 @@
 /**
- * Web Speech API helpers — pure browser-side, no server dependency.
+ * Speech helpers — both browser-side TTS and the server-rendered Piper TTS.
  *
- * TTS: uses the OS-installed voices via `speechSynthesis`. We prefer
- * "Paola" (Italian, premium on Apple devices) and fall back to any it-IT
- * voice; English fallback to en-US/en-GB.
+ * TTS engines:
+ *   - **browser**: `SpeechSynthesisUtterance` (OS-installed voices). On iPhone
+ *     this is premium "Paola"; on Linux/Chrome desktop it's eSpeak robotic.
+ *   - **piper**: `/api/v1/voice/synthesize` returns WAV from server-side Piper.
+ *     Same quality on every device; ~1 s of network round-trip + decode.
+ *
+ * `speak()` routes to whichever engine the user picked in their localStorage
+ * preferences. Both emit the same `onSpeakEvent` bus (`start`, `pulse(word)`,
+ * `end`) so downstream consumers (avatar lip-sync, live caption) work
+ * regardless of engine.
  *
  * STT: uses `SpeechRecognition` (Webkit-prefixed on iOS/Safari). Locale
  * defaults to it-IT; the caller can override.
@@ -12,6 +19,9 @@
  * desktop Chrome on Linux for several voices). We expose `available()` so
  * the UI can hide controls cleanly.
  */
+
+import { piperSpeak, piperStop } from './piperTts';
+import { loadPrefs } from './userPrefs';
 
 const PREFERRED_IT = ['Paola', 'Alice', 'Luca'];
 
@@ -26,7 +36,20 @@ if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
   window.speechSynthesis.onvoiceschanged = refreshVoices;
 }
 
+/** True if the device can synthesise speech in any way (browser or Piper).
+ * Server-side Piper works on every modern browser via fetch + Web Audio. */
 export function ttsAvailable(): boolean {
+  if (typeof window === 'undefined') return false;
+  if ('speechSynthesis' in window) return true;
+  // Piper still works as long as we can fetch and play audio.
+  const w = window as unknown as { fetch?: unknown; AudioContext?: unknown; webkitAudioContext?: unknown };
+  return typeof w.fetch === 'function' && (Boolean(w.AudioContext) || Boolean(w.webkitAudioContext));
+}
+
+/** True only if the browser exposes SpeechSynthesisUtterance (used by the
+ * "voce del browser" engine). The settings UI reads this to know whether
+ * to offer the toggle at all. */
+export function browserTtsAvailable(): boolean {
   return typeof window !== 'undefined' && 'speechSynthesis' in window;
 }
 
@@ -181,7 +204,47 @@ function chunkForSpeech(text: string, maxLen = 180): string[] {
 }
 
 export function speak(text: string, opts: SpeakOptions = {}) {
-  if (!ttsAvailable() || !text.trim()) return;
+  if (!text.trim()) return;
+  // Resolve final knobs: explicit call args > admin config > spec default.
+  const rate = opts.rate ?? _voiceConfig.rate ?? 1;
+  const pitch = opts.pitch ?? _voiceConfig.pitch ?? 1;
+  const volume = opts.volume ?? _voiceConfig.volume ?? 1;
+
+  // Engine routing: user's per-device preference picks browser vs Piper.
+  // If the user is on a browser with no SpeechSynthesis (e.g. Firefox on
+  // Linux), we fall back to Piper transparently. If Piper is unreachable,
+  // its own onError fires and we surface end so the caller's logic resumes.
+  const prefs = loadPrefs();
+  const engine: 'piper' | 'browser' = (() => {
+    if (prefs.ttsEngine === 'piper') return 'piper';
+    if (prefs.ttsEngine === 'browser' && ttsAvailable()) return 'browser';
+    // browser preferred but unavailable → piper
+    return 'piper';
+  })();
+
+  if (engine === 'piper') {
+    // Stop any browser TTS in flight before switching engines.
+    if (ttsAvailable() && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    // If admin set voice_name as "piper:..." use it; else server picks default.
+    const adminName = _voiceConfig.name;
+    const piperVoiceId = adminName?.startsWith('piper:') ? adminName : undefined;
+    void piperSpeak({
+      text,
+      voiceId: opts.voiceName?.startsWith('piper:') ? opts.voiceName : piperVoiceId,
+      speed: rate,
+      volume,
+      onStart: () => _emit({ type: 'start' }),
+      onPulse: (word) => _emit({ type: 'pulse', word }),
+      onEnd: () => {
+        _emit({ type: 'end' });
+        opts.onEnd?.();
+      },
+      onError: () => undefined,
+    });
+    return;
+  }
+
+  if (!ttsAvailable()) return;
   const synth = window.speechSynthesis;
   // Cancel any previous speech to avoid pile-up.
   synth.cancel();
@@ -190,11 +253,6 @@ export function speak(text: string, opts: SpeakOptions = {}) {
   const chunks = chunkForSpeech(text);
   if (chunks.length === 0) return;
   const lastIdx = chunks.length - 1;
-
-  // Resolve final knobs: explicit call args > admin config > spec default.
-  const rate = opts.rate ?? _voiceConfig.rate ?? 1;
-  const pitch = opts.pitch ?? _voiceConfig.pitch ?? 1;
-  const volume = opts.volume ?? _voiceConfig.volume ?? 1;
 
   chunks.forEach((chunk, i) => {
     const utt = new SpeechSynthesisUtterance(chunk);
@@ -236,6 +294,7 @@ export function speak(text: string, opts: SpeakOptions = {}) {
 
 export function stopSpeaking() {
   if (ttsAvailable()) window.speechSynthesis.cancel();
+  piperStop();
   _emit({ type: 'end' });
 }
 

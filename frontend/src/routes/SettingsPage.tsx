@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
 
 import { changePassword, updateMe, type User } from '../api/auth';
-import { loadPrefs, savePrefs } from '../lib/userPrefs';
+import { loadPrefs, savePrefs, type TTSEngine } from '../lib/userPrefs';
 import { playSound, setSoundsEnabled, setVolume } from '../lib/sounds';
+import { browserTtsAvailable, speak, stopSpeaking } from '../lib/speech';
 
 interface OutletCtx {
   user: User;
@@ -29,12 +30,19 @@ export function SettingsPage() {
   const [soundsOn, setSoundsOn] = useState(initial.soundsEnabled);
   const [vol, setVol] = useState(initial.soundsVolume);
   const [wakeWordOn, setWakeWordOn] = useState(initial.wakeWordEnabled);
+  const [ttsEngine, setTTSEngine] = useState<TTSEngine>(initial.ttsEngine);
 
   useEffect(() => {
     setSoundsEnabled(soundsOn);
     setVolume(vol);
-    savePrefs({ ...loadPrefs(), soundsEnabled: soundsOn, soundsVolume: vol, wakeWordEnabled: wakeWordOn });
-  }, [soundsOn, vol, wakeWordOn]);
+    savePrefs({
+      ...loadPrefs(),
+      soundsEnabled: soundsOn,
+      soundsVolume: vol,
+      wakeWordEnabled: wakeWordOn,
+      ttsEngine,
+    });
+  }, [soundsOn, vol, wakeWordOn, ttsEngine]);
 
   async function saveProfile(e: React.FormEvent) {
     e.preventDefault();
@@ -190,6 +198,67 @@ export function SettingsPage() {
 
         <section className="space-y-3 rounded-2xl bg-slate-800/60 border border-slate-700 p-5">
           <h2 className="text-sm font-medium">Voce</h2>
+
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Quale voce usare quando CARA parla:</p>
+            <label className="flex items-start gap-2 text-sm cursor-pointer rounded-lg border border-slate-700/60 px-3 py-2 hover:bg-slate-900/40">
+              <input
+                type="radio"
+                name="tts-engine"
+                value="piper"
+                checked={ttsEngine === 'piper'}
+                onChange={() => setTTSEngine('piper')}
+                className="accent-emerald-500 mt-1"
+              />
+              <span>
+                <span className="text-slate-100">Voce di CARA</span>{' '}
+                <span className="text-[11px] text-emerald-300/80">(consigliata)</span>
+                <span className="block text-xs text-slate-500 mt-0.5">
+                  Sintesi sul server con Piper. Stessa voce su tutti i dispositivi della famiglia
+                  (Paola, italiana, qualità media). Funziona anche su browser senza voci installate.
+                </span>
+              </span>
+            </label>
+            <label
+              className={`flex items-start gap-2 text-sm rounded-lg border border-slate-700/60 px-3 py-2 ${
+                browserTtsAvailable() ? 'cursor-pointer hover:bg-slate-900/40' : 'opacity-50 cursor-not-allowed'
+              }`}
+            >
+              <input
+                type="radio"
+                name="tts-engine"
+                value="browser"
+                disabled={!browserTtsAvailable()}
+                checked={ttsEngine === 'browser'}
+                onChange={() => setTTSEngine('browser')}
+                className="accent-emerald-500 mt-1"
+              />
+              <span>
+                <span className="text-slate-100">Voce del browser</span>
+                <span className="block text-xs text-slate-500 mt-0.5">
+                  Usa la voce installata sul tuo dispositivo (es. "Paola" su iPhone, qualità top).
+                  {!browserTtsAvailable() && ' Non disponibile in questo browser.'}
+                </span>
+              </span>
+            </label>
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => speak('Ciao, sono CARA. Ti sembra suoni bene così?', { lang: 'it' })}
+                className="rounded-lg bg-slate-900 hover:bg-slate-700 border border-slate-700 px-3 py-1.5 text-xs"
+              >
+                ▶ Prova la voce
+              </button>
+              <button
+                type="button"
+                onClick={() => stopSpeaking()}
+                className="rounded-lg bg-slate-900 hover:bg-slate-700 border border-slate-700 px-3 py-1.5 text-xs"
+              >
+                ⏹ Stop
+              </button>
+            </div>
+          </div>
+
           <label className="flex items-start gap-2 text-sm cursor-pointer">
             <input
               type="checkbox"

@@ -7,6 +7,7 @@
  * structured action list, and strip them from the user-visible content.
  */
 
+import { discoverContent, type CdaKind } from '../api/cda';
 import { whoIsHome } from '../api/family';
 import { getNews, type NewsCategory } from '../api/news';
 import { createNote } from '../api/notes';
@@ -24,12 +25,22 @@ export type ToolCall =
   | { type: 'play_radio'; station: string }
   | { type: 'stop_radio' }
   | { type: 'who_is_home' }
+  | { type: 'discover'; query: string; kind: CdaKind }
   | { type: 'unknown'; raw: string };
 
 // Match any of our known tool names. The tolerant prefix absorbs the 1.5B's
 // occasional typos around "TOOL" / "TUPO" / "TU" / missing prefix.
 const TOOL_LINE_RE =
-  /\[\s*(?:[A-Z_]+\s*:?\s*)?(add_task|complete_task|list_tasks|add_shopping|add_note|get_news|play_radio|stop_radio|who_is_home)\b\s*([^\]]*?)\]/gi;
+  /\[\s*(?:[A-Z_]+\s*:?\s*)?(add_task|complete_task|list_tasks|add_shopping|add_note|get_news|play_radio|stop_radio|who_is_home|discover)\b\s*([^\]]*?)\]/gi;
+
+const CDA_KINDS: ReadonlyArray<CdaKind> = [
+  'audio_stream',
+  'article',
+  'video',
+  'podcast',
+  'image',
+  'document',
+];
 
 const NEWS_CATEGORIES: ReadonlyArray<NewsCategory> = ['all', 'italia', 'mondo', 'economia', 'tech', 'sport'];
 
@@ -84,6 +95,11 @@ export function parseToolCalls(content: string): ParsedAssistantMessage {
       allCalls.push({ type: 'stop_radio' });
     } else if (lower === 'who_is_home') {
       allCalls.push({ type: 'who_is_home' });
+    } else if (lower === 'discover') {
+      const query = (args.query ?? '').trim();
+      const kindRaw = (args.kind ?? 'article').toLowerCase() as CdaKind;
+      const kind = CDA_KINDS.includes(kindRaw) ? kindRaw : 'article';
+      if (query) allCalls.push({ type: 'discover', query, kind });
     } else {
       allCalls.push({ type: 'unknown', raw: `${name} ${argstr}` });
     }
@@ -105,6 +121,7 @@ const TOOL_FALLBACK_BY_KIND: Partial<Record<ToolCall['type'], string>> = {
   play_radio: 'Accendo la radio.',
   stop_radio: 'Spengo la radio.',
   who_is_home: 'Guardo subito chi vedo in casa…',
+  discover: 'Cerco e te lo metto su…',
 };
 
 /** Pick a friendly default if `cleaned` is empty/too short after parsing. */
@@ -176,6 +193,17 @@ export interface ToolExecCtx {
   };
   /** Speak callback (when set, news-style tools read their digest aloud). */
   speak?: (text: string) => void;
+  /** Optional callback that opens a player for arbitrary content discovered
+   *  by the CDA. The bubble shows a short detail line; full playback happens
+   *  in a `<MediaPlayer>` / `<ArticleReader>` mounted at app level. */
+  openContent?: (content: {
+    kind: CdaKind;
+    url: string;
+    title: string | null;
+    source_domain: string | null;
+    metadata: Record<string, unknown>;
+    content_id: string;
+  }) => void;
 }
 
 export async function executeTools(
@@ -243,6 +271,27 @@ export async function executeTools(
       } else if (c.type === 'stop_radio') {
         ctx.radio?.stop();
         results.push({ call: c, ok: true, detail: 'Radio spenta.' });
+      } else if (c.type === 'discover') {
+        try {
+          const r = await discoverContent(c.query, c.kind);
+          ctx.openContent?.({
+            kind: r.kind as CdaKind,
+            url: r.url,
+            title: r.title,
+            source_domain: r.source_domain,
+            metadata: r.metadata,
+            content_id: r.content_id,
+          });
+          const label = r.title ?? r.url;
+          const src = r.source_domain ? ` (${r.source_domain})` : '';
+          results.push({
+            call: c,
+            ok: true,
+            detail: `Trovato: ${label}${src}${r.cached ? ' · dalla memoria' : ''}`,
+          });
+        } catch (e) {
+          results.push({ call: c, ok: false, detail: (e as Error).message });
+        }
       } else if (c.type === 'who_is_home') {
         const r = await whoIsHome(15);
         if (r.count === 0) {

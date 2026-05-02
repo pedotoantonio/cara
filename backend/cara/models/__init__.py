@@ -2,6 +2,7 @@
 
 from cara.models.admin_settings import AdminSetting
 from cara.models.audit import AuditLog
+from cara.models.cda import CdaContentItem, CdaDomainTrust, CdaQueryLog, CdaUserPreference
 from cara.models.conversation import Conversation, Message
 from cara.models.file import UploadedFile
 from cara.models.note import Note
@@ -12,6 +13,10 @@ from cara.models.user import User
 __all__ = [
     "AdminSetting",
     "AuditLog",
+    "CdaContentItem",
+    "CdaDomainTrust",
+    "CdaQueryLog",
+    "CdaUserPreference",
     "Conversation",
     "Message",
     "Note",
