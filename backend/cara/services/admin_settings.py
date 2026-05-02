@@ -37,6 +37,14 @@ DEFAULTS: dict[str, Any] = {
     "llm_validation_prompt": None,
     "llm_validation_max_tokens": None,
     "llm_cognitive_prompt": None,
+    # Voice (TTS) tuning. The browser does the actual synthesis so these
+    # are advisory; if `voice_name` doesn't match a voice installed on the
+    # device, the frontend falls back to its preferred-Italian heuristic.
+    # Numeric ranges follow the SpeechSynthesisUtterance spec.
+    "voice_name": None,            # e.g. "Paola"; None = auto-pick best italian
+    "voice_rate": None,            # 0.5–2.0 sensible, default 1.0
+    "voice_pitch": None,           # 0.0–2.0, default 1.0
+    "voice_volume": None,          # 0.0–1.0, default 1.0
 }
 
 

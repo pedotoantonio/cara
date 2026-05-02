@@ -3,11 +3,13 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
 import { clearTokens, fetchMe, getToken } from './api/auth';
 import type { User } from './api/auth';
+import { getVoiceConfig } from './api/voice';
 import { AppShell } from './components/AppShell';
 import { Login } from './components/Login';
 import { RadioPlayerProvider } from './lib/radioPlayer';
 import { ReactionsProvider, useReactions } from './lib/reactions';
 import { setSoundsEnabled, setVolume } from './lib/sounds';
+import { setVoiceConfig } from './lib/speech';
 import { loadPrefs } from './lib/userPrefs';
 
 // Apply persisted sound prefs on first import.
@@ -71,6 +73,15 @@ export default function App() {
         setAuth({ kind: 'anonymous' });
       });
   }, []);
+
+  // Pull admin-set voice knobs once the user is authenticated, so every
+  // call to `speak()` uses the configured pitch/rate/volume/voice name.
+  useEffect(() => {
+    if (auth.kind !== 'authenticated') return;
+    getVoiceConfig()
+      .then((cfg) => setVoiceConfig(cfg))
+      .catch(() => undefined);
+  }, [auth.kind]);
 
   function refreshMe() {
     fetchMe()

@@ -35,9 +35,50 @@ export function listVoices(): SpeechSynthesisVoice[] {
   return _voicesCache;
 }
 
-export function pickVoice(lang: 'it' | 'en' = 'it'): SpeechSynthesisVoice | null {
+// --- voice config (from admin) ---------------------------------------------
+//
+// The admin panel stores name/rate/pitch/volume in the backend. The frontend
+// fetches it once on app start and caches it here. `speak()` reads from this
+// cache when the caller doesn't pass an explicit override.
+
+interface VoiceConfig {
+  name?: string;
+  rate?: number;
+  pitch?: number;
+  volume?: number;
+}
+
+let _voiceConfig: VoiceConfig = {};
+
+export function setVoiceConfig(cfg: {
+  name?: string | null;
+  rate?: number | null;
+  pitch?: number | null;
+  volume?: number | null;
+}): void {
+  _voiceConfig = {
+    name: cfg.name?.trim() || undefined,
+    rate: cfg.rate ?? undefined,
+    pitch: cfg.pitch ?? undefined,
+    volume: cfg.volume ?? undefined,
+  };
+}
+
+export function getVoiceConfig(): Readonly<VoiceConfig> {
+  return _voiceConfig;
+}
+
+export function pickVoice(
+  lang: 'it' | 'en' = 'it',
+  preferredName?: string,
+): SpeechSynthesisVoice | null {
   const voices = listVoices();
   if (voices.length === 0) return null;
+  const wanted = preferredName ?? _voiceConfig.name;
+  if (wanted) {
+    const v = voices.find((x) => x.name === wanted);
+    if (v) return v;
+  }
   const target = lang === 'it' ? 'it' : 'en';
   if (target === 'it') {
     for (const name of PREFERRED_IT) {
@@ -60,6 +101,9 @@ export interface SpeakOptions {
   lang?: 'it' | 'en';
   rate?: number;        // 0.1–10, default 1
   pitch?: number;       // 0–2, default 1
+  volume?: number;      // 0–1, default 1
+  /** Override admin-set voice name preference (e.g. for in-admin previews). */
+  voiceName?: string;
   onEnd?: () => void;
 }
 
@@ -142,10 +186,15 @@ export function speak(text: string, opts: SpeakOptions = {}) {
   // Cancel any previous speech to avoid pile-up.
   synth.cancel();
 
-  const v = pickVoice(opts.lang ?? 'it');
+  const v = pickVoice(opts.lang ?? 'it', opts.voiceName);
   const chunks = chunkForSpeech(text);
   if (chunks.length === 0) return;
   const lastIdx = chunks.length - 1;
+
+  // Resolve final knobs: explicit call args > admin config > spec default.
+  const rate = opts.rate ?? _voiceConfig.rate ?? 1;
+  const pitch = opts.pitch ?? _voiceConfig.pitch ?? 1;
+  const volume = opts.volume ?? _voiceConfig.volume ?? 1;
 
   chunks.forEach((chunk, i) => {
     const utt = new SpeechSynthesisUtterance(chunk);
@@ -153,8 +202,9 @@ export function speak(text: string, opts: SpeakOptions = {}) {
       utt.voice = v;
       utt.lang = v.lang;
     }
-    utt.rate = opts.rate ?? 1;
-    utt.pitch = opts.pitch ?? 1;
+    utt.rate = rate;
+    utt.pitch = pitch;
+    utt.volume = volume;
     if (i === 0) utt.onstart = () => _emit({ type: 'start' });
     if (i === lastIdx) {
       utt.onend = () => {
