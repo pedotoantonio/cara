@@ -1,0 +1,48 @@
+# Secrets & local config
+.env
+.env.*
+!.env.example
+
+# Persistent data (bind-mounted into containers)
+data/postgres/*
+data/minio/*
+data/redis/*
+data/chroma/*
+data/uploads/*
+data/models/*
+!data/*/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.log
+npm-debug.log*
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Misc
+*.pid
+*.seed
+*.pid.lock
+
+# Local backup files (e.g., docker-compose.yml.bak.<ts>)
+*.bak
+*.bak.*

@@ -1,0 +1,191 @@
+name: cara
+
+# CARA stack.
+#
+# Single network (proxy-net) for all services.
+# Originally split into cara-net (internal) + proxy-net (external) but Docker
+# daemon 20.10.5 on this host does not support multi-network in a single
+# container create, which Compose v5 requires. See CLAUDE.md "Manutenzione
+# 2026-04-30 / Container compose: workaround multi-network".
+# Postgres/Redis/MinIO/Chroma do NOT publish ports — they remain unreachable
+# from outside the docker bridge. The shared network is functional, not a
+# security boundary.
+#
+# Profiles:
+#   default profile: postgres, redis, minio, chroma  (infrastructure only)
+#   profile "app":   backend, celery, frontend       (application code)
+#
+# Usage:
+#   docker compose up -d                 # infra only
+#   docker compose --profile app up -d   # full stack
+
+x-app-env: &app-env
+  env_file: .env
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cara-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB required}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - proxy-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: cara-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD required}
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - proxy-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: cara-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD required}
+    volumes:
+      - ./data/minio:/data
+    networks:
+      - proxy-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  chroma:
+    image: chromadb/chroma:0.5.23
+    container_name: cara-chroma
+    restart: unless-stopped
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - ./data/chroma:/chroma/chroma
+    networks:
+      - proxy-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/heartbeat', timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  backend:
+    <<: *app-env
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: cara-backend:0.1.0
+    container_name: cara-backend
+    restart: unless-stopped
+    profiles: ["app"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+      minio:    {condition: service_healthy}
+      chroma:   {condition: service_healthy}
+    # NPU access: librkllmrt opens /dev/dri/card0 (DRM ioctl, video group).
+    # Verified by tracing the POC: no /dev/rknpu node on this kernel; access
+    # routes through DRM. The container needs the device + the video group.
+    devices:
+      - /dev/dri/card0:/dev/dri/card0
+    group_add:
+      - "44"                            # video group GID on host
+    volumes:
+      - ./data/uploads:/app/uploads
+      - ./data/models:/app/models:ro
+      - /home/apedo/cara-poc-rkllm/runtime-v1.1.0/lib/librkllmrt.so:/usr/lib/rkllm/librkllmrt.so:ro
+    environment:
+      LD_LIBRARY_PATH: /usr/lib/rkllm
+      LLM_MODEL_PATH: /app/models/qwen2.5-1.5b-instruct-w8a8.rkllm
+      LLM_RUNTIME_LIB_PATH: /usr/lib/rkllm/librkllmrt.so
+      # NB: tested UVICORN_WORKERS=2 on 2026-05-01 — both workers loaded fine
+      # (2× 1.5B fits in ~3 GB NPU memory) but throughput per session DROPPED
+      # from 9 to 3-4 tok/s with TTFT 3s vs 0.3s, even on a single in-flight
+      # request: the two loaded models contend for NPU memory bandwidth even
+      # when only one is active. Net: 1 worker + asyncio queue is better UX
+      # for a family of 2-3 people. Bumping to 2 only makes sense with a much
+      # smaller model (e.g. 0.5B).
+      UVICORN_WORKERS: "1"
+    networks:
+      proxy-net:
+        ipv4_address: 172.31.0.21
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 90s            # 2 worker × ~10s di model load
+
+  celery:
+    <<: *app-env
+    image: cara-backend:0.1.0
+    container_name: cara-celery
+    restart: unless-stopped
+    profiles: ["app"]
+    command: ["celery", "-A", "cara.tasks.celery_app", "worker", "--loglevel=info"]
+    depends_on:
+      backend:  {condition: service_started}
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+    volumes:
+      - ./data/uploads:/app/uploads
+      - ./data/models:/app/models:ro
+    # Celery does NOT use the LLM (NPU is single-tenant per process). If a
+    # task needs inference, it should call the backend HTTP API.
+    environment:
+      LLM_ENABLED: "false"
+    networks:
+      - proxy-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: cara-frontend:0.1.0
+    container_name: cara-frontend
+    restart: unless-stopped
+    profiles: ["app"]
+    depends_on:
+      - backend
+    networks:
+      proxy-net:
+        ipv4_address: 172.31.0.20
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  proxy-net:
+    name: proxy-net
+    external: true

@@ -1,0 +1,97 @@
+CARA — Third-party components and licenses
+===========================================
+
+This product includes the following third-party software, used as either
+direct dependencies, container images, or runtime libraries. Each component
+remains under its own original license; the URLs below point to the
+authoritative license text. This NOTICE file must accompany any
+redistribution permitted by the CARA LICENSE.
+
+
+AI runtime
+----------
+
+* RKLLM runtime (librkllmrt.so v1.1.0)
+  Vendor: Rockchip / fuzhentao
+  Source: https://github.com/airockchip/rknn-llm
+  License: Apache License 2.0
+  Used as a closed-source binary blob bundled at /usr/lib/rkllm in the
+  cara-backend container.
+
+* Qwen2.5-1.5B-Instruct model weights (.rkllm format)
+  Original model: https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct
+  License: Apache License 2.0
+  Conversion to RK3588: c01zaut/Qwen2.5-1.5B-Instruct-rk3588-1.1.1
+  Used as a binary asset under /opt/cara/data/models/.
+
+
+Backend (Python)
+----------------
+
+* FastAPI            — MIT License — https://github.com/tiangolo/fastapi
+* Starlette          — BSD-3-Clause — https://github.com/encode/starlette
+* Uvicorn            — BSD-3-Clause — https://github.com/encode/uvicorn
+* Pydantic           — MIT License — https://github.com/pydantic/pydantic
+* SQLAlchemy         — MIT License — https://www.sqlalchemy.org/
+* Alembic            — MIT License — https://alembic.sqlalchemy.org/
+* asyncpg            — Apache 2.0  — https://github.com/MagicStack/asyncpg
+* python-jose        — MIT License — https://github.com/mpdavis/python-jose
+* passlib            — BSD-2-Clause — https://passlib.readthedocs.io/
+* bcrypt             — Apache 2.0  — https://github.com/pyca/bcrypt/
+* email-validator    — CC0-1.0 / Public Domain — https://github.com/JoshData/python-email-validator
+* structlog          — MIT / Apache 2.0 — https://github.com/hynek/structlog
+* httpx              — BSD-3-Clause — https://www.python-httpx.org/
+* python-multipart   — Apache 2.0  — https://github.com/Kludex/python-multipart
+
+
+Infrastructure (container images)
+---------------------------------
+
+* PostgreSQL 16 (postgres:16-alpine)        — PostgreSQL License (BSD-style)
+* Redis 7 (redis:7-alpine)                  — BSD-3-Clause (Redis source-available since 7.4 — verify if you redistribute)
+* MinIO (quay.io/minio/minio)               — GNU AGPL v3
+* ChromaDB 0.5.23 (chromadb/chroma)         — Apache License 2.0
+* nginx (nginx:alpine)                      — BSD-2-Clause
+
+
+Frontend (npm)
+--------------
+
+* React 18           — MIT License — https://react.dev/
+* React DOM 18       — MIT License
+* React Router DOM 6 — MIT License — https://reactrouter.com/
+* Vite               — MIT License — https://vite.dev/
+* @vitejs/plugin-react — MIT License
+* vite-plugin-pwa    — MIT License — https://vite-pwa-org.netlify.app/
+* Workbox (bundled by vite-plugin-pwa) — MIT License — https://developer.chrome.com/docs/workbox
+* Tailwind CSS       — MIT License — https://tailwindcss.com/
+* PostCSS / autoprefixer — MIT License
+* TypeScript         — Apache 2.0  — https://www.typescriptlang.org/
+
+
+Browser APIs (no license — provided by the user agent)
+------------------------------------------------------
+
+* Web Speech API (speechSynthesis, SpeechRecognition)
+  Used for offline TTS / STT on the client device. The voices themselves
+  (e.g. "Paola" on Apple platforms) are property of the respective OS
+  vendors and ship with the user's device — CARA does not bundle them.
+
+* Service Worker, Cache API, IndexedDB, localStorage, Fetch streaming
+  Standard browser features.
+
+
+Assets
+------
+
+* CARA face avatar — original SVG, copyright Antonio Pedoto, same license as CARA itself.
+* CARA app icons   — generated procedurally with Pillow (PIL Software License).
+
+
+Acknowledgements
+----------------
+
+CARA stands on the shoulders of the open-source community. Thanks to all the
+maintainers of the projects listed above. If your project is bundled here and
+this NOTICE doesn't credit you correctly, please open an issue or contact
+the copyright holder.

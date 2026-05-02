@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  /* Avoid iOS auto-zoom when focusing inputs (kicks in if font-size < 16px). */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+
+  @media (min-width: 640px) {
+    input,
+    textarea,
+    select {
+      font-size: 14px;
+    }
+  }
+
+  /* Allow text selection inside chat bubbles even though we use buttons elsewhere. */
+  body {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@keyframes caraMouthBar {
+  0%, 100% { transform: scaleY(0.5); }
+  50% { transform: scaleY(1.4); }
+}
+
+.cara-mouth-bar {
+  transform-origin: center;
+  animation: caraMouthBar 360ms ease-in-out infinite;
+}
+
+@keyframes caraToastIn {
+  0% {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(0) scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-cara-toast-in {
+  animation: caraToastIn 280ms ease-out;
+}
+
+@keyframes micPing {
+  0%   { transform: scale(1);   opacity: 0.7; }
+  80%  { transform: scale(1.6); opacity: 0;   }
+  100% { transform: scale(1.6); opacity: 0;   }
+}
+
+.animate-mic-ping {
+  animation: micPing 1.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-mic-ping,
+  .cara-mouth-bar,
+  .animate-cara-toast-in {
+    animation: none !important;
+  }
+}
