@@ -26,6 +26,8 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -55,6 +57,33 @@ def _render_qwen_prompt(messages: list[ChatMessage]) -> str:
         parts.append(f"{_IM_START}{m.role}\n{m.content}{_IM_END}\n")
     parts.append(f"{_IM_START}assistant\n")
     return "".join(parts)
+
+
+_WEEKDAYS_IT = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+_MONTHS_IT = [
+    "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
+    "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre",
+]
+
+
+def _runtime_context_message() -> str:
+    """Date, time and timezone — injected into the prompt as a system message
+    on every turn so the model knows where/when it is.
+
+    Without this, the 1.5B happily anchors to its training-data cutoff
+    (e.g. "oggi è il 28 settembre 2023") and refuses date queries on the
+    grounds that "non ho accesso alla data corrente".
+    """
+    now = datetime.now(ZoneInfo("Europe/Rome"))
+    return (
+        "## CONTESTO RUNTIME (informazioni precise, NON cercare su internet)\n"
+        f"Oggi è {_WEEKDAYS_IT[now.weekday()]} {now.day} "
+        f"{_MONTHS_IT[now.month - 1]} {now.year}.\n"
+        f"Sono le ore {now.hour:02d}:{now.minute:02d}.\n"
+        "Sei a casa della famiglia Pedoto, in Italia (fuso orario Europe/Rome).\n"
+        "Per domande tipo \"che giorno è oggi\", \"che ora è\", \"in che mese siamo\" "
+        "rispondi DIRETTAMENTE usando queste informazioni, SENZA usare il tool discover."
+    )
 
 
 def _sse(event: str, payload: dict) -> bytes:
@@ -191,6 +220,19 @@ async def chat(
     # seeding may lack one. Inject it at the top of the prompt without persisting.
     if not any(pm.role == "system" for pm in prompt_messages):
         prompt_messages.insert(0, ChatMessage(role="system", content=sysprompt_active))
+
+    # Inject the runtime context (date/time/timezone) as a separate system
+    # message right after the persona. Generated fresh each turn so the model
+    # always has the current date — without this it anchors to its training
+    # cutoff and refuses date queries.
+    runtime_ctx = ChatMessage(role="system", content=_runtime_context_message())
+    insert_pos = 0
+    for i, pm in enumerate(prompt_messages):
+        if pm.role == "system":
+            insert_pos = i + 1
+        else:
+            break
+    prompt_messages.insert(insert_pos, runtime_ctx)
 
     # Cognitive mode (admin opt-in): prepend the full reasoning prompt above
     # the persona prompt so the model has it as the very first instruction.
