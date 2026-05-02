@@ -35,6 +35,48 @@ export function MediaPlayer({
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
+  // True when the browser blocked the autoplay attempt — we then show a
+  // big "▶ Tocca per riprodurre" overlay that the user can tap.
+  const [needsTap, setNeedsTap] = useState(false);
+
+  // Try to play automatically once the audio/video element mounts with src.
+  // The user-gesture from the chat send may already be invalidated by the
+  // 3-5 s discovery delay, so we expect this to fail on stricter browsers
+  // (mobile Safari especially) and fall back to a visible tap overlay.
+  useEffect(() => {
+    if (content.kind !== 'audio_stream' && content.kind !== 'podcast' && content.kind !== 'video') {
+      return;
+    }
+    const el = (content.kind === 'video' ? videoRef.current : audioRef.current) as
+      | HTMLMediaElement
+      | null;
+    if (!el) return;
+    // YouTube embed iframe handles its own autoplay via URL param.
+    if (content.kind === 'video' && content.metadata?.embed) return;
+    let cancelled = false;
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      el.play()
+        .then(() => setNeedsTap(false))
+        .catch(() => setNeedsTap(true));
+    }, 80);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [content.url, content.kind, content.metadata?.embed]);
+
+  function userTapPlay() {
+    const el = (content.kind === 'video' ? videoRef.current : audioRef.current) as
+      | HTMLMediaElement
+      | null;
+    if (!el) return;
+    el.play()
+      .then(() => setNeedsTap(false))
+      .catch((e: Error) => {
+        setError(`Riproduzione bloccata: ${e.message}`);
+      });
+  }
 
   // Mark started right away (the content has been fetched + verified by the
   // server); for HTML5 elements we also re-mark on the first `playing` event.
@@ -140,15 +182,29 @@ export function MediaPlayer({
       {error && <p className="text-[11px] text-rose-400">{error}</p>}
 
       {content.kind === 'audio_stream' || content.kind === 'podcast' ? (
-        <audio
-          ref={audioRef}
-          src={content.url.toLowerCase().includes('.m3u8') ? undefined : content.url}
-          controls
-          autoPlay
-          onEnded={handleEnded}
-          onError={handleError}
-          className="w-full"
-        />
+        <div className="relative">
+          <audio
+            ref={audioRef}
+            src={content.url.toLowerCase().includes('.m3u8') ? undefined : content.url}
+            controls
+            onEnded={handleEnded}
+            onError={handleError}
+            onPlaying={() => setNeedsTap(false)}
+            className="w-full"
+          />
+          {needsTap && (
+            <button
+              type="button"
+              onClick={userTapPlay}
+              className="absolute inset-0 flex items-center justify-center
+                         bg-slate-900/80 backdrop-blur-sm rounded-lg gap-2
+                         text-emerald-300 hover:text-emerald-200 text-sm font-medium"
+            >
+              <span className="text-3xl">▶</span>
+              <span>Tocca per riprodurre</span>
+            </button>
+          )}
+        </div>
       ) : null}
 
       {content.kind === 'video' && isYoutubeEmbed ? (
@@ -164,15 +220,29 @@ export function MediaPlayer({
       ) : null}
 
       {content.kind === 'video' && !isYoutubeEmbed ? (
-        <video
-          ref={videoRef}
-          src={content.url.toLowerCase().includes('.m3u8') ? undefined : content.url}
-          controls
-          autoPlay
-          onEnded={handleEnded}
-          onError={handleError}
-          className="w-full rounded-xl bg-black"
-        />
+        <div className="relative">
+          <video
+            ref={videoRef}
+            src={content.url.toLowerCase().includes('.m3u8') ? undefined : content.url}
+            controls
+            onEnded={handleEnded}
+            onError={handleError}
+            onPlaying={() => setNeedsTap(false)}
+            className="w-full rounded-xl bg-black"
+          />
+          {needsTap && (
+            <button
+              type="button"
+              onClick={userTapPlay}
+              className="absolute inset-0 flex items-center justify-center
+                         bg-slate-900/70 backdrop-blur-sm rounded-xl gap-2
+                         text-emerald-300 hover:text-emerald-200 text-sm font-medium"
+            >
+              <span className="text-4xl">▶</span>
+              <span>Tocca per riprodurre</span>
+            </button>
+          )}
+        </div>
       ) : null}
 
       {content.kind === 'image' ? (
