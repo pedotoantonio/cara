@@ -73,16 +73,33 @@ def _runtime_context_message() -> str:
     Without this, the 1.5B happily anchors to its training-data cutoff
     (e.g. "oggi è il 28 settembre 2023") and refuses date queries on the
     grounds that "non ho accesso alla data corrente".
+
+    We pre-compute common derivations (current month name, days to Christmas,
+    days to next New Year's Eve) because the 1.5B can't do date arithmetic
+    reliably — observed in QA "tra quanto tempo è Natale?" → "tra 19 giorni
+    e 4 giorni" (nonsense), and "in che mese siamo?" → "siamo in marzo"
+    even with the date already shown.
     """
     now = datetime.now(ZoneInfo("Europe/Rome"))
+    today_date = now.date()
+    # Next Christmas / New Year (this year if not yet passed, else next year).
+    from datetime import date
+
+    christmas_year = now.year if today_date <= date(now.year, 12, 25) else now.year + 1
+    days_to_xmas = (date(christmas_year, 12, 25) - today_date).days
+    new_year_target = date(now.year + 1, 1, 1) if today_date > date(now.year, 1, 1) else date(now.year, 1, 1)
+    days_to_new_year = (new_year_target - today_date).days
+
     return (
-        "## CONTESTO RUNTIME (informazioni precise, NON cercare su internet)\n"
-        f"Oggi è {_WEEKDAYS_IT[now.weekday()]} {now.day} "
-        f"{_MONTHS_IT[now.month - 1]} {now.year}.\n"
-        f"Sono le ore {now.hour:02d}:{now.minute:02d}.\n"
-        "Sei a casa della famiglia Pedoto, in Italia (fuso orario Europe/Rome).\n"
-        "Per domande tipo \"che giorno è oggi\", \"che ora è\", \"in che mese siamo\" "
-        "rispondi DIRETTAMENTE usando queste informazioni, SENZA usare il tool discover."
+        "## CONTESTO RUNTIME (informazioni precise, NON cercare su internet, NON ricalcolare)\n"
+        f"- Oggi è {_WEEKDAYS_IT[now.weekday()]} {now.day} {_MONTHS_IT[now.month - 1]} {now.year}.\n"
+        f"- Mese corrente: {_MONTHS_IT[now.month - 1]}. Anno corrente: {now.year}.\n"
+        f"- Ora attuale: {now.hour:02d}:{now.minute:02d} (fuso Europe/Rome, Italia).\n"
+        f"- Giorni mancanti al prossimo Natale (25 dicembre): {days_to_xmas}.\n"
+        f"- Giorni mancanti al prossimo Capodanno (1 gennaio): {days_to_new_year}.\n"
+        "Per domande su \"che giorno/ora/mese/anno è\", \"tra quanto tempo è Natale\", "
+        "\"tra quanto è Capodanno\" rispondi DIRETTAMENTE con il dato sopra, "
+        "SENZA usare il tool discover e SENZA fare aritmetica tu stesso."
     )
 
 
