@@ -53,6 +53,14 @@ DEFAULTS: dict[str, Any] = {
     "cda_domain_blacklist": None,  # list[str] of always-blocked domains
     "cda_domain_whitelist_for_child": None,  # allowed domains for child role
     "cda_agent_loop_enabled": True,  # forced grounding on info-need queries
+    # Persona tone preset (Lumo-inspired). Layered ON TOP of llm_system_prompt:
+    #   "default"  → persona standard, contesto storico + profilo utente
+    #   "privacy"  → no profilo utente, no cronologia, solo turno corrente
+    #   "playful"  → persona più scherzosa, no profilo nel prompt
+    "tone_preset": "default",
+    # Hot-swappable LLM size variant. "fast" = 1.5B (~9 tok/s), "quality" =
+    # 3B (~4 tok/s, less hallucination). Switch is destroy+load (~10 s).
+    "llm_quality_mode": "fast",
 }
 
 

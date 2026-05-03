@@ -29,6 +29,7 @@ dependencies = [
   "httpx>=0.28",
   "piper-tts>=1.2",              # MIT, italian-native TTS (Paola, Riccardo)
   "trafilatura>=1.12",            # Apache 2.0, article extraction for the CDA
+  "faster-whisper>=1.0",          # MIT, server-side STT fallback (aarch64 wheels OK)
 ]
 
 [project.optional-dependencies]

@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { clearTokens, fetchMe, getToken } from './api/auth';
 import type { User } from './api/auth';
 import { getVoiceConfig } from './api/voice';
+import { AmbientStateBanner } from './components/AmbientStateBanner';
 import { AppShell } from './components/AppShell';
 import { InstallPwaPrompt } from './components/InstallPwaPrompt';
 import { Login } from './components/Login';
@@ -119,6 +120,7 @@ export default function App() {
       <ReactionsProvider>
       <BirthdayWatcher user={auth.user} />
       <InstallPwaPrompt />
+      <AmbientStateBanner />
       <Routes>
         <Route
           path="/"

@@ -305,6 +305,98 @@ export function AdminPage() {
           </div>
         </section>
 
+        {/* LLM quality mode (Lumo-inspired Q4/Q6 dual mode) */}
+        <section className="rounded-2xl bg-slate-800/60 border border-slate-700 p-5 space-y-3">
+          <h2 className="text-sm font-medium">Modello LLM (qualità vs velocità)</h2>
+          <p className="text-xs text-slate-500">
+            Lo switch è hot-swap a runtime: il primo cambio richiede ~10 s
+            per scaricare e ricaricare i pesi sul NPU. Da quel momento il
+            modello scelto resta caricato.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-2">
+            {(
+              [
+                {
+                  v: 'fast',
+                  label: '⚡ Veloce — Qwen2.5 1.5B',
+                  desc: '~9 tok/s, TTFT 0.3 s. Default, ottimo per chat e comandi rapidi.',
+                },
+                {
+                  v: 'quality',
+                  label: '🎯 Qualità — Qwen2.5 3B',
+                  desc: '~4 tok/s, TTFT 0.7 s. Meno hallucinazione, instruction-following migliore.',
+                },
+              ] as const
+            ).map((q) => {
+              const active = (settings.llm_quality_mode ?? 'fast') === q.v;
+              return (
+                <button
+                  key={q.v}
+                  type="button"
+                  onClick={() => patch({ llm_quality_mode: q.v }, 'llm_quality_mode')}
+                  disabled={saving === 'llm_quality_mode'}
+                  className={`text-left rounded-lg border px-3 py-2 text-xs transition-colors ${
+                    active
+                      ? 'bg-emerald-600/20 border-emerald-500 text-emerald-100'
+                      : 'bg-slate-900/40 border-slate-700/40 text-slate-300 hover:bg-slate-700/40'
+                  }`}
+                >
+                  <p className="font-medium">{q.label}</p>
+                  <p className="text-slate-500 mt-0.5">{q.desc}</p>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Tone preset (Lumo-inspired) */}
+        <section className="rounded-2xl bg-slate-800/60 border border-slate-700 p-5 space-y-3">
+          <h2 className="text-sm font-medium">Tono di CARA</h2>
+          <p className="text-xs text-slate-500">
+            Aggiunge una direttiva al system prompt e (in modalità privacy)
+            esclude la cronologia conversazione dal prompt LLM. Effetto immediato.
+          </p>
+          <div className="grid sm:grid-cols-3 gap-2">
+            {(
+              [
+                {
+                  v: 'default',
+                  label: 'Default',
+                  desc: 'Persona standard con cronologia e profilo utente.',
+                },
+                {
+                  v: 'privacy',
+                  label: 'Privacy',
+                  desc: 'Niente nome utente, niente cronologia. Solo turno corrente.',
+                },
+                {
+                  v: 'playful',
+                  label: 'Scherzoso',
+                  desc: 'Tono più leggero e ironico. Senza esagerare.',
+                },
+              ] as const
+            ).map((t) => {
+              const active = (settings.tone_preset ?? 'default') === t.v;
+              return (
+                <button
+                  key={t.v}
+                  type="button"
+                  onClick={() => patch({ tone_preset: t.v }, 'tone_preset')}
+                  disabled={saving === 'tone_preset'}
+                  className={`text-left rounded-lg border px-3 py-2 text-xs transition-colors ${
+                    active
+                      ? 'bg-emerald-600/20 border-emerald-500 text-emerald-100'
+                      : 'bg-slate-900/40 border-slate-700/40 text-slate-300 hover:bg-slate-700/40'
+                  }`}
+                >
+                  <p className="font-medium">{t.label}</p>
+                  <p className="text-slate-500 mt-0.5">{t.desc}</p>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
         {/* Numeric tunables */}
         <section className="rounded-2xl bg-slate-800/60 border border-slate-700 p-5 space-y-3">
           <h2 className="text-sm font-medium">Parametri numerici</h2>

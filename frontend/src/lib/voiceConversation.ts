@@ -21,6 +21,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { setAiPhase } from './aiState';
+import {
+  startWhisperRecording,
+  whisperRecorderAvailable,
+  type WhisperRecorderHandle,
+} from './whisperFallback';
 import { streamChat } from '../api/chat';
 import {
   speak,
@@ -65,6 +71,7 @@ export function useVoiceConversation(opts: {
   const [convId, setConvId] = useState<string | null>(null);
 
   const listenRef = useRef<ListenHandle | null>(null);
+  const whisperRef = useRef<WhisperRecorderHandle | null>(null);
   const abortStreamRef = useRef<(() => void) | null>(null);
   const wakeRef = useRef<WakeWordHandle | null>(null);
   const phaseRef = useRef<VoicePhase>('idle');
@@ -79,7 +86,10 @@ export function useVoiceConversation(opts: {
   const submittedRef = useRef(false);
 
   const ttsOk = ttsAvailable();
-  const sttOk = sttAvailable();
+  // sttOk reflects "can we capture voice from this browser?" — true if
+  // either the native SR API works OR we can record + send to whisper.
+  // The voice paths above pick the right strategy.
+  const sttOk = sttAvailable() || whisperRecorderAvailable();
 
   function logVoice(...args: unknown[]) {
     // Surface state transitions in the dev console with a stable prefix so
@@ -106,9 +116,11 @@ export function useVoiceConversation(opts: {
   const dismissError = useCallback(() => setErrorMessage(null), []);
 
   // Keep a ref to the phase so the wake-word callback can read it without
-  // capturing a stale closure.
+  // capturing a stale closure. Also publish the phase to the global AI state
+  // singleton so the ambient banner can display it on any page.
   useEffect(() => {
     phaseRef.current = phase;
+    setAiPhase(phase);
   }, [phase]);
 
   // Cleanup on unmount
@@ -182,9 +194,33 @@ export function useVoiceConversation(opts: {
     }
     if (phase === 'listening') {
       // Tap during listen = STOP + submit whatever we've heard so far.
-      // We use interimRef (always-current) instead of waiting for an
-      // `isFinal` event that may never come — iOS Safari and some Chromium
-      // versions close the recognizer on silence WITHOUT a final result.
+      // Two cases: browser SR (interim ref) or whisper fallback (record).
+      if (whisperRef.current) {
+        const handle = whisperRef.current;
+        whisperRef.current = null;
+        submittedRef.current = true;
+        setPhase('thinking');   // upload + transcribe takes 1-3 s on RK3588
+        handle
+          .stop()
+          .then((text) => {
+            const captured = (text || '').trim();
+            logVoice('whisper transcribed', { captured });
+            if (captured) {
+              setUserText(captured);
+              submitToBackend(captured);
+            } else {
+              setPhase('idle');
+            }
+          })
+          .catch((e: Error) => {
+            logVoice('whisper transcribe failed', e);
+            setErrorMessage(`Trascrizione fallita: ${e.message}`);
+            setPhase('idle');
+          });
+        return;
+      }
+      // Browser SR path — use interimRef (always-current) instead of
+      // waiting for an `isFinal` event that may never come.
       const handle = listenRef.current;
       listenRef.current = null;
       handle?.stop();
@@ -206,11 +242,33 @@ export function useVoiceConversation(opts: {
       setPhase('idle');
       return;
     }
-    // idle → start listening
+    // idle → start listening. Two paths:
+    //   (a) browser SR is available → use it (fast, low-latency interim)
+    //   (b) no SR but MediaRecorder available → record + upload to whisper
     if (!sttOk) {
-      setErrorMessage(
-        'Riconoscimento vocale non supportato in questo browser. Apri /chat per scrivere.',
-      );
+      if (!whisperRecorderAvailable()) {
+        setErrorMessage(
+          'Riconoscimento vocale non supportato in questo browser. Apri /chat per scrivere.',
+        );
+        return;
+      }
+      // Whisper fallback path — record until next tap.
+      logVoice('starting whisper fallback recording');
+      setErrorMessage(null);
+      setUserText('');
+      setAssistantText('');
+      interimRef.current = '';
+      submittedRef.current = false;
+      setPhase('listening');
+      startWhisperRecording({ language: 'it', maxDurationMs: 30_000 })
+        .then((handle) => {
+          whisperRef.current = handle;
+        })
+        .catch((e: Error) => {
+          logVoice('whisper recording failed to start', e);
+          setErrorMessage(`Microfono non avviato: ${e.message}`);
+          setPhase('idle');
+        });
       return;
     }
     // Pause the wake-word listener SYNCHRONOUSLY before we ask for the mic

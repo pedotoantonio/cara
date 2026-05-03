@@ -52,3 +52,11 @@ Thumbs.db
 /build/twa/.gradle/
 /build/twa/cara-signing.keystore
 frontend/public/cara.apk
+
+# Whisper STT model cache (HuggingFace download, regenerable)
+data/whisper-cache/models--*/
+data/whisper-cache/CACHEDIR.TAG
+
+# Piper voices that auto-download at runtime
+data/tts/piper/voices/*.onnx
+data/tts/piper/voices/*.onnx.json

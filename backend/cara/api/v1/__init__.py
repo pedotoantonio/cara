@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from cara.api.v1 import (
     admin,
+    asr,
     auth,
     cda,
     chat,
@@ -20,6 +21,7 @@ from cara.api.v1 import (
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(admin.router)
+router.include_router(asr.router)
 router.include_router(auth.router)
 router.include_router(cda.router)
 router.include_router(chat.router)

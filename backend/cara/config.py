@@ -37,6 +37,15 @@ class Settings(BaseSettings):
         default=8.0, validation_alias="CDA_SEARCH_TIMEOUT"
     )
 
+    # Whisper STT fallback (server-side). Used when the browser SR doesn't
+    # produce a transcript. Model is lazy-loaded on first request.
+    whisper_model: str = Field(default="small", validation_alias="WHISPER_MODEL")
+    whisper_cache_dir: str = Field(
+        default="/app/whisper-cache", validation_alias="WHISPER_CACHE_DIR"
+    )
+    whisper_compute_type: str = Field(default="int8", validation_alias="WHISPER_COMPUTE_TYPE")
+    whisper_enabled: bool = Field(default=True, validation_alias="WHISPER_ENABLED")
+
     minio_endpoint: str = Field(validation_alias="MINIO_ENDPOINT")
     minio_access_key: str = Field(validation_alias="MINIO_ROOT_USER")
     minio_secret_key: str = Field(validation_alias="MINIO_ROOT_PASSWORD")
@@ -54,6 +63,12 @@ class Settings(BaseSettings):
     llm_model_path: str = Field(
         default="/app/models/qwen2.5-1.5b-instruct-w8a8.rkllm",
         validation_alias="LLM_MODEL_PATH",
+    )
+    # Optional secondary model used for the "quality" runtime mode. Empty
+    # string disables the hot-swap feature (only the default 1.5B is loaded).
+    llm_model_path_quality: str = Field(
+        default="/app/models/qwen2.5-3b-instruct-w8a8.rkllm",
+        validation_alias="LLM_MODEL_PATH_QUALITY",
     )
     llm_runtime_lib_path: str = Field(
         default="/usr/lib/rkllm/librkllmrt.so",

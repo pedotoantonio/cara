@@ -64,6 +64,10 @@ class LLMService:
 
     Instantiate once at app startup via `lifespan`, expose to handlers with
     `get_llm_service()`. Call `await aclose()` at shutdown.
+
+    Supports hot-swap between size variants via `set_mode("fast"|"quality")`:
+    the NPU memory cap (~3 GB on RK3588) means we can only hold one model
+    loaded at a time, so a switch is destroy + load (~10 s once warmed).
     """
 
     def __init__(
@@ -72,8 +76,18 @@ class LLMService:
         lib_path: str | os.PathLike[str],
         max_context_len: int,
         max_new_tokens: int,
+        *,
+        models: dict[str, str] | None = None,
     ) -> None:
-        self._model_path = Path(model_path)
+        # Backwards compatibility: if no `models` map is provided, the
+        # legacy single-model boot still works (the only mode = "default"
+        # and points at `model_path`).
+        self._models: dict[str, Path] = (
+            {k: Path(v) for k, v in models.items()} if models
+            else {"default": Path(model_path)}
+        )
+        self._mode: str = next(iter(self._models))
+        self._model_path = self._models[self._mode]
         self._lib_path = Path(lib_path)
         self._max_context_len = max_context_len
         self._default_max_new_tokens = max_new_tokens
@@ -86,6 +100,8 @@ class LLMService:
         # Serialise rkllm_run calls (the runtime does not allow concurrency).
         self._gen_lock = asyncio.Lock()
         self._loaded = False
+        # Lock for switch operations (destroy + reload sequence).
+        self._switch_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ load
 
@@ -319,6 +335,48 @@ class LLMService:
         # Unknown verdict — be conservative and accept the original.
         return None
 
+    # ------------------------------------------------------------------ swap
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    @property
+    def available_modes(self) -> list[str]:
+        return list(self._models)
+
+    async def set_mode(self, new_mode: str) -> None:
+        """Hot-swap the active model variant.
+
+        NPU memory cap on RK3588 (~3 GB) means we can only hold one variant
+        loaded; a switch is destroy + load. Acquires both the gen lock (so
+        no in-flight generate is interrupted) and the switch lock (so
+        concurrent swap requests serialise).
+        """
+        if new_mode not in self._models:
+            raise ValueError(
+                f"unknown LLM mode {new_mode!r}; available: {list(self._models)}"
+            )
+        if new_mode == self._mode and self._loaded:
+            return
+        async with self._switch_lock:
+            if new_mode == self._mode and self._loaded:
+                return
+            log = logger.bind(from_mode=self._mode, to_mode=new_mode)
+            log.info("llm.swap.start")
+            t0 = time.monotonic()
+            async with self._gen_lock:
+                # Destroy current handle.
+                if self._loaded and self._lib is not None and self._handle is not None:
+                    await asyncio.to_thread(self._lib.rkllm_destroy, self._handle)
+                    self._handle = None
+                    self._loaded = False
+                # Load new model.
+                self._mode = new_mode
+                self._model_path = self._models[new_mode]
+                await asyncio.to_thread(self._load_blocking)
+            log.info("llm.swap.done", seconds=round(time.monotonic() - t0, 2))
+
     # ------------------------------------------------------------------- close
 
     async def aclose(self) -> None:
@@ -351,11 +409,21 @@ async def init_llm_service() -> LLMService | None:
     if not settings.llm_enabled:
         logger.info("llm.disabled")
         return None
+    # Build the modes map. The "fast" mode = 1.5B (default), "quality" = 3B
+    # if the file exists. We don't crash if the secondary model is missing —
+    # the hot-swap simply isn't available.
+    models: dict[str, str] = {"fast": settings.llm_model_path}
+    quality_path = (settings.llm_model_path_quality or "").strip()
+    if quality_path and Path(quality_path).is_file():
+        models["quality"] = quality_path
+    else:
+        logger.info("llm.quality_mode_unavailable", reason="model file missing", path=quality_path)
     _service = LLMService(
         model_path=settings.llm_model_path,
         lib_path=settings.llm_runtime_lib_path,
         max_context_len=settings.llm_max_context_len,
         max_new_tokens=settings.llm_max_new_tokens,
+        models=models,
     )
     await _service.aload()
     return _service

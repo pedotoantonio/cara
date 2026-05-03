@@ -20,6 +20,7 @@
  * the UI can hide controls cleanly.
  */
 
+import { setAiPhase } from './aiState';
 import { piperSpeak, piperStop } from './piperTts';
 import { loadPrefs } from './userPrefs';
 
@@ -151,6 +152,11 @@ export function onSpeakEvent(fn: SpeakEventListener): () => void {
 }
 
 function _emit(ev: SpeakEvent) {
+  // Mirror to the global AI state so the ambient banner reflects TTS
+  // activity from any caller — including the text chat page that doesn't
+  // own a useVoiceConversation hook.
+  if (ev.type === 'start') setAiPhase('speaking');
+  else if (ev.type === 'end') setAiPhase('idle');
   for (const l of _listeners) l(ev);
 }
 

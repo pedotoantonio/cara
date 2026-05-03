@@ -177,6 +177,29 @@ def _render_qwen_prompt(messages: list[ChatMessage]) -> str:
     return "".join(parts)
 
 
+# Persona tone presets — appended to the system prompt and (in privacy mode)
+# also drop the historical messages from the prompt, mirroring Lumo's three
+# tones (normale / neutro / sarcastico). Reset on every restart of the
+# backend container is fine: this is intentionally non-persistent at the
+# message layer (the key is in admin_settings, but no per-conversation
+# override).
+_TONE_DIRECTIVE = {
+    "default": "",
+    "privacy": (
+        "\n\n## MODALITÀ PRIVACY ATTIVA\n"
+        "Non usare il nome dell'utente. Non fare riferimento alla cronologia. "
+        "Rispondi al turno corrente con il minimo di informazioni necessarie. "
+        "Niente domande personali, niente memorie."
+    ),
+    "playful": (
+        "\n\n## MODALITÀ SCHERZOSA ATTIVA\n"
+        "Aggiungi un tocco di leggerezza e ironia gentile alle risposte, ma "
+        "senza esagerare. Niente sarcasmo cattivo, niente prese in giro. "
+        "Pensa a una zia simpatica che racconta cose. Resta concisa."
+    ),
+}
+
+
 _WEEKDAYS_IT = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
 _MONTHS_IT = [
     "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
@@ -533,10 +556,29 @@ async def chat(
         session, "llm_system_prompt", settings.llm_system_prompt
     )
 
-    # Backwards-compat: legacy conversations created before the system-prompt
-    # seeding may lack one. Inject it at the top of the prompt without persisting.
-    if not any(pm.role == "system" for pm in prompt_messages):
-        prompt_messages.insert(0, ChatMessage(role="system", content=sysprompt_active))
+    # Tone preset — appends a directive and, in "privacy" mode, also strips
+    # the conversation history so the model only sees the current turn.
+    tone_preset = await setting_svc.get(session, "tone_preset")
+    tone_preset = tone_preset if tone_preset in _TONE_DIRECTIVE else "default"
+    tone_directive = _TONE_DIRECTIVE.get(tone_preset, "")
+    if tone_directive:
+        sysprompt_active = sysprompt_active + tone_directive
+
+    # Privacy mode: drop ALL prior messages so the model can't echo back
+    # personal context. Keep only the persona prompt + last user turn.
+    if tone_preset == "privacy":
+        last_user = next(
+            (pm for pm in reversed(prompt_messages) if pm.role == "user"), None,
+        )
+        prompt_messages = [pm for pm in prompt_messages if pm.role == "system"]
+        if last_user is not None:
+            prompt_messages.append(last_user)
+
+    # Strip any pre-existing system messages and inject a fresh one with
+    # the current tone directive applied. (The DB seed is from a prior
+    # state where the directive may not have been on yet.)
+    prompt_messages = [pm for pm in prompt_messages if pm.role != "system"]
+    prompt_messages.insert(0, ChatMessage(role="system", content=sysprompt_active))
 
     # Inject the runtime context (date/time/timezone) as a separate system
     # message right after the persona. Generated fresh each turn so the model
@@ -572,6 +614,21 @@ async def chat(
     )
 
     convo_id_str = str(convo.id)
+
+    # ---- LLM quality mode hot-swap ----------------------------------------
+    # If the admin has flipped the runtime variant since the last request,
+    # swap before generation. The swap takes ~10 s once per change; idle
+    # otherwise. We tolerate failure (stick with the current variant).
+    desired_mode = await setting_svc.get(session, "llm_quality_mode")
+    if desired_mode and desired_mode in (llm.available_modes if hasattr(llm, "available_modes") else []):
+        if desired_mode != llm.mode:
+            try:
+                await llm.set_mode(desired_mode)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "chat.llm_mode_switch_failed",
+                    desired=desired_mode, current=llm.mode, error=str(exc),
+                )
 
     # Resolve effective max_new_tokens: explicit request wins; otherwise admin
     # override; otherwise env default.

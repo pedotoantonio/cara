@@ -123,6 +123,7 @@ services:
       - ./data/uploads:/app/uploads
       - ./data/models:/app/models:ro
       - ./data/tts:/app/tts                      # Piper voice ONNX files (auto-downloaded)
+      - ./data/whisper-cache:/app/whisper-cache  # Whisper STT model cache
       - /home/apedo/cara-poc-rkllm/runtime-v1.1.0/lib/librkllmrt.so:/usr/lib/rkllm/librkllmrt.so:ro
     environment:
       LD_LIBRARY_PATH: /usr/lib/rkllm
