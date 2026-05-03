@@ -110,4 +110,17 @@ async def transcribe_bytes(audio_bytes: bytes, language: str | None = "it") -> d
         text_chars=len(result["text"]),
         duration_s=round(result["duration_s"], 2),
     )
+    # Mirror to the in-memory event log so the admin diagnostics page
+    # can show recent ASR activity without requiring `docker logs`.
+    try:
+        from cara.services import event_log
+        event_log.record(
+            "asr.whisper",
+            duration_ms=result["elapsed_ms"],
+            text_chars=len(result["text"]),
+            audio_duration_s=round(result["duration_s"], 2),
+            language=result.get("language"),
+        )
+    except Exception:  # noqa: BLE001
+        pass
     return result

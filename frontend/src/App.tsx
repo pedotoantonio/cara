@@ -6,6 +6,7 @@ import type { User } from './api/auth';
 import { getVoiceConfig } from './api/voice';
 import { AmbientStateBanner } from './components/AmbientStateBanner';
 import { AppShell } from './components/AppShell';
+import { DebugOverlay } from './components/DebugOverlay';
 import { InstallPwaPrompt } from './components/InstallPwaPrompt';
 import { Login } from './components/Login';
 import { CdaPlayerProvider } from './lib/cdaPlayer';
@@ -50,6 +51,7 @@ function BirthdayWatcher({ user }: { user: User }) {
 }
 import { AdminPage } from './routes/AdminPage';
 import { ChatPage } from './routes/ChatPage';
+import { DiagnosticsPage } from './routes/DiagnosticsPage';
 import { DiscoveriesPage } from './routes/DiscoveriesPage';
 import { FaceLabPage } from './routes/FaceLabPage';
 import { HomePage } from './routes/HomePage';
@@ -121,6 +123,7 @@ export default function App() {
       <BirthdayWatcher user={auth.user} />
       <InstallPwaPrompt />
       <AmbientStateBanner />
+      <DebugOverlay />
       <Routes>
         <Route
           path="/"
@@ -136,6 +139,7 @@ export default function App() {
           <Route path="radio" element={<RadioPage />} />
           <Route path="discoveries" element={<DiscoveriesPage />} />
           <Route path="admin" element={<AdminPage />} />
+          <Route path="admin/diagnostics" element={<DiagnosticsPage />} />
           <Route path="face-lab" element={<FaceLabPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

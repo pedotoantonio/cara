@@ -9,6 +9,7 @@ from cara.api.v1 import (
     cda,
     chat,
     conversations,
+    diagnostics,
     family,
     files,
     news,
@@ -26,6 +27,7 @@ router.include_router(auth.router)
 router.include_router(cda.router)
 router.include_router(chat.router)
 router.include_router(conversations.router)
+router.include_router(diagnostics.router)
 router.include_router(family.router)
 router.include_router(files.router)
 router.include_router(news.router)

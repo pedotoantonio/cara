@@ -40,7 +40,7 @@ from cara.ai.llm import LLMUnavailableError
 from cara.api.deps import get_current_user
 from cara.cda import CdaError, DiscoverRequest, discover as cda_discover
 from cara.cda.memory import content_kb as cda_kb
-from cara.services import intent_router
+from cara.services import event_log, intent_router
 from cara.config import settings
 from cara.models.user import User
 from cara.schemas.chat import ChatMessage, ChatRequest
@@ -450,6 +450,12 @@ async def chat(
         await session.commit()
         convo_id_str_n = str(convo.id)
         logger.info("chat.noise_bypass", query=last_user_q[:60])
+        event_log.record(
+            "chat.noise_bypass",
+            user_id=user.id,
+            duration_ms=0,
+            query=last_user_q[:80],
+        )
 
         async def _noise_stream() -> AsyncIterator[bytes]:
             yield _sse("meta", {"conversation_id": convo_id_str_n})
@@ -480,9 +486,12 @@ async def chat(
     # ambiguous falls through to the regular flow.
     routed = intent_router.match(last_user_q) if last_user_q and not attached_files else None
     if routed is not None:
+        import time as _t
+        _t0 = _t.perf_counter()
         canned = await _resolve_routed_intent(
             session=session, user_id=user.id, routed=routed,
         )
+        _elapsed = int((_t.perf_counter() - _t0) * 1000)
         await convo_svc.add_message(
             session, conversation_id=convo.id, role="assistant", content=canned,
         )
@@ -491,6 +500,14 @@ async def chat(
         logger.info(
             "chat.intent_routed",
             kind=routed.kind, args=routed.args, reply_chars=len(canned),
+        )
+        event_log.record(
+            "intent_router.match",
+            user_id=user.id,
+            duration_ms=_elapsed,
+            intent=routed.kind,
+            query=last_user_q[:80],
+            args=routed.args,
         )
 
         async def _routed_stream() -> AsyncIterator[bytes]:
@@ -558,6 +575,13 @@ async def chat(
                     query=last_user_q[:80],
                     domain=cached_domain,
                     answer_chars=len(final_canned),
+                )
+                event_log.record(
+                    "chat.kb_cached",
+                    user_id=user.id,
+                    duration_ms=0,
+                    query=last_user_q[:80],
+                    domain=cached_domain,
                 )
 
                 async def _kb_bypass_stream() -> AsyncIterator[bytes]:
@@ -839,6 +863,14 @@ async def chat(
                             before_len=len(full_text),
                             after_len=len(final_text),
                             kind=kind,
+                        )
+                        event_log.record(
+                            "chat.agent_loop",
+                            user_id=user.id,
+                            duration_ms=int((time.monotonic() - t_start) * 1000),
+                            content_kind=kind,
+                            domain=discovered.source_domain,
+                            answer_chars=len(final_text),
                         )
                         # Persist the answer back to the KB so the next time
                         # the same question is asked we can early-bypass both

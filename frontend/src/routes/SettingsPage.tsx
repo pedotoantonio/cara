@@ -328,10 +328,21 @@ export function SettingsPage() {
               Funzionalità on/off, prompt CARA, validazione, parametri risposta, audit log.
             </p>
             <p>
+              <Link to="/admin/diagnostics" className="text-emerald-300 hover:text-emerald-200">
+                Diagnosi sistema →
+              </Link>{' '}
+              Stato componenti, eventi recenti, self-test on-demand. Per debugging
+              "qualcosa non funziona".
+            </p>
+            <p>
               <Link to="/face-lab" className="text-emerald-300 hover:text-emerald-200">
                 Face Lab →
               </Link>{' '}
               Sandbox per esaminare ogni combinazione di stato × emozione del volto di CARA.
+            </p>
+            <p className="text-slate-500">
+              Tip: in qualsiasi pagina premi <kbd className="bg-slate-900 px-1 py-0.5 rounded border border-slate-700 text-emerald-300">Ctrl+Shift+D</kbd>
+              {' '}per aprire l'overlay debug live (eventi <code>[cara-*]</code> in tempo reale).
             </p>
           </section>
         )}
