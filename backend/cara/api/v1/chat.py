@@ -424,20 +424,22 @@ async def chat(
         (m.content for m in reversed(req.messages) if m.role == "user"), ""
     )
 
-    # ---- Tier-0: too-short / pure-noise bypass --------------------------
-    # If the transcript is junk ("ehm", "uhm", "ok", or <6 alphanumeric
-    # chars after stripping spaces/punct) we don't want to ask the LLM to
-    # interpret it — it'll confabulate. Reply with a polite "ripeti" and
-    # save everyone the latency.
+    # ---- Tier-0: pure-noise bypass --------------------------------------
+    # Only fires for transcripts that are CLEARLY filler/junk:
+    #   - <3 alphanumeric chars total (e.g. "" or "ah" or just punctuation)
+    #   - the whole query is exactly one canonical filler word
+    # NB: legitimate short Italian words like "ciao", "stop", "bene", "luce"
+    # MUST go to the LLM. Earlier tighter thresholds were misclassifying
+    # them as noise.
     NOISE_RE = re.compile(
-        r"^(?:ehm|uhm|mh|ok|si|sì|no|ah|oh|eh|boh)\s*[?!.]*$",
+        r"^(?:ehm|uhm|mhm?|hmm?|ok|boh)\s*[?!.]*$",
         re.IGNORECASE,
     )
-    stripped = re.sub(r"[^a-zA-Z0-9àèéìòù]", "", last_user_q)
+    stripped = re.sub(r"[^a-zA-Z0-9àèéìòù]", "", last_user_q.lower())
     is_noise = (
         last_user_q
         and not attached_files
-        and (len(stripped) < 6 or NOISE_RE.match(last_user_q.strip()))
+        and (len(stripped) < 3 or bool(NOISE_RE.match(last_user_q.strip())))
     )
     if is_noise:
         canned = "Non ho capito bene, puoi ripetere?"
