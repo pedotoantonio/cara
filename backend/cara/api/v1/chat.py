@@ -40,6 +40,7 @@ from cara.ai.llm import LLMUnavailableError
 from cara.api.deps import get_current_user
 from cara.cda import CdaError, DiscoverRequest, discover as cda_discover
 from cara.cda.memory import content_kb as cda_kb
+from cara.services import intent_router
 from cara.config import settings
 from cara.models.user import User
 from cara.schemas.chat import ChatMessage, ChatRequest
@@ -52,6 +53,120 @@ router = APIRouter(tags=["chat"])
 
 _IM_START = "<|im_start|>"
 _IM_END = "<|im_end|>"
+
+
+async def _resolve_routed_intent(
+    *,
+    session: AsyncSession,
+    user_id: int,
+    routed: "intent_router.RoutedIntent",
+) -> str:
+    """Execute the side-effect implied by a routed intent and return the
+    canned reply text. Stays small: every branch must be O(1) calls and
+    return in well under a second so we keep the latency promise."""
+    kind = routed.kind
+    args = routed.args
+
+    if kind == "answer_datetime":
+        # Use the very same context block we'd inject into the LLM prompt.
+        ctx = _runtime_context_message()
+        # Take the first two informational lines and stitch them into prose.
+        lines = [
+            ln.lstrip("- ").rstrip(".")
+            for ln in ctx.splitlines()
+            if ln.startswith("- Oggi") or ln.startswith("- Ora")
+        ]
+        if lines:
+            return ". ".join(lines) + "."
+        return routed.canned_reply
+
+    if kind == "discover_audio":
+        try:
+            res = await cda_discover(
+                session,
+                DiscoverRequest(
+                    user_id=user_id,
+                    raw_query=args.get("query", ""),
+                    content_type="audio_stream",
+                ),
+            )
+            return f"In onda: {res.title or args.get('query', '')}."
+        except CdaError as exc:
+            return f"Non sono riuscita a trovare la radio: {exc}"
+
+    if kind == "discover_article":
+        try:
+            res = await cda_discover(
+                session,
+                DiscoverRequest(
+                    user_id=user_id,
+                    raw_query=args.get("query", ""),
+                    content_type="article",
+                ),
+            )
+        except CdaError as exc:
+            return f"Non sono riuscita a trovarlo: {exc}"
+        cached = (res.metadata or {}).get("cached_answer")
+        if cached and isinstance(cached, str):
+            attribution = f"\n\n*(fonte: {res.source_domain})*" if res.source_domain else ""
+            return cached + attribution
+        # No cached answer yet — return a brief stub so the user knows we
+        # found something. The agent loop normally fills this in for free,
+        # but routed intents skip the LLM entirely; we accept the trade-off
+        # of a thinner first answer here in exchange for sub-second latency.
+        title = res.title or args.get("query", "")
+        src = f" (fonte: {res.source_domain})" if res.source_domain else ""
+        return f"Ho trovato: {title}{src}. Apri il link nelle scoperte per leggerlo."
+
+    if kind == "list_tasks":
+        from cara.services import tasks as task_svc
+        items = await task_svc.list_tasks(session, user_id=user_id, include_done=False)
+        if not items:
+            return "Niente da fare al momento."
+        body = "\n".join(f"• {t.title}" for t in items[:10])
+        more = f"\n…(+{len(items) - 10} altre)" if len(items) > 10 else ""
+        return f"Ecco le tue cose da fare:\n{body}{more}"
+
+    if kind == "add_task":
+        from cara.services import tasks as task_svc
+        title = args.get("title", "").strip()
+        if not title:
+            return "Cosa devo aggiungere?"
+        t = await task_svc.create_task(session, user_id=user_id, title=title)
+        return f"Aggiunto: \"{t.title}\"."
+
+    if kind == "add_shopping":
+        from cara.services import shopping as shop_svc
+        title = args.get("title", "").strip()
+        if not title:
+            return "Cosa devo aggiungere alla spesa?"
+        s = await shop_svc.create_item(session, user_id=user_id, title=title)
+        return f"Messo nella spesa: \"{s.title}\"."
+
+    if kind == "who_is_home":
+        from cara.services.family import FamilyPresenceUnavailable, people_present
+        try:
+            seen = await people_present(window_minutes=15)
+        except FamilyPresenceUnavailable as exc:
+            return f"Non riesco a controllare le telecamere: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("chat.routed.who_is_home_error", error=str(exc))
+            return "Non riesco a controllare le telecamere in questo momento."
+        if not seen:
+            return "In questo momento non vedo nessuno in casa."
+        names = ", ".join(p.name for p in seen)
+        return f"In casa adesso: {names}."
+
+    if kind == "get_news":
+        from cara.services import news as news_svc
+        cat = args.get("category", "all")
+        items = await news_svc.fetch_category(cat, limit=5)
+        if not items:
+            return "Non ho trovato notizie al momento."
+        digest = news_svc.make_digest(items[:5], category=cat)
+        return digest
+
+    return routed.canned_reply or "Fatto."
 
 
 def _render_qwen_prompt(messages: list[ChatMessage]) -> str:
@@ -282,6 +397,52 @@ async def chat(
             total_text_chars=sum(len(f.text_content or "") for f in attached_files),
         )
 
+    last_user_q = next(
+        (m.content for m in reversed(req.messages) if m.role == "user"), ""
+    )
+
+    # ---- Tier-1: deterministic intent router ----------------------------
+    #
+    # Catch the canonical commands ("metti rai radio 1", "che giorno è oggi",
+    # "cosa devo fare", "cos'è X", …) BEFORE the LLM is invoked. Saves 6-90 s
+    # of token latency and avoids the 1.5B's tool-emission typos. Anything
+    # ambiguous falls through to the regular flow.
+    routed = intent_router.match(last_user_q) if last_user_q and not attached_files else None
+    if routed is not None:
+        canned = await _resolve_routed_intent(
+            session=session, user_id=user.id, routed=routed,
+        )
+        await convo_svc.add_message(
+            session, conversation_id=convo.id, role="assistant", content=canned,
+        )
+        await session.commit()
+        convo_id_str_r = str(convo.id)
+        logger.info(
+            "chat.intent_routed",
+            kind=routed.kind, args=routed.args, reply_chars=len(canned),
+        )
+
+        async def _routed_stream() -> AsyncIterator[bytes]:
+            yield _sse("meta", {"conversation_id": convo_id_str_r})
+            yield _sse("token", {"text": canned, "token_id": -1})
+            yield _sse(
+                "done",
+                {
+                    "conversation_id": convo_id_str_r,
+                    "tokens": 0,
+                    "first_token_seconds": 0.0,
+                    "total_seconds": 0.0,
+                    "tokens_per_second": 0.0,
+                    "routed": routed.kind,
+                },
+            )
+
+        return StreamingResponse(
+            _routed_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     # ---- Early-bypass: did we already answer this question once? ----
     #
     # If the user query needs grounding AND we have a cached answer in the KB,
@@ -291,9 +452,6 @@ async def chat(
     #
     # Conservative: only fires when there are no attached files (those need
     # the LLM to reason about specific content) and only on info-need queries.
-    last_user_q = next(
-        (m.content for m in reversed(req.messages) if m.role == "user"), ""
-    )
     if (
         not attached_files
         and last_user_q
