@@ -47,6 +47,10 @@ export interface VoiceConversation {
   sttOk: boolean;
   /** True if the background wake-word listener is active. */
   wakeWordActive: boolean;
+  /** Last user-facing error (e.g. mic permission denied). UI shows a banner. */
+  errorMessage: string | null;
+  /** Dismiss the visible error banner. */
+  dismissError: () => void;
 }
 
 export function useVoiceConversation(opts: {
@@ -65,9 +69,34 @@ export function useVoiceConversation(opts: {
   const wakeRef = useRef<WakeWordHandle | null>(null);
   const phaseRef = useRef<VoicePhase>('idle');
   const [wakeWordActive, setWakeWordActive] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const ttsOk = ttsAvailable();
   const sttOk = sttAvailable();
+
+  function logVoice(...args: unknown[]) {
+    // Surface state transitions in the dev console with a stable prefix so
+    // the user can capture them and forward us a copy when something fails.
+    // eslint-disable-next-line no-console
+    console.log('[cara-voice]', ...args);
+  }
+
+  function describeMicError(error: string): string {
+    const e = error.toLowerCase();
+    if (e.includes('not-allowed') || e.includes('permission'))
+      return 'Microfono bloccato dal browser. Concedi il permesso e ricarica la pagina.';
+    if (e.includes('no-speech'))
+      return 'Non ho sentito niente. Riprova parlando più forte.';
+    if (e.includes('audio-capture'))
+      return 'Nessun microfono rilevato. Controlla il dispositivo audio.';
+    if (e.includes('network'))
+      return 'Errore di rete sul riconoscimento vocale. Riprova.';
+    if (e.includes('aborted'))
+      return '';   // user-initiated abort — silent
+    return `Errore microfono: ${error}`;
+  }
+
+  const dismissError = useCallback(() => setErrorMessage(null), []);
 
   // Keep a ref to the phase so the wake-word callback can read it without
   // capturing a stale closure.
@@ -137,6 +166,7 @@ export function useVoiceConversation(opts: {
   }, [convId, opts.autoSpeak, ttsOk]);
 
   const start = useCallback(() => {
+    logVoice('start() called', { phase, sttOk, ttsOk });
     if (phase === 'speaking') {
       // Tap during TTS = stop talking, return to idle (interrupt CARA).
       stopSpeaking();
@@ -157,33 +187,64 @@ export function useVoiceConversation(opts: {
     }
     // idle → start listening
     if (!sttOk) {
-      // Without STT we can't do voice — caller can route to /chat.
+      setErrorMessage(
+        'Riconoscimento vocale non supportato in questo browser. Apri /chat per scrivere.',
+      );
       return;
     }
+    // Pause the wake-word listener SYNCHRONOUSLY before we ask for the mic.
+    // The previous code relied on a [phase] useEffect to call pause(), which
+    // runs after the next render — startListening would race against the
+    // wake-word recognizer for the same hardware mic.
+    if (wakeRef.current) {
+      logVoice('pausing wake-word before conversational STT');
+      wakeRef.current.pause();
+    }
+    setErrorMessage(null);
     setUserText('');
     setAssistantText('');
     setPhase('listening');
-    listenRef.current = startListening({
-      lang: 'it',
-      interim: true,
-      onText: (text, isFinal) => {
-        setUserText(text);
-        if (isFinal && text.trim()) {
+    let handle: ListenHandle | null = null;
+    try {
+      handle = startListening({
+        lang: 'it',
+        interim: true,
+        onText: (text, isFinal) => {
+          setUserText(text);
+          if (isFinal && text.trim()) {
+            listenRef.current = null;
+            submitToBackend(text.trim());
+          }
+        },
+        onEnd: () => {
+          logVoice('STT onEnd');
           listenRef.current = null;
-          submitToBackend(text.trim());
-        }
-      },
-      onEnd: () => {
-        listenRef.current = null;
-        // If we never got a final result (silent timeout), drop back to idle.
-        setPhase((prev) => (prev === 'listening' ? 'idle' : prev));
-      },
-      onError: () => {
-        listenRef.current = null;
-        setPhase('idle');
-      },
-    });
-  }, [phase, sttOk, submitToBackend]);
+          setPhase((prev) => (prev === 'listening' ? 'idle' : prev));
+        },
+        onError: (err) => {
+          logVoice('STT onError', err);
+          listenRef.current = null;
+          const msg = describeMicError(err);
+          if (msg) setErrorMessage(msg);
+          setPhase('idle');
+        },
+      });
+    } catch (e) {
+      logVoice('startListening threw', e);
+      setErrorMessage(`Microfono non avviato: ${(e as Error).message}`);
+      setPhase('idle');
+      return;
+    }
+    if (handle === null) {
+      logVoice('startListening returned null (no recognizer)');
+      setErrorMessage(
+        'Riconoscimento vocale non disponibile. Apri /chat per scrivere.',
+      );
+      setPhase('idle');
+      return;
+    }
+    listenRef.current = handle;
+  }, [phase, sttOk, ttsOk, submitToBackend]);
 
   const stop = useCallback(() => {
     listenRef.current?.stop();
@@ -256,5 +317,7 @@ export function useVoiceConversation(opts: {
     ttsOk,
     sttOk,
     wakeWordActive,
+    errorMessage,
+    dismissError,
   };
 }

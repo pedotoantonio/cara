@@ -66,7 +66,11 @@ export function HomePage() {
     }
   }, [conv.phase]);
 
-  const micState: MicState = conv.phase === 'idle' ? 'idle' : conv.phase;
+  const micState: MicState = !conv.sttOk
+    ? 'disabled'
+    : conv.phase === 'idle'
+      ? 'idle'
+      : conv.phase;
 
   // Face size scales with viewport; clamp so it never overflows or shrinks.
   // We pick min(viewport-width, viewport-height * 0.55) at runtime via CSS.
@@ -98,6 +102,25 @@ export function HomePage() {
           </Link>
         </div>
       </div>
+
+      {/* Error banner — visible when STT fails (permission denied, no recognizer, …) */}
+      {conv.errorMessage && (
+        <div
+          role="alert"
+          className="mx-4 md:mx-6 -mt-2 mb-2 rounded-xl bg-rose-500/15 border border-rose-500/40
+                     text-rose-200 text-xs px-3 py-2 flex items-start gap-2"
+        >
+          <span className="flex-1">{conv.errorMessage}</span>
+          <button
+            type="button"
+            onClick={conv.dismissError}
+            className="text-rose-200 hover:text-white text-base leading-none"
+            aria-label="Chiudi avviso"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Face — 70% */}
       <div className="flex-1 flex items-center justify-center px-4">

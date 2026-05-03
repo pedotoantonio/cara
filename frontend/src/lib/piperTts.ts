@@ -107,11 +107,13 @@ interface PlayOptions {
 }
 
 let _activeSource: AudioBufferSourceNode | null = null;
-let _activePulseTimers: ReturnType<typeof setTimeout>[] = [];
+let _activePulseRaf: number | null = null;
 
 export function piperStop(): void {
-  for (const t of _activePulseTimers) clearTimeout(t);
-  _activePulseTimers = [];
+  if (_activePulseRaf !== null) {
+    cancelAnimationFrame(_activePulseRaf);
+    _activePulseRaf = null;
+  }
   if (_activeSource) {
     try {
       _activeSource.stop();
@@ -160,33 +162,55 @@ export async function piperSpeak(opts: PlayOptions): Promise<PiperPlaybackHandle
 
   source.connect(gain).connect(ctx.destination);
 
-  const words = opts.text
-    .replace(/\s+/g, ' ')
-    .trim()
-    .split(' ')
-    .filter(Boolean);
-  const totalMs = buf.duration * 1000;
+  // Word array — keep insertion order, also remember `charIndex` of each word
+  // in the original text so the consumer can colour the karaoke cursor.
+  const wordsClean = opts.text.replace(/\s+/g, ' ').trim();
+  const words: { word: string; charIndex: number }[] = [];
+  {
+    const re = /\S+/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(wordsClean)) !== null) {
+      words.push({ word: m[0], charIndex: m.index });
+    }
+  }
+  const totalSeconds = Math.max(0.001, buf.duration);
 
   source.onended = () => {
     _activeSource = null;
-    for (const t of _activePulseTimers) clearTimeout(t);
-    _activePulseTimers = [];
+    if (_activePulseRaf !== null) {
+      cancelAnimationFrame(_activePulseRaf);
+      _activePulseRaf = null;
+    }
     opts.onEnd?.();
   };
 
   _activeSource = source;
+  const startedAt = ctx.currentTime;
   source.start();
   opts.onStart?.();
 
-  // Approximate word-boundary pulses by spreading them evenly across the
-  // audio duration. Not phonetically accurate, but enough to drive the
-  // avatar's lip-sync and the live-caption karaoke cursor.
+  // Drive pulse events from the AudioContext clock instead of setTimeout, so
+  // the karaoke cursor stays in lock-step with the actual audio playback —
+  // even when the browser tab is throttled or the main thread stalls. We
+  // poll at the screen refresh rate via requestAnimationFrame and emit the
+  // word that the elapsed audio time corresponds to.
   if (opts.onPulse && words.length > 0) {
-    const stepMs = totalMs / words.length;
-    for (let i = 0; i < words.length; i++) {
-      const t = setTimeout(() => opts.onPulse?.(words[i]), Math.round(stepMs * i));
-      _activePulseTimers.push(t);
-    }
+    let nextIdx = 0;
+    const stepSec = totalSeconds / words.length;
+    const tick = () => {
+      if (_activeSource !== source) return;   // we got cancelled
+      const elapsed = ctx.currentTime - startedAt;
+      while (nextIdx < words.length && elapsed >= stepSec * nextIdx) {
+        opts.onPulse?.(words[nextIdx].word);
+        nextIdx++;
+      }
+      if (nextIdx < words.length) {
+        _activePulseRaf = requestAnimationFrame(tick);
+      } else {
+        _activePulseRaf = null;
+      }
+    };
+    _activePulseRaf = requestAnimationFrame(tick);
   }
 
   return { stop: () => piperStop() };
