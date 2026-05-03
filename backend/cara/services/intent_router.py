@@ -26,6 +26,31 @@ class RoutedIntent:
     canned_reply: str      # short prose to play back to the user
 
 
+# Stop-list of nouns that, when present in a query, BLOCK a generic
+# "metti X" / "accendi X" match — they signal smart-home or housekeeping
+# requests that have no business being routed as radio playback.
+# Anchored at \b so we don't trip on substrings.
+_SMART_HOME_STOPWORDS = re.compile(
+    r"\b(?:luce|luci|lampad[ae]|finestr[ae]|port[ae]|"
+    r"riscaldamento|termosifon[ei]|condizionatore|aria\s+condizionata|"
+    r"allarme|antifurto|"
+    r"cucina|salotto|camera|bagno|garage|giardino|cortile|"
+    r"forno|frigo|frigorifero|lavatrice|lavastoviglie|"
+    r"a\s+posto|in\s+ordine)\b",
+    re.IGNORECASE,
+)
+
+# Audio-domain *content nouns* that confirm a "metti X" / "accendi X"
+# really is a media playback request. These are nouns only — verbs like
+# "ascoltare/sentire" appear in the trigger phrases themselves
+# ("fammi sentire bene") and would cause false matches if added.
+_AUDIO_DOMAIN = re.compile(
+    r"\b(?:radio|stazione|musica|canzone|canzoni|album|playlist|podcast|"
+    r"puntata|brano|disco)\b",
+    re.IGNORECASE,
+)
+
+
 # (regex_pattern, intent_kind, canned_reply, arg_extractor)
 # Patterns are ITALIAN only. Anchored at ^ and \s*[?!.]*$ so trailing
 # punctuation doesn't break matching. Order matters: more specific first.
@@ -140,6 +165,32 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
 ]
 
 
+def _validate_routed(routed: RoutedIntent, query: str) -> RoutedIntent | None:
+    """Post-match sanity check. Reject the routed intent when its argument
+    is clearly out of domain — typically a "metti X" where X mentions
+    smart-home items (luce, cucina, …) instead of audio content.
+
+    Returns the intent unchanged when valid, None otherwise (the caller
+    treats None as "fall through to the LLM").
+    """
+    if routed.kind == "discover_audio":
+        target = routed.args.get("query", "").strip()
+        # Hard block: anything mentioning a smart-home stopword.
+        if _SMART_HOME_STOPWORDS.search(target):
+            return None
+        # Soft requirement: when the query was ambiguous ("metti X"), we
+        # need at least one audio-domain keyword in the FULL query OR a
+        # plausible station-shaped target (≥2 chars, mostly letters).
+        # If neither is true, fall through to the LLM.
+        if not _AUDIO_DOMAIN.search(query):
+            # No content noun like "radio/musica/podcast/...". Without
+            # that signal we can't reliably tell "metti capital" from
+            # "metti via tutto" — fall through to the LLM, which sees
+            # the discover examples in its system prompt and can disambiguate.
+            return None
+    return routed
+
+
 def match(query: str) -> RoutedIntent | None:
     """Try each rule in order; return the first that matches.
 
@@ -159,7 +210,10 @@ def match(query: str) -> RoutedIntent | None:
         if kind == "add_shopping":
             m = rx.match(q)
             if m:
-                return RoutedIntent(kind=kind, args=extract(m), confidence=1.0, canned_reply=canned)
+                return _validate_routed(
+                    RoutedIntent(kind=kind, args=extract(m), confidence=1.0, canned_reply=canned),
+                    q,
+                )
             break
 
     # Standard pass.
@@ -168,5 +222,11 @@ def match(query: str) -> RoutedIntent | None:
             continue   # already tried above
         m = rx.match(q)
         if m:
-            return RoutedIntent(kind=kind, args=extract(m), confidence=1.0, canned_reply=canned)
+            validated = _validate_routed(
+                RoutedIntent(kind=kind, args=extract(m), confidence=1.0, canned_reply=canned),
+                q,
+            )
+            if validated is not None:
+                return validated
+            # validation rejected — keep trying the remaining rules.
     return None

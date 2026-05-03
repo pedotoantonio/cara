@@ -283,6 +283,10 @@ export function useVoiceConversation(opts: {
     interimRef.current = '';
     submittedRef.current = false;
     setPhase('listening');
+    // 400 ms debounce after isFinal: iOS sometimes emits a shorter "che
+    // ore" final, then a longer "che ore sono" final within the same
+    // session. We hold the submit briefly to keep the longer transcript.
+    let finalTimer: ReturnType<typeof setTimeout> | null = null;
     let handle: ListenHandle | null = null;
     try {
       handle = startListening({
@@ -297,18 +301,23 @@ export function useVoiceConversation(opts: {
         onText: (text, isFinal) => {
           interimRef.current = text;
           setUserText(text);
-          if (isFinal && text.trim()) {
-            // Final result arrived — submit immediately. Race-guard via the
-            // submittedRef so onEnd doesn't fire a duplicate.
-            if (submittedRef.current) return;
-            submittedRef.current = true;
-            listenRef.current = null;
-            try {
-              handle?.stop();
-            } catch {
-              /* already stopping */
-            }
-            submitToBackend(text.trim());
+          if (isFinal && text.trim() && !submittedRef.current) {
+            if (finalTimer) clearTimeout(finalTimer);
+            finalTimer = setTimeout(() => {
+              if (submittedRef.current) return;
+              submittedRef.current = true;
+              listenRef.current = null;
+              try {
+                handle?.stop();
+              } catch {
+                /* already stopping */
+              }
+              // Use whatever interim accumulated during the debounce
+              // (it'll be either the original `text` or a longer
+              // follow-up that arrived inside the 400 ms window).
+              const finalText = (interimRef.current || text).trim();
+              submitToBackend(finalText);
+            }, 400);
           }
         },
         onEnd: () => {

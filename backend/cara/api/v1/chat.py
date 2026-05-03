@@ -424,6 +424,52 @@ async def chat(
         (m.content for m in reversed(req.messages) if m.role == "user"), ""
     )
 
+    # ---- Tier-0: too-short / pure-noise bypass --------------------------
+    # If the transcript is junk ("ehm", "uhm", "ok", or <6 alphanumeric
+    # chars after stripping spaces/punct) we don't want to ask the LLM to
+    # interpret it — it'll confabulate. Reply with a polite "ripeti" and
+    # save everyone the latency.
+    NOISE_RE = re.compile(
+        r"^(?:ehm|uhm|mh|ok|si|sì|no|ah|oh|eh|boh)\s*[?!.]*$",
+        re.IGNORECASE,
+    )
+    stripped = re.sub(r"[^a-zA-Z0-9àèéìòù]", "", last_user_q)
+    is_noise = (
+        last_user_q
+        and not attached_files
+        and (len(stripped) < 6 or NOISE_RE.match(last_user_q.strip()))
+    )
+    if is_noise:
+        canned = "Non ho capito bene, puoi ripetere?"
+        # User messages were already persisted above; only add the assistant.
+        await convo_svc.add_message(
+            session, conversation_id=convo.id, role="assistant", content=canned,
+        )
+        await session.commit()
+        convo_id_str_n = str(convo.id)
+        logger.info("chat.noise_bypass", query=last_user_q[:60])
+
+        async def _noise_stream() -> AsyncIterator[bytes]:
+            yield _sse("meta", {"conversation_id": convo_id_str_n})
+            yield _sse("token", {"text": canned, "token_id": -1})
+            yield _sse(
+                "done",
+                {
+                    "conversation_id": convo_id_str_n,
+                    "tokens": 0,
+                    "first_token_seconds": 0.0,
+                    "total_seconds": 0.0,
+                    "tokens_per_second": 0.0,
+                    "routed": "noise",
+                },
+            )
+
+        return StreamingResponse(
+            _noise_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     # ---- Tier-1: deterministic intent router ----------------------------
     #
     # Catch the canonical commands ("metti rai radio 1", "che giorno è oggi",
@@ -603,6 +649,29 @@ async def chat(
         prompt_messages.insert(
             0, ChatMessage(role="system", content=cog_prompt)
         )
+
+    # FOCUS line — inserted RIGHT BEFORE the last user message so the model
+    # doesn't drift to a previous turn's question (a 1.5B failure mode when
+    # the conversation history is fresh in context). Also reminds the model
+    # that the latest input is what it must answer.
+    last_user_idx = -1
+    for i in range(len(prompt_messages) - 1, -1, -1):
+        if prompt_messages[i].role == "user":
+            last_user_idx = i
+            break
+    if last_user_idx >= 0:
+        focus_msg = ChatMessage(
+            role="system",
+            content=(
+                "## FOCUS DEL TURNO\n"
+                "L'utente ha appena scritto la domanda qui sotto. "
+                "Rispondi SOLO a questa domanda. Non rispondere a domande "
+                "precedenti. Se non hai capito, di' 'non ho capito, "
+                "puoi ripetere?' invece di inventare."
+            ),
+        )
+        prompt_messages.insert(last_user_idx, focus_msg)
+
     prompt = _render_qwen_prompt(prompt_messages)
     # Roughly, Qwen2.5 tokenises Italian at ~3.5 chars/token. Logging char
     # length lets us spot context overflows before the model goes silent.

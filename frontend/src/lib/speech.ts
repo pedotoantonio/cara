@@ -312,16 +312,25 @@ export function isSpeaking(): boolean {
 
 type SpeechRecognitionCtor = new () => SpeechRecognitionInstance;
 
+interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence?: number;
+}
+
+interface SpeechRecognitionResult {
+  isFinal: boolean;
+  length: number;
+  0: SpeechRecognitionAlternative;
+  [k: number]: SpeechRecognitionAlternative;
+}
+
 interface SpeechRecognitionInstance {
   lang: string;
   interimResults: boolean;
   continuous: boolean;
   maxAlternatives?: number;
   onresult:
-    | ((ev: {
-        results: { isFinal: boolean; 0: { transcript: string } }[];
-        resultIndex?: number;
-      }) => void)
+    | ((ev: { results: SpeechRecognitionResult[]; resultIndex?: number }) => void)
     | null;
   onend: (() => void) | null;
   onerror: ((ev: { error: string }) => void) | null;
@@ -378,22 +387,42 @@ export function startListening(opts: ListenOptions): ListenHandle | null {
   // wake-word on Chrome) opt in explicitly. For conversational STT we now
   // rely on interim transcripts + a tap-to-submit fallback.
   rec.continuous = opts.continuous ?? false;
-  // Concatenate ALL results (interim + final) to build the full sentence.
-  // The Web Speech API returns SpeechRecognitionResultList where
-  // `resultIndex` tells us which entries are new since the last event;
-  // we always rebuild from index 0 because the user could insert words at
-  // any point and we want the cumulative best-guess.
+  // Ask for up to 3 alternatives — Chrome exposes a `confidence` for each
+  // and we pick the highest-confidence one. Safari ignores the field but
+  // doesn't error on it.
+  rec.maxAlternatives = 3;
   rec.onresult = (ev) => {
     const list = ev.results;
     const len = list.length;
     let combined = '';
     let allFinal = true;
+    let bestConfidence = 0;
     for (let i = 0; i < len; i++) {
       const r = list[i];
-      combined += r[0].transcript;
+      // Pick the best alternative for THIS result chunk: prefer the one
+      // with the highest confidence; fall back to the first if no
+      // confidence is provided (Safari) or all are zero.
+      const altCount = (r as SpeechRecognitionResult).length || 1;
+      let bestAlt: SpeechRecognitionAlternative = r[0];
+      let bestAltConf = bestAlt.confidence ?? 0;
+      for (let j = 1; j < altCount; j++) {
+        const alt = r[j];
+        const c = alt?.confidence ?? 0;
+        if (c > bestAltConf) {
+          bestAlt = alt;
+          bestAltConf = c;
+        }
+      }
+      combined += bestAlt.transcript;
+      bestConfidence = Math.max(bestConfidence, bestAltConf);
       if (!r.isFinal) allFinal = false;
     }
-    logStt('onresult', { transcript: combined, allFinal, resultIndex: ev.resultIndex });
+    logStt('onresult', {
+      transcript: combined,
+      allFinal,
+      confidence: bestConfidence,
+      resultIndex: ev.resultIndex,
+    });
     opts.onText(combined.trim(), allFinal);
   };
   rec.onend = () => {
