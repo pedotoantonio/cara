@@ -5,6 +5,7 @@ import { clearTokens, fetchMe, getToken } from './api/auth';
 import type { User } from './api/auth';
 import { getVoiceConfig } from './api/voice';
 import { AppShell } from './components/AppShell';
+import { InstallPwaPrompt } from './components/InstallPwaPrompt';
 import { Login } from './components/Login';
 import { CdaPlayerProvider } from './lib/cdaPlayer';
 import { RadioPlayerProvider } from './lib/radioPlayer';
@@ -117,6 +118,7 @@ export default function App() {
       <CdaPlayerProvider>
       <ReactionsProvider>
       <BirthdayWatcher user={auth.user} />
+      <InstallPwaPrompt />
       <Routes>
         <Route
           path="/"
