@@ -373,7 +373,11 @@ export function startListening(opts: ListenOptions): ListenHandle | null {
   const rec = new Ctor();
   rec.lang = opts.lang === 'en' ? 'en-US' : 'it-IT';
   rec.interimResults = opts.interim ?? false;
-  rec.continuous = opts.continuous ?? true;
+  // iOS Safari silently refuses to emit results when continuous=true, so
+  // the safer default is false. Callers that REALLY want continuous (e.g.
+  // wake-word on Chrome) opt in explicitly. For conversational STT we now
+  // rely on interim transcripts + a tap-to-submit fallback.
+  rec.continuous = opts.continuous ?? false;
   // Concatenate ALL results (interim + final) to build the full sentence.
   // The Web Speech API returns SpeechRecognitionResultList where
   // `resultIndex` tells us which entries are new since the last event;

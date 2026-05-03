@@ -288,7 +288,12 @@ export function useVoiceConversation(opts: {
       handle = startListening({
         lang: 'it',
         interim: true,
-        continuous: true,   // don't quit on the first natural pause
+        // continuous=false: works reliably on iOS Safari (the alternative
+        // path made it silent). We now lean on:
+        //  - interimRef populated on every onText so we never lose a partial
+        //  - tap-to-submit when the user re-presses the mic mid-listen
+        //  - onEnd fallback that submits interim if no isFinal arrived
+        continuous: false,
         onText: (text, isFinal) => {
           interimRef.current = text;
           setUserText(text);
