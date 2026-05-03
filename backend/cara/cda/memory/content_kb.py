@@ -154,6 +154,21 @@ async def deactivate_item(session: AsyncSession, item_id: uuid.UUID) -> None:
     )
 
 
+async def attach_cached_answer(
+    session: AsyncSession, item_id: uuid.UUID, answer_text: str
+) -> None:
+    """Save the natural-language answer the agent loop produced for this item.
+
+    Stored under `metadata.cached_answer` so future identical questions can
+    skip the second LLM pass (and even both passes if we early-bypass).
+    """
+    item = await session.get(CdaContentItem, item_id)
+    if item is None:
+        return
+    item.metadata_ = {**(item.metadata_ or {}), "cached_answer": answer_text}
+    await session.flush()
+
+
 def _recompute_confidence_sql():
     """Bayesian-ish smoothing: (success+1) / (success + failure + 2)."""
     from sqlalchemy import case, cast, Float

@@ -39,6 +39,7 @@ from cara.ai import LLMService, get_llm_service
 from cara.ai.llm import LLMUnavailableError
 from cara.api.deps import get_current_user
 from cara.cda import CdaError, DiscoverRequest, discover as cda_discover
+from cara.cda.memory import content_kb as cda_kb
 from cara.config import settings
 from cara.models.user import User
 from cara.schemas.chat import ChatMessage, ChatRequest
@@ -281,6 +282,78 @@ async def chat(
             total_text_chars=sum(len(f.text_content or "") for f in attached_files),
         )
 
+    # ---- Early-bypass: did we already answer this question once? ----
+    #
+    # If the user query needs grounding AND we have a cached answer in the KB,
+    # skip BOTH LLM passes entirely and stream the learned answer back. This
+    # is what makes CARA "learn from the internet": the second time the same
+    # question comes in, response is ~150 ms instead of ~90 s.
+    #
+    # Conservative: only fires when there are no attached files (those need
+    # the LLM to reason about specific content) and only on info-need queries.
+    last_user_q = next(
+        (m.content for m in reversed(req.messages) if m.role == "user"), ""
+    )
+    if (
+        not attached_files
+        and last_user_q
+        and _needs_grounding(last_user_q)
+    ):
+        try:
+            kb_hits = await cda_kb.list_active_for_query(
+                session, query=last_user_q, content_type="article", limit=1
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("chat.kb_lookup_failed", error=str(exc))
+            kb_hits = []
+        if kb_hits:
+            cached_answer = (kb_hits[0].metadata_ or {}).get("cached_answer")
+            cached_domain = kb_hits[0].source_domain
+            if cached_answer and isinstance(cached_answer, str):
+                attribution = (
+                    f"\n\n*(fonte: {cached_domain})*" if cached_domain else ""
+                )
+                final_canned = cached_answer + attribution
+                # Persist the assistant message immediately so the conversation
+                # history stays consistent with the streamed response.
+                await convo_svc.add_message(
+                    session,
+                    conversation_id=convo.id,
+                    role="assistant",
+                    content=final_canned,
+                )
+                await session.commit()
+                convo_id_str_e = str(convo.id)
+                logger.info(
+                    "chat.kb_bypass.applied",
+                    query=last_user_q[:80],
+                    domain=cached_domain,
+                    answer_chars=len(final_canned),
+                )
+
+                async def _kb_bypass_stream() -> AsyncIterator[bytes]:
+                    yield _sse("meta", {"conversation_id": convo_id_str_e})
+                    yield _sse("token", {"text": final_canned, "token_id": -1})
+                    yield _sse(
+                        "done",
+                        {
+                            "conversation_id": convo_id_str_e,
+                            "tokens": 0,
+                            "first_token_seconds": 0.0,
+                            "total_seconds": 0.0,
+                            "tokens_per_second": 0.0,
+                        },
+                    )
+
+                return StreamingResponse(
+                    _kb_bypass_stream(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+
     # Render prompt from the full DB history so multi-turn works.
     history = await convo_svc.history_for_prompt(session, convo.id)
 
@@ -481,6 +554,21 @@ async def chat(
                             after_len=len(final_text),
                             kind=kind,
                         )
+                        # Persist the answer back to the KB so the next time
+                        # the same question is asked we can early-bypass both
+                        # LLM passes entirely.
+                        try:
+                            async with _sessionmaker() as s_save:
+                                await cda_kb.attach_cached_answer(
+                                    s_save,
+                                    discovered.content_id,
+                                    second_text,  # store WITHOUT the attribution suffix
+                                )
+                                await s_save.commit()
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "chat.agent_loop.cache_save_failed", error=str(exc)
+                            )
                 elif discovered and kind != "article":
                     # For audio_stream/video/podcast/image we don't do a 2nd pass:
                     # the client opens the player from the parsed [TOOL: discover ...]
