@@ -46,3 +46,9 @@ Thumbs.db
 # Local backup files (e.g., docker-compose.yml.bak.<ts>)
 *.bak
 *.bak.*
+
+# Android APK build artifacts (regenerable)
+/build/twa/app/build/
+/build/twa/.gradle/
+/build/twa/cara-signing.keystore
+frontend/public/cara.apk
