@@ -144,7 +144,16 @@ export function HomePage() {
         </div>
 
         <div className="flex justify-center">
-          <MicButton state={micState} onClick={conv.start} size={104} />
+          <MicButton
+            state={micState}
+            onClick={conv.start}
+            size={104}
+            label={
+              conv.phase === 'listening' && conv.userText.trim()
+                ? 'Tocca per inviare'
+                : undefined
+            }
+          />
         </div>
 
         <p className="text-center text-[11px] text-slate-600">

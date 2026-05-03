@@ -44,6 +44,7 @@ export function startWakeWord(opts: WakeWordOptions): WakeWordHandle | null {
     active = startListening({
       lang: 'it',
       interim: true,
+      continuous: false,   // wake-word: stop after each result, restart on onEnd
       onText: (text, isFinal) => {
         const norm = text.toLowerCase();
         // Strip leading punctuation/whitespace so "cara, …" matches.

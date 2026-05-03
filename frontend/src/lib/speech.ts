@@ -310,9 +310,21 @@ interface SpeechRecognitionInstance {
   lang: string;
   interimResults: boolean;
   continuous: boolean;
-  onresult: ((ev: { results: { isFinal: boolean; 0: { transcript: string } }[] }) => void) | null;
+  maxAlternatives?: number;
+  onresult:
+    | ((ev: {
+        results: { isFinal: boolean; 0: { transcript: string } }[];
+        resultIndex?: number;
+      }) => void)
+    | null;
   onend: (() => void) | null;
   onerror: ((ev: { error: string }) => void) | null;
+  onstart?: (() => void) | null;
+  onaudiostart?: (() => void) | null;
+  onaudioend?: (() => void) | null;
+  onspeechstart?: (() => void) | null;
+  onspeechend?: (() => void) | null;
+  onnomatch?: (() => void) | null;
   start: () => void;
   stop: () => void;
   abort: () => void;
@@ -330,14 +342,23 @@ export function sttAvailable(): boolean {
 
 export interface ListenHandle {
   stop: () => void;
+  abort: () => void;
 }
 
 export interface ListenOptions {
   lang?: 'it' | 'en';
   interim?: boolean;
+  /** Default: true for conversational STT (the recognizer doesn't quit at the
+   * first natural pause). Wake-word callers pass false. */
+  continuous?: boolean;
   onText: (text: string, isFinal: boolean) => void;
   onEnd?: () => void;
   onError?: (error: string) => void;
+}
+
+function logStt(...args: unknown[]) {
+  // eslint-disable-next-line no-console
+  console.log('[cara-stt]', ...args);
 }
 
 export function startListening(opts: ListenOptions): ListenHandle | null {
@@ -346,19 +367,61 @@ export function startListening(opts: ListenOptions): ListenHandle | null {
   const rec = new Ctor();
   rec.lang = opts.lang === 'en' ? 'en-US' : 'it-IT';
   rec.interimResults = opts.interim ?? false;
-  rec.continuous = false;
+  rec.continuous = opts.continuous ?? true;
+  // Concatenate ALL results (interim + final) to build the full sentence.
+  // The Web Speech API returns SpeechRecognitionResultList where
+  // `resultIndex` tells us which entries are new since the last event;
+  // we always rebuild from index 0 because the user could insert words at
+  // any point and we want the cumulative best-guess.
   rec.onresult = (ev) => {
-    const last = ev.results[ev.results.length - 1];
-    const transcript = last[0].transcript;
-    opts.onText(transcript, last.isFinal);
+    const list = ev.results;
+    const len = list.length;
+    let combined = '';
+    let allFinal = true;
+    for (let i = 0; i < len; i++) {
+      const r = list[i];
+      combined += r[0].transcript;
+      if (!r.isFinal) allFinal = false;
+    }
+    logStt('onresult', { transcript: combined, allFinal, resultIndex: ev.resultIndex });
+    opts.onText(combined.trim(), allFinal);
   };
-  rec.onend = () => opts.onEnd?.();
-  rec.onerror = (ev) => opts.onError?.(ev.error);
+  rec.onend = () => {
+    logStt('onend');
+    opts.onEnd?.();
+  };
+  rec.onerror = (ev) => {
+    logStt('onerror', ev.error);
+    opts.onError?.(ev.error);
+  };
+  rec.onstart = () => logStt('onstart');
+  rec.onaudiostart = () => logStt('onaudiostart');
+  rec.onaudioend = () => logStt('onaudioend');
+  rec.onspeechstart = () => logStt('onspeechstart');
+  rec.onspeechend = () => logStt('onspeechend');
+  rec.onnomatch = () => logStt('onnomatch');
   try {
     rec.start();
+    logStt('start() called', { lang: rec.lang, continuous: rec.continuous, interim: rec.interimResults });
   } catch (e) {
+    logStt('start() threw', e);
     opts.onError?.((e as Error).message);
     return null;
   }
-  return { stop: () => rec.stop() };
+  return {
+    stop: () => {
+      try {
+        rec.stop();
+      } catch {
+        /* already stopped */
+      }
+    },
+    abort: () => {
+      try {
+        rec.abort();
+      } catch {
+        /* already aborted */
+      }
+    },
+  };
 }

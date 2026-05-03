@@ -70,6 +70,13 @@ export function useVoiceConversation(opts: {
   const phaseRef = useRef<VoicePhase>('idle');
   const [wakeWordActive, setWakeWordActive] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Latest interim STT transcript. Updated on every onText so we always have
+  // it available — even if the recognizer never fires `isFinal` (a known iOS
+  // Safari behaviour) or the user taps stop before completing the sentence.
+  const interimRef = useRef('');
+  // Set to true once we've submitted the current utterance, so onEnd doesn't
+  // double-submit when the recognizer closes after the tap.
+  const submittedRef = useRef(false);
 
   const ttsOk = ttsAvailable();
   const sttOk = sttAvailable();
@@ -166,7 +173,7 @@ export function useVoiceConversation(opts: {
   }, [convId, opts.autoSpeak, ttsOk]);
 
   const start = useCallback(() => {
-    logVoice('start() called', { phase, sttOk, ttsOk });
+    logVoice('start() called', { phase, sttOk, ttsOk, interim: interimRef.current });
     if (phase === 'speaking') {
       // Tap during TTS = stop talking, return to idle (interrupt CARA).
       stopSpeaking();
@@ -174,8 +181,22 @@ export function useVoiceConversation(opts: {
       return;
     }
     if (phase === 'listening') {
-      // Tap during listen = stop and submit whatever we've got.
-      listenRef.current?.stop();
+      // Tap during listen = STOP + submit whatever we've heard so far.
+      // We use interimRef (always-current) instead of waiting for an
+      // `isFinal` event that may never come — iOS Safari and some Chromium
+      // versions close the recognizer on silence WITHOUT a final result.
+      const handle = listenRef.current;
+      listenRef.current = null;
+      handle?.stop();
+      const captured = interimRef.current.trim();
+      logVoice('tap-during-listening', { captured });
+      submittedRef.current = true;   // tell onEnd not to re-submit
+      if (captured) {
+        submitToBackend(captured);
+      } else {
+        // Nothing said: cancel cleanly.
+        setPhase('idle');
+      }
       return;
     }
     if (phase === 'thinking') {
@@ -192,10 +213,8 @@ export function useVoiceConversation(opts: {
       );
       return;
     }
-    // Pause the wake-word listener SYNCHRONOUSLY before we ask for the mic.
-    // The previous code relied on a [phase] useEffect to call pause(), which
-    // runs after the next render — startListening would race against the
-    // wake-word recognizer for the same hardware mic.
+    // Pause the wake-word listener SYNCHRONOUSLY before we ask for the mic
+    // so the two recognizers don't fight over the same audio stream.
     if (wakeRef.current) {
       logVoice('pausing wake-word before conversational STT');
       wakeRef.current.pause();
@@ -203,23 +222,49 @@ export function useVoiceConversation(opts: {
     setErrorMessage(null);
     setUserText('');
     setAssistantText('');
+    interimRef.current = '';
+    submittedRef.current = false;
     setPhase('listening');
     let handle: ListenHandle | null = null;
     try {
       handle = startListening({
         lang: 'it',
         interim: true,
+        continuous: true,   // don't quit on the first natural pause
         onText: (text, isFinal) => {
+          interimRef.current = text;
           setUserText(text);
           if (isFinal && text.trim()) {
+            // Final result arrived — submit immediately. Race-guard via the
+            // submittedRef so onEnd doesn't fire a duplicate.
+            if (submittedRef.current) return;
+            submittedRef.current = true;
             listenRef.current = null;
+            try {
+              handle?.stop();
+            } catch {
+              /* already stopping */
+            }
             submitToBackend(text.trim());
           }
         },
         onEnd: () => {
-          logVoice('STT onEnd');
+          logVoice('STT onEnd', { submitted: submittedRef.current, interim: interimRef.current });
           listenRef.current = null;
-          setPhase((prev) => (prev === 'listening' ? 'idle' : prev));
+          if (submittedRef.current) {
+            // already submitted by tap or isFinal; nothing to do
+            return;
+          }
+          // No isFinal arrived (iOS pause / silence timeout). If we have ANY
+          // interim text, give the engine a moment to maybe deliver an
+          // isFinal — then submit anyway so the user's question isn't lost.
+          const captured = interimRef.current.trim();
+          if (captured) {
+            submittedRef.current = true;
+            window.setTimeout(() => submitToBackend(captured), 300);
+          } else {
+            setPhase((prev) => (prev === 'listening' ? 'idle' : prev));
+          }
         },
         onError: (err) => {
           logVoice('STT onError', err);
