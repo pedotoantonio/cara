@@ -52,6 +52,7 @@ DEFAULTS: dict[str, Any] = {
     "cda_safe_search_for_minors": True, # force safe search for child/teen
     "cda_domain_blacklist": None,  # list[str] of always-blocked domains
     "cda_domain_whitelist_for_child": None,  # allowed domains for child role
+    "cda_agent_loop_enabled": True,  # forced grounding on info-need queries
 }
 
 

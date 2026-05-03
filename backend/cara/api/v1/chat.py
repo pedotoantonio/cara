@@ -23,6 +23,7 @@ with the same `conversation_id` get context.
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -37,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cara.ai import LLMService, get_llm_service
 from cara.ai.llm import LLMUnavailableError
 from cara.api.deps import get_current_user
+from cara.cda import CdaError, DiscoverRequest, discover as cda_discover
 from cara.config import settings
 from cara.models.user import User
 from cara.schemas.chat import ChatMessage, ChatRequest
@@ -64,6 +66,73 @@ _MONTHS_IT = [
     "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
     "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Agent loop — forced grounding for info-need queries.
+#
+# When the user asks something the LLM is likely to hallucinate ("cos'è X",
+# "chi è Y", "che tempo fa", "quanto costa Z"), or when the model itself
+# emitted [TOOL: discover ...] indicating it knows it should look it up, we:
+#  1. Run the CDA discover pipeline server-side.
+#  2. Take the extracted article text.
+#  3. Re-prompt the LLM with that text injected as a system message.
+#  4. Stream the second pass as a `revision` SSE event so the frontend
+#     replaces the (potentially hallucinated) first reply.
+# ---------------------------------------------------------------------------
+
+_GROUND_PATTERNS = [
+    r"\bcos[a']?\s*[èe']\b",            # cos'è, cosa è
+    r"\bchi\s*[èe]\b",                   # chi è
+    r"\bdove\s+(?:[èe]|si\s+trova)\b",
+    r"\bquando\s+(?:[èe]|sarà|è\s+stato)\b",
+    r"\bspiegami\b",
+    r"\bdefinisci\b",
+    r"\bche\s+(?:vuol\s+dire|significa)\b",
+    r"\bdimmi\s+(?:cosa|chi|dove|quando)\b",
+    r"\bmeteo\b",
+    r"\bprevisioni\b",
+    r"\bvincitore\b",
+    r"\bquanto\s+costa\b",
+    r"\bin\s+che\s+anno\b",
+    r"\bha\s+vinto\b",
+    r"\bè\s+vero\s+che\b",
+]
+_GROUND_RE = re.compile("|".join(_GROUND_PATTERNS), re.IGNORECASE)
+
+
+def _needs_grounding(question: str) -> bool:
+    """True if the user's question likely needs grounded information."""
+    return bool(_GROUND_RE.search(question or ""))
+
+
+def _infer_kind(question: str) -> str:
+    """Cheap classifier: pick the right `kind` for discover from the question."""
+    q = (question or "").lower()
+    if re.search(r"\b(podcast|puntata)\b", q):
+        return "podcast"
+    if re.search(r"\b(ascolta|ascoltare|radio|musica)\b", q):
+        return "audio_stream"
+    if re.search(r"\b(video|trailer|guarda)\b", q):
+        return "video"
+    if re.search(r"\b(foto|immagine|immagini)\b", q):
+        return "image"
+    return "article"
+
+
+def _has_discover_tool(text: str) -> bool:
+    """Best-effort detection of the model emitting any `discover` tool call,
+    tolerant of the 1.5B's typical typos (TOOL/TUPO/TWOOL/TU prefix)."""
+    return bool(re.search(r"\[\s*[A-Z_]*\s*:?\s*discover\b", text, flags=re.IGNORECASE))
+
+
+_AGENT_GROUNDING_SUFFIX = (
+    "Usa SOLO questa informazione per rispondere all'ultima domanda dell'utente. "
+    "Rispondi in italiano, in 2-4 frasi, in modo naturale e conciso. "
+    "Se la fonte non contiene la risposta, dillo onestamente. "
+    "NON emettere [TOOL: ...] in questa risposta."
+)
+
 
 
 def _runtime_context_message() -> str:
@@ -315,10 +384,123 @@ async def chat(
         from cara.store.db import _sessionmaker  # local import to avoid cycles
         from cara.services import admin_settings as setting_svc
 
+        last_user = next(
+            (m.content for m in reversed(req.messages) if m.role == "user"),
+            "",
+        )
+
+        # --- agent loop: forced grounding for info-need queries ---
+        # Triggers when (a) the LLM emitted a discover tool, or (b) the user
+        # asked an "info-need" question and the LLM produced free-form prose
+        # (likely hallucinated). The CDA discovers an article server-side and
+        # we re-prompt the LLM with the article text.
+        agent_loop_fired = False
+        if _sessionmaker is not None and full_text and last_user:
+            async with _sessionmaker() as s_a:
+                agent_enabled = await setting_svc.get(s_a, "cda_agent_loop_enabled")
+            # Default ON: if the flag is missing or None, treat as enabled.
+            agent_enabled = True if agent_enabled in (None, True) else bool(agent_enabled)
+
+            wants_loop = (
+                agent_enabled
+                and (_has_discover_tool(full_text) or _needs_grounding(last_user))
+            )
+
+            if wants_loop:
+                kind = _infer_kind(last_user)
+                discovered = None
+                async with _sessionmaker() as s_a:
+                    try:
+                        discovered = await cda_discover(
+                            s_a,
+                            DiscoverRequest(
+                                user_id=user.id,
+                                raw_query=last_user,
+                                content_type=kind,  # type: ignore[arg-type]
+                            ),
+                        )
+                        await s_a.commit()
+                    except CdaError as exc:
+                        logger.info("chat.agent_loop.discover_failed", error=str(exc))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("chat.agent_loop.discover_error", error=str(exc))
+
+                article_text = ""
+                if discovered:
+                    article_text = (discovered.metadata.get("text") or "").strip()  # type: ignore[union-attr]
+
+                # If we got actual prose (not just a stream URL or empty), do a
+                # second pass with the article in the prompt as a system message.
+                if discovered and article_text and len(article_text) > 80 and kind == "article":
+                    grounding = ChatMessage(
+                        role="system",
+                        content=(
+                            "## INFORMAZIONE TROVATA SU INTERNET\n"
+                            f"Fonte: {discovered.source_domain or 'web'}\n"
+                            f"Titolo: {discovered.title or ''}\n\n"
+                            f"{article_text[:1800]}\n\n"
+                            f"{_AGENT_GROUNDING_SUFFIX}"
+                        ),
+                    )
+                    # Insert the grounding right BEFORE the last user message
+                    # so the model sees: persona → runtime → grounding → user.
+                    new_msgs = list(prompt_messages)
+                    insert_at = len(new_msgs)
+                    for i in range(len(new_msgs) - 1, -1, -1):
+                        if new_msgs[i].role == "user":
+                            insert_at = i
+                            break
+                    new_msgs.insert(insert_at, grounding)
+                    new_prompt = _render_qwen_prompt(new_msgs)
+                    logger.info(
+                        "chat.agent_loop.second_pass.start",
+                        prompt_chars=len(new_prompt),
+                        article_chars=len(article_text),
+                        source=discovered.source_domain,
+                    )
+                    second_buf: list[str] = []
+                    try:
+                        async for chunk in llm.generate(new_prompt, max_new_tokens=240):
+                            second_buf.append(chunk.text)
+                    except LLMUnavailableError as exc:
+                        logger.warning("chat.agent_loop.second_pass.llm_unavailable", error=str(exc))
+
+                    second_text = "".join(second_buf).strip()
+                    if second_text:
+                        # Append a footer with the source so the user sees attribution
+                        # right in the chat bubble.
+                        attribution = ""
+                        if discovered.source_domain:
+                            attribution = f"\n\n*(fonte: {discovered.source_domain})*"
+                        final_text = second_text + attribution
+                        yield _sse("revision", {"text": final_text})
+                        agent_loop_fired = True
+                        logger.info(
+                            "chat.agent_loop.applied",
+                            before_len=len(full_text),
+                            after_len=len(final_text),
+                            kind=kind,
+                        )
+                elif discovered and kind != "article":
+                    # For audio_stream/video/podcast/image we don't do a 2nd pass:
+                    # the client opens the player from the parsed [TOOL: discover ...]
+                    # in the first reply. Logged for observability.
+                    logger.info(
+                        "chat.agent_loop.skipped_non_article",
+                        kind=kind,
+                        url=discovered.url,
+                    )
+
         # --- self-critique pass (opt-in via admin flag `validation_enabled`) ---
-        # Only run on free-form replies (no tool emissions): the tool branch
-        # already has structured ground truth via the executed tool.
-        if _sessionmaker is not None and full_text and "[" not in full_text:
+        # Only runs if the agent loop did NOT fire (otherwise it's redundant
+        # and just doubles latency). Skipped for tool-emitting replies because
+        # those have structured ground truth already.
+        if (
+            not agent_loop_fired
+            and _sessionmaker is not None
+            and full_text
+            and "[" not in full_text
+        ):
             async with _sessionmaker() as s_v:
                 v_enabled = await setting_svc.get(s_v, "validation_enabled")
                 v_prompt = await setting_svc.get_with_env_fallback(
@@ -328,10 +510,6 @@ async def chat(
                     s_v, "llm_validation_max_tokens", settings.llm_validation_max_tokens
                 )
             if v_enabled:
-                last_user = next(
-                    (m.content for m in reversed(req.messages) if m.role == "user"),
-                    "",
-                )
                 try:
                     rewrite = await llm.validate(
                         question=last_user,
