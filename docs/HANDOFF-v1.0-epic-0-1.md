@@ -1,6 +1,6 @@
 # CARA v1.0 — Handoff document, branch `epic-0-foundations`
 
-Stato a fine sessione 2026-05-04 (tredici ondate). **563 test verdi** (461 unit + 102 smoke). **Epic 0 + Epic 1 + Epic 2 + Epic 3 COMPLETE** — 4 Epic backend chiusi al 100%. Step 67 di Antonio mergiato; KV cache 8.3× più veloce; episodic memory live; routing pipeline operativo; chat.py 1322→808; tre concrete workflow (Receipt + Bill + Recipe) + auto-confirm learning + REST workflows API live e verificati.
+Stato a fine sessione 2026-05-04 (quattordici ondate). **595 test verdi** (479 unit + 116 smoke). **Epic 0 + Epic 1 + Epic 2 + Epic 3 + Epic 7 COMPLETE** — 5 Epic backend chiusi al 100%. KV cache 8.3× più veloce; episodic memory live; routing pipeline operativo; chat.py 1322→808; tre workflow concreti (Receipt+Bill+Recipe) + auto-confirm; **Wallet completo** con layout persistence + 4 preset profili (genitore/teen/bambino/anziano) + 13 widget catalogati.
 
 ## Cosa è stato fatto
 
@@ -52,6 +52,10 @@ Branch `epic-0-foundations` su `/opt/cara/`. Tutti commit additivi
 | 3.7 | RecipeWorkflow (URL/foto/text → ingredienti → bulk shopping) | `cara/workflows/recipe.py` | 21 unit |
 | 3.8 | Auto-confirm learning (per-(user, workflow, signature) trust streak) | `cara/workflows/auto_confirm.py` + `cara/models/workflow_trust.py` + migration `f8a2b1c4e527` | 15 unit |
 | api/workflows | POST /workflows/run + GET /trust + revoke/reject | `cara/api/v1/workflows.py` | 14 smoke + live |
+| 7.4 | WalletLayout persistence (per-user, per-surface JSONB layout) | `cara/models/wallet_layout.py` + `services/wallet_layouts.py` + migration `a4b6c8d3e729` | 14 smoke |
+| 7.5 | 4 preset profili (genitore/teen/bambino/anziano) | `services/wallet_layouts.py` PRESETS | (covered by smoke) |
+| 7.6 | 6 widget extra (budget_month/kids_homework/routine_next/cara_quote/news_brief/radio_now_playing) | `cara/widgets/catalog_extra.py` | 17 unit + live |
+| api/wallet | GET/PUT/DELETE /wallet/layout + GET /presets + POST /preset/{slug} | `cara/api/v1/wallet.py` | live verified |
 
 Migrazioni Alembic applicate al DB live (`cara-postgres`):
 `c8a7d94e1f02 → d4e1f8b3a201 → e8a2c5f7b310`. Idempotenti, downgrade
