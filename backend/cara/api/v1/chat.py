@@ -53,7 +53,7 @@ from cara.api.v1._chat_prompt import (
     render_qwen_prompt as _render_qwen_prompt,
     runtime_context_message as _runtime_context_message,
 )
-from cara.api.v1._chat_routing import ROUTING_TIERS
+from cara.api.v1._chat_pipeline import route_chat_request
 from cara.api.v1._chat_sse import sse_frame as _sse
 from cara.cda import CdaError, DiscoverRequest, discover as cda_discover
 from cara.cda.memory import content_kb as cda_kb
@@ -271,22 +271,25 @@ async def chat(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # ---- Routing tiers (Step 0.2 phase C) -----------------------------
+    # ---- Routing pipeline (Step 0.2 phase D) --------------------------
     #
-    # Walk the deterministic routing tiers in order; return the first
-    # canned response. Each handler in `ROUTING_TIERS` performs its own
-    # match / side-effects / SSE shape and returns Optional[StreamingResponse].
-    # See `cara/api/v1/_chat_routing.py` for the per-tier implementations.
-    for handler in ROUTING_TIERS:
-        resp = await handler(
-            session=session,
-            user=user,
-            last_user_q=last_user_q,
-            attached_files=attached_files,
-            convo=convo,
-        )
-        if resp is not None:
-            return resp
+    # The 3 deterministic routing tiers (skill / recipe / intent) are
+    # wrapped as Stage objects in `cara.api.v1._chat_pipeline.CHAT_PIPELINE`.
+    # `route_chat_request` builds a RouteContext, walks the pipeline,
+    # records per-stage telemetry as `router.stage` events in episodic
+    # memory, and returns a StreamingResponse if any stage handled the
+    # request — or None if every stage missed (we then fall through to
+    # the LLM).
+    pipeline_resp = await route_chat_request(
+        session=session,
+        user=user,
+        last_user_q=last_user_q,
+        attached_files=attached_files,
+        convo=convo,
+        conversation_id=str(convo.id),
+    )
+    if pipeline_resp is not None:
+        return pipeline_resp
 
     # ---- Early-bypass: did we already answer this question once? ----
     #
