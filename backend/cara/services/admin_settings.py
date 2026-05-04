@@ -45,6 +45,18 @@ DEFAULTS: dict[str, Any] = {
     "voice_rate": None,            # 0.5–2.0 sensible, default 1.0
     "voice_pitch": None,           # 0.0–2.0, default 1.0
     "voice_volume": None,          # 0.0–1.0, default 1.0
+    # Per-family TTS pronunciation overrides on top of the shipped
+    # anglicisms.yaml. Dict[str, str] = {english_word: italian_phonetic}.
+    # An empty-string value deletes the corresponding base-dictionary
+    # entry. Hot-swap by the TTSNormalizer the next time the chat layer
+    # re-syncs (which happens on every TTS request).
+    "tts_user_overrides": {},
+    # TTS streaming chunked (Step 1.3). When true, chat() splits the LLM
+    # output at sentence boundaries and emits SSE `audio_chunk` events
+    # alongside `token` events — first audio plays in ~2s instead of
+    # waiting for the full response. Disabled by default until the
+    # frontend WebAudio queue is wired.
+    "tts_streaming_enabled": False,
     # Content Discovery Agent (CDA) — see /opt/cara/docs/cda-extension-spec.md.
     "cda_enabled": True,           # master switch for the discover tool
     "cda_replace_legacy_pages": False,  # Radio/News pages read from KB when on
