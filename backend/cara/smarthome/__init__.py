@@ -20,13 +20,16 @@ from cara.smarthome.base import (
     canonical_entity_id,
     parse_entity_id,
 )
+from cara.smarthome.homeassistant import HAConfig, HomeAssistantAdapter
 
 __all__ = [
     "Area",
     "Capability",
     "Entity",
     "EntityState",
+    "HAConfig",
     "HealthStatus",
+    "HomeAssistantAdapter",
     "Scene",
     "SmartHomeAdapter",
     "canonical_entity_id",
