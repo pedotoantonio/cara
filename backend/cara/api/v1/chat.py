@@ -36,7 +36,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cara.ai import LLMService, get_llm_service
+from cara.ai import kv_cache
 from cara.ai.llm import LLMUnavailableError
+from cara.learning import episodic
 from cara.api.deps import get_current_user
 from cara.api.v1._chat_grounding import (
     has_discover_tool as _has_discover_tool,
@@ -764,6 +766,13 @@ async def chat(
         admin_max = await setting_svc.get(session, "llm_max_new_tokens")
         effective_max = int(admin_max) if admin_max else settings.llm_max_new_tokens
 
+    # Per-conversation KV-cache path. RKLLM persists the prefill state to
+    # this file at the end of each run and re-uses it on the next call —
+    # turns 2+ skip prefill, dropping TTFT from ~200 ms to ~50 ms.
+    # Invalidated when the admin edits the runtime system prompt
+    # (cara.ai.kv_cache.flush_one is what the admin handler will call).
+    kv_path = kv_cache.path_for_conversation(convo_id_str)
+
     async def stream() -> AsyncIterator[bytes]:
         yield _sse("meta", {"conversation_id": convo_id_str})
 
@@ -780,7 +789,11 @@ async def chat(
         n = 0
         buf: list[str] = []
         try:
-            async for chunk in llm.generate(prompt, max_new_tokens=effective_max):
+            async for chunk in llm.generate(
+                prompt,
+                max_new_tokens=effective_max,
+                prompt_cache_path=kv_path,
+            ):
                 if t_first is None:
                     t_first = time.monotonic() - t_start
                     sm.transition(LumoState.SPEAKING)
@@ -805,6 +818,24 @@ async def chat(
         # The text we eventually persist + return; may be replaced by the
         # self-critique pass below if validation is on and the verdict is RIVEDI.
         final_text = full_text
+
+        # Episodic memory: one row per chat turn. Fire-and-forget — failures
+        # never block the user-visible response. The reflective batch
+        # (Step 8.5) clusters these to surface "what's the model failing at?".
+        await episodic.record_async(
+            kind="chat.turn",
+            user_id=user.id,
+            outcome="ok",
+            duration_ms=t_total * 1000,
+            ref_id=convo_id_str,
+            payload={
+                "tokens": n,
+                "first_token_seconds": round(t_first, 3) if t_first else None,
+                "tokens_per_sec": round(n / max(t_total, 1e-6), 2),
+                "prompt_chars": len(prompt),
+                "kv_cache_path": str(kv_path) if kv_path else None,
+            },
+        )
 
         # Persist the assistant turn. Open a fresh session because the request
         # session is closed by the time the stream yields its last bytes.
@@ -887,7 +918,11 @@ async def chat(
                     )
                     second_buf: list[str] = []
                     try:
-                        async for chunk in llm.generate(new_prompt, max_new_tokens=240):
+                        async for chunk in llm.generate(
+                            new_prompt,
+                            max_new_tokens=240,
+                            prompt_cache_path=kv_path,
+                        ):
                             second_buf.append(chunk.text)
                     except LLMUnavailableError as exc:
                         logger.warning("chat.agent_loop.second_pass.llm_unavailable", error=str(exc))

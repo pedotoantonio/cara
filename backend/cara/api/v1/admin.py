@@ -85,6 +85,18 @@ async def patch_settings(
             detail=changed,
             ip=request.client.host if request.client else None,
         )
+        # Settings that change the LLM prefix (system prompt, tone)
+        # invalidate every cached KV-cache file: the saved prefill is
+        # tied to the previous prefix and would feed the model the wrong
+        # context. Cheap to flush — every active conversation just pays
+        # one turn of normal TTFT (~200ms) on its next message.
+        if any(k in changed for k in ("llm_system_prompt", "tone")):
+            from cara.ai import kv_cache
+
+            removed = kv_cache.flush_all()
+            if removed:
+                log.info("admin.kv_cache.flushed_after_prompt_change",
+                         removed=removed, keys=list(changed.keys()))
     return await setting_svc.get_all(session)
 
 
