@@ -1,6 +1,6 @@
 # CARA v1.0 — Handoff document, branch `epic-0-foundations`
 
-Stato a fine sessione 2026-05-04 (consolidata in sette ondate). **353 test verdi** (311 unit + 42 smoke). Step 67 di Antonio mergiato; modelli wire-up; KV cache RKLLM **live e misurato 8.3× più veloce** su TTFT follow-up; episodic memory **live**; REST endpoint per weather/memory/widgets/smarthome live; `chat.py` 1322 → 1034 righe (helper estratti).
+Stato a fine sessione 2026-05-04 (consolidata in otto ondate). **365 test verdi** (311 unit + 54 smoke). Step 67 di Antonio mergiato; modelli wire-up; KV cache RKLLM **live e misurato 8.3× più veloce** su TTFT follow-up; episodic memory **live su 4 punti di routing**; REST endpoint live per weather/memory/widgets/smarthome **+ admin learning (habits/reflective/tool-metrics)**; `chat.py` 1322 → 1034 righe.
 
 ## Cosa è stato fatto
 
@@ -38,6 +38,7 @@ Branch `epic-0-foundations` su `/opt/cara/`. Tutti commit additivi
 | api/smarthome | `/smarthome/entities,scenes,services,resolve,health` | `cara/api/v1/smarthome.py` | 7 smoke |
 | 0.2 phase A | extract pure helpers from chat.py | `cara/api/v1/_chat_{prompt,grounding,sse}.py` | (covered by smoke) |
 | 0.2/0.5 wiring | KV cache live + episodic.record_async live | `cara/api/v1/chat.py` + `cara/api/v1/admin.py` (flush on prompt change) | live verified — TTFT 16.5s → 2.0s on turn 2 |
+| 0.2 phase B+ | router events + admin learning API | `cara/api/v1/{chat,admin_learning}.py` | 12 smoke + live verified |
 
 Migrazioni Alembic applicate al DB live (`cara-postgres`):
 `c8a7d94e1f02 → d4e1f8b3a201 → e8a2c5f7b310`. Idempotenti, downgrade
