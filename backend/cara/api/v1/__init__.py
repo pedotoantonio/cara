@@ -28,6 +28,7 @@ from cara.api.v1 import (
     voice,
     weather,
     widgets,
+    workflows,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -56,3 +57,4 @@ router.include_router(tools.router)
 router.include_router(voice.router)
 router.include_router(weather.router)
 router.include_router(widgets.router)
+router.include_router(workflows.router)
