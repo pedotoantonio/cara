@@ -45,6 +45,7 @@ from cara.models.device import Device  # noqa: E402, F401
 from cara.models.device_permission import DevicePermission  # noqa: E402, F401
 from cara.models.event import Event  # noqa: E402, F401
 from cara.models.fact import Fact  # noqa: E402, F401
+from cara.models.habit import HabitCandidate  # noqa: E402, F401
 from cara.models.tool_metric import ToolCallMetric  # noqa: E402, F401
 from cara.models.user import User  # noqa: E402, F401
 from cara.store.db import Base  # noqa: E402

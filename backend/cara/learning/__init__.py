@@ -23,6 +23,12 @@ from cara.learning.episodic import (
     query as episodic_query,
     record as episodic_record,
 )
+from cara.learning.habits import (
+    detect_and_persist as habits_detect_and_persist,
+    detect_in_events as habits_detect_in_events,
+    list_pending as habits_list_pending,
+    review_candidate as habits_review_candidate,
+)
 from cara.learning.semantic import (
     confirm_fact as semantic_confirm_fact,
     deactivate_fact as semantic_deactivate_fact,
@@ -43,6 +49,10 @@ __all__ = [
     "episodic_cleanup_old",
     "episodic_query",
     "episodic_record",
+    "habits_detect_and_persist",
+    "habits_detect_in_events",
+    "habits_list_pending",
+    "habits_review_candidate",
     "semantic_confirm_fact",
     "semantic_deactivate_fact",
     "semantic_detect_facts",
