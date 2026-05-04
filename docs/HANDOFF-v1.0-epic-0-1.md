@@ -1,6 +1,6 @@
 # CARA v1.0 — Handoff document, branch `epic-0-foundations`
 
-Stato a fine sessione 2026-05-04. **107 test verdi** (92 unit + 15 smoke).
+Stato a fine sessione 2026-05-04 (consolidata in due ondate). **195 test verdi** (180 unit + 15 smoke).
 
 ## Cosa è stato fatto
 
@@ -17,6 +17,13 @@ Branch `epic-0-foundations` su `/opt/cara/`. Tutti commit additivi
 | 1.1 | TTS anglicismi italiani | `cara/ai/tts/{anglicisms.yaml,normalizer.py}` (~300 voci) | 18 unit |
 | 1.4 | Response cache Redis | `cara/services/response_cache.py` | 28 unit |
 | 8.1 | Meteo Open-Meteo + icone WMO | `cara/services/weather.py` | 17 unit |
+| 2.1 | Embedding service (lazy + cache) | `cara/ai/embeddings.py` | 17 unit |
+| 2.3 | Italian NER (spaCy + regex + glossary) | `cara/ai/ner.py` | 16 unit |
+| 3.1 | OCR Tesseract + OpenCV preprocess | `cara/ai/ocr.py` | 8 + 4 skip |
+| 3.2 | Workflow engine base | `cara/workflows/{__init__,base}.py` | 15 unit |
+| 5.1 | Smart-home abstraction layer | `cara/smarthome/{__init__,base}.py` | 13 unit |
+| 6.3 | Device registry | `cara/models/device.py` + migration `f3c9d72e8b14` | (model only) |
+| 2.2 | Fact model + semantic memory | `cara/models/fact.py`, `cara/learning/semantic.py` + migration `d6e2f9a4d825` | 19 unit |
 
 Migrazioni Alembic applicate al DB live (`cara-postgres`):
 `c8a7d94e1f02 → d4e1f8b3a201 → e8a2c5f7b310`. Idempotenti, downgrade
@@ -80,17 +87,21 @@ Quando il merge è pulito, aggiungi nel tuo `__init__.py` (che adesso
 contiene anche `Skill`):
 
 ```python
+from cara.models.device import Device
 from cara.models.event import Event
+from cara.models.fact import Fact
 from cara.models.tool_metric import ToolCallMetric
 
 __all__ = [
     # ... le tue voci esistenti ...
+    "Device",
     "Event",
+    "Fact",
     "ToolCallMetric",
 ]
 ```
 
-L'ho lasciato fuori per evitare conflitti col tuo working tree.
+Quattro classi nuove. Le ho lasciate fuori per evitare conflitti col tuo working tree.
 
 ### 4. Step 0.2 — refactor `chat.py`
 
@@ -130,7 +141,7 @@ modifica chirurgica di poche righe.
 
 ```
 $ alembic current
-e8a2c5f7b310 (head)
+d6e2f9a4d825 (head)
 ```
 
 Catena completa:
@@ -142,6 +153,8 @@ e7ff (initial) → df31 (users) → b984 (tasks) → 8ac2 (task_due) → ed5d (s
   → c8a7 (seed ricetta) ← Antonio Step 66
   → d4e1 (events) ← Step 0.3
   → e8a2 (tool_call_metrics) ← Step 0.4
+  → f3c9 (devices) ← Step 6.3
+  → d6e2 (facts) ← Step 2.2
 ```
 
 ## Comandi utili
@@ -174,9 +187,25 @@ serve ri-spiegarmi il piano.
 
 ## TL;DR del lavoro fatto
 
-Sette Step (0.1, 0.3, 0.4, 0.6, 1.1, 1.4, 8.1) completati come
-**infrastruttura pronta per il wiring**. Nessun comportamento utente è
-cambiato (tutto additivo). 107 test verdi proteggono il prossimo
-refactor di `chat.py`. Quando commiti il tuo Step 66, in mezza giornata
-si chiude Epic 0+1 con il refactor (Step 0.2) + le 3 piccole modifiche
-chirurgiche rimaste (0.5, 1.3, 1.5).
+**14 Step** completati come **infrastruttura pronta per il wiring**:
+
+- **Epic 0** (foundations): 0.1 + 0.3 + 0.4 + 0.6 — bloccati 0.2 + 0.5
+- **Epic 1** (voce): 1.1 + 1.4 — bloccati 1.2 + 1.3 + 1.5
+- **Epic 2** (memoria): 2.1 + 2.2 + 2.3
+- **Epic 3** (workflow): 3.1 + 3.2
+- **Epic 5** (smart home): 5.1
+- **Epic 6** (multi-device): 6.3
+- **Epic 8** (proattività): 8.1
+
+Nessun comportamento utente è cambiato (tutto additivo). **195 test
+verdi** proteggono il prossimo refactor di `chat.py`. Quando commiti
+il tuo Step 66, in una giornata si chiudono i 4 step bloccati (0.2 +
+0.5 + 1.3 + 1.5) e l'infrastruttura sopra inizia a essere wired uno
+per uno: episodic.record nelle hot path, semantic facts iniettati nel
+system prompt, response cache come primo stage del Pipeline, weather
+expose come endpoint REST, NER+OCR consumate dal ReceiptWorkflow, etc.
+
+**Pacchetti nuovi** disponibili nel codebase: `cara.learning`,
+`cara.router`, `cara.workflows`, `cara.smarthome`, oltre alle
+estensioni di `cara.ai` (embeddings/ner/ocr/tts.normalizer) e
+`cara.services` (response_cache/weather).
