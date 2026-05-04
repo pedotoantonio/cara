@@ -1,24 +1,42 @@
-"""Shared fixtures for CARA E2E smoke tests.
+"""Shared fixtures for CARA tests.
 
-Tests run as black-box HTTP clients against a *running* backend. The default
-target is the live container exposed via the nginx-proxy at
-`https://192.168.1.23:8455` (TLS self-signed → `verify=False`). Override with
-`CARA_TEST_BASE_URL=http://...` for a local dev server.
+The smoke suite (`tests/smoke/`) is black-box HTTP against a running
+backend. The unit suite (`tests/unit/`) imports modules directly with an
+in-memory SQLite session — for that to work, env vars must be set BEFORE
+`cara.config` is imported, so the env-var stub lives at module scope here
+(this conftest is loaded by pytest before any test module).
 
-Each pytest invocation gets a fresh user (`cara-test-<rand>@example.com`) so
-runs are independent and parallel-safe. No teardown: old test users sit
-quietly in the DB until purged by the next maintenance pass.
+Smoke target defaults to `https://192.168.1.23:8455` (self-signed →
+`verify=False`). Override with `CARA_TEST_BASE_URL=http://...`.
+
+Each smoke run gets a fresh user (`cara-test-<rand>@example.com`) so runs
+are independent and parallel-safe.
 """
 
 from __future__ import annotations
 
 import os
-import secrets
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
 
-import httpx
-import pytest
+# Stub env so `from cara.config import settings` works under unit tests
+# without a real .env. Set BEFORE any cara.* import — must be at module
+# scope. Existing values (real .env loaded by pydantic-settings) take
+# priority because we use setdefault.
+os.environ.setdefault("CARA_ENV", "test")
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql+asyncpg://cara:cara@localhost:5432/cara_test"
+)
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("MINIO_ENDPOINT", "localhost:9000")
+os.environ.setdefault("MINIO_ROOT_USER", "test")
+os.environ.setdefault("MINIO_ROOT_PASSWORD", "test-password-12345")
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-not-for-production-use")
+
+import secrets  # noqa: E402
+from collections.abc import AsyncIterator  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
+
+import httpx  # noqa: E402
+import pytest  # noqa: E402
 
 
 # Default points at the production-style nginx proxy used by the family.
