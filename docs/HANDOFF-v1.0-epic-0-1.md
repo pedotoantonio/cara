@@ -1,6 +1,6 @@
 # CARA v1.0 — Handoff document, branch `epic-0-foundations`
 
-Stato a fine sessione 2026-05-04 (dodici ondate). **449 test verdi** (361 unit + 88 smoke). **Epic 0 + Epic 1 + Epic 2 COMPLETE** — 3 Epic backend chiusi al 100%. Step 67 di Antonio mergiato; KV cache 8.3× più veloce; episodic memory live; routing pipeline operativo; chat.py 1322→808; **Budget/Expense + Device aliases + Proactivity engine + TTS admin overrides + sentence buffer** infrastrutture pronte per il frontend.
+Stato a fine sessione 2026-05-04 (tredici ondate). **563 test verdi** (461 unit + 102 smoke). **Epic 0 + Epic 1 + Epic 2 + Epic 3 COMPLETE** — 4 Epic backend chiusi al 100%. Step 67 di Antonio mergiato; KV cache 8.3× più veloce; episodic memory live; routing pipeline operativo; chat.py 1322→808; tre concrete workflow (Receipt + Bill + Recipe) + auto-confirm learning + REST workflows API live e verificati.
 
 ## Cosa è stato fatto
 
@@ -47,6 +47,11 @@ Branch `epic-0-foundations` su `/opt/cara/`. Tutti commit additivi
 | 8.6 | Proactivity engine (registry + decorator + rule isolation + cooldown + silent hours) | `cara/services/proactivity/` | 17 unit |
 | 1.2 | Admin TTS overrides API (storage + hot-swap + preview) | `cara/api/v1/admin_tts.py` + admin_settings key | 10 smoke + live verified |
 | 1.3 | TTS sentence buffer + audio chunk SSE payload | `cara/api/v1/_chat_tts_stream.py` (wiring deferred) | 17 unit |
+| 3.3 | ReceiptWorkflow (parser scontrini IT + fuzzy shopping + expense) | `cara/workflows/receipt.py` | 35 unit + live |
+| 3.6 | BillWorkflow (parser bolletta IT + reminder + pending expense) | `cara/workflows/bill.py` | 29 unit |
+| 3.7 | RecipeWorkflow (URL/foto/text → ingredienti → bulk shopping) | `cara/workflows/recipe.py` | 21 unit |
+| 3.8 | Auto-confirm learning (per-(user, workflow, signature) trust streak) | `cara/workflows/auto_confirm.py` + `cara/models/workflow_trust.py` + migration `f8a2b1c4e527` | 15 unit |
+| api/workflows | POST /workflows/run + GET /trust + revoke/reject | `cara/api/v1/workflows.py` | 14 smoke + live |
 
 Migrazioni Alembic applicate al DB live (`cara-postgres`):
 `c8a7d94e1f02 → d4e1f8b3a201 → e8a2c5f7b310`. Idempotenti, downgrade
