@@ -1,6 +1,6 @@
 # CARA v1.0 — Handoff document, branch `epic-0-foundations`
 
-Stato a fine sessione 2026-05-04 (consolidata in nove ondate). **365 test verdi** (311 unit + 54 smoke). Step 67 di Antonio mergiato; modelli wire-up; KV cache RKLLM **live e misurato 8.3× più veloce** su TTFT follow-up; episodic memory **live su 4 punti di routing**; REST endpoint live per weather/memory/widgets/smarthome + admin learning (habits/reflective/tool-metrics); **`chat.py` 1322 → 807 righe (-39%)** dopo phase A + phase C.
+Stato a fine sessione 2026-05-04 (consolidata in dieci ondate). **372 test verdi** (311 unit + 61 smoke). **Epic 0 (Foundations) COMPLETO**. Step 67 di Antonio mergiato; modelli wire-up; KV cache RKLLM live (TTFT 8.3× più veloce); episodic memory live su 5+ punti decisionali; **routing pipeline operativo** con per-stage telemetry; REST endpoint live per weather/memory/widgets/smarthome/tools/admin-learning; chat.py 1322 → 808 righe (-39%).
 
 ## Cosa è stato fatto
 
@@ -40,6 +40,7 @@ Branch `epic-0-foundations` su `/opt/cara/`. Tutti commit additivi
 | 0.2/0.5 wiring | KV cache live + episodic.record_async live | `cara/api/v1/chat.py` + `cara/api/v1/admin.py` (flush on prompt change) | live verified — TTFT 16.5s → 2.0s on turn 2 |
 | 0.2 phase B+ | router events + admin learning API | `cara/api/v1/{chat,admin_learning}.py` | 12 smoke + live verified |
 | 0.2 phase C | extract 3 routing tiers into dispatch loop | `cara/api/v1/_chat_routing.py` (3 try_* + _resolve_routed_intent + ROUTING_TIERS) | live verified — chat.py 1058 → 807 (-22%) |
+| 0.2 phase D | Pipeline.route() integration + tool-metrics endpoint | `cara/api/v1/{_chat_pipeline,tools}.py` | live verified — `router.stage ×3` events + `tool_call_metrics` rows from frontend |
 
 Migrazioni Alembic applicate al DB live (`cara-postgres`):
 `c8a7d94e1f02 → d4e1f8b3a201 → e8a2c5f7b310`. Idempotenti, downgrade
@@ -55,9 +56,9 @@ Tre Step rimangono parzialmente fuori scope:
 | 0.2 phase B (KV + episodic wiring) | ✓ done + live verified | TTFT turn 2 → 2.0s. Cache file scritto in /app/cache/kv/. |
 | 0.2 phase B+ (router events + admin learning API) | ✓ done | episodic on 4 routing decisions, /admin/{habits,reflective,tool-metrics} live |
 | 0.2 phase C (routing tier extraction) | ✓ done + live verified | chat.py 1058 → 807. ROUTING_TIERS dispatch loop. |
-| 0.2 phase D (Pipeline + tool_metrics around parser) | da fare | Sostituire `for handler in ROUTING_TIERS` con `cara.router.Pipeline.route(ctx)`. Plug `tool_metrics.record_attempt` attorno al `[TOOL: …]` parser nel client + dispatch backend. |
-| 1.3 — TTS streaming chunked | bloccato | Coordinamento SSE + frontend WebAudio queue. Possibile dopo phase D. |
-| 1.5 — system prompt corto + segmentato | bloccato | Dipende dalla riscrittura del prompt builder per consumare segmenti separati. |
+| **0.2 phase D** (Pipeline + tool_metrics endpoint) | ✓ done + live verified | **Epic 0 COMPLETE.** route_chat_request via CHAT_PIPELINE; per-stage `router.stage` events; `POST /api/v1/tools/metric` per il parser frontend. |
+| 1.3 — TTS streaming chunked | da fare | Backend SSE chunked + frontend WebAudio queue. Sbloccato da phase D. |
+| 1.5 — system prompt corto + segmentato | da fare | Riscrittura prompt builder per `base.md` + `tone_<role>.md` + `family_facts.md` segmenti separati. |
 
 L'infrastruttura sotto è già pronta:
 - KV cache lato `LLMService.generate()` → `prompt_cache_path=`
