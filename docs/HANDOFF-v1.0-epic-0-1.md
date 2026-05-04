@@ -1,6 +1,6 @@
 # CARA v1.0 — Handoff document, branch `epic-0-foundations`
 
-Stato a fine sessione 2026-05-04 (consolidata in quattro ondate). **326 test verdi** (311 unit + 15 smoke). Step 67 di Antonio già mergiato; modelli wire-up completato; KV cache RKLLM disponibile.
+Stato a fine sessione 2026-05-04 (consolidata in cinque ondate). **353 test verdi** (311 unit + 42 smoke). Step 67 di Antonio mergiato; modelli wire-up; KV cache RKLLM; **REST endpoint per weather/memory/widgets/smarthome esposti e live**.
 
 ## Cosa è stato fatto
 
@@ -32,6 +32,10 @@ Branch `epic-0-foundations` su `/opt/cara/`. Tutti commit additivi
 | 8.5 | Reflective batch | `cara/learning/reflective.py` | 14 unit |
 | 0.5 | RKLLM prompt-cache (KV reuse) | `cara/ai/kv_cache.py` + `cara/ai/llm.py` (chirurgico) | 17 unit |
 | wire | `cara/models/__init__.py` add 6 classes | (one-line edits) | – |
+| api/weather | `GET /weather/{geocode,current,forecast}` | `cara/api/v1/weather.py` | 4 smoke |
+| api/memory | `/memory/facts` CRUD + extract + GDPR export/purge | `cara/api/v1/memory.py` + `schemas/memory.py` | 7 smoke |
+| api/widgets | `/widgets` catalog + render-many | `cara/api/v1/widgets.py` | 9 smoke |
+| api/smarthome | `/smarthome/entities,scenes,services,resolve,health` | `cara/api/v1/smarthome.py` | 7 smoke |
 
 Migrazioni Alembic applicate al DB live (`cara-postgres`):
 `c8a7d94e1f02 → d4e1f8b3a201 → e8a2c5f7b310`. Idempotenti, downgrade
