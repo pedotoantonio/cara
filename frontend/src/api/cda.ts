@@ -58,13 +58,40 @@ export interface KbItem {
   is_active: boolean;
 }
 
-export async function listKb(opts: { content_type?: string; limit?: number } = {}): Promise<KbItem[]> {
+export async function listKb(
+  opts: {
+    content_type?: string;
+    limit?: number;
+    /** Admin-only: include items where is_active=false. */
+    include_inactive?: boolean;
+    /** Admin-only: see items discovered by other users too. */
+    all_users?: boolean;
+  } = {},
+): Promise<KbItem[]> {
   const params = new URLSearchParams();
   if (opts.content_type) params.set('content_type', opts.content_type);
   if (opts.limit) params.set('limit', String(opts.limit));
+  if (opts.include_inactive) params.set('include_inactive', 'true');
+  if (opts.all_users) params.set('all_users', 'true');
   const qs = params.toString();
   const r = await authFetch(`/api/v1/cda/items${qs ? '?' + qs : ''}`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+export async function setKbItemActive(itemId: string, isActive: boolean): Promise<KbItem> {
+  const r = await authFetch(`/api/v1/cda/items/${itemId}/active`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_active: isActive }),
+  });
+  if (!r.ok) {
+    const detail = await r
+      .json()
+      .then((j) => j.detail)
+      .catch(() => `HTTP ${r.status}`);
+    throw new Error(detail);
+  }
   return r.json();
 }
 

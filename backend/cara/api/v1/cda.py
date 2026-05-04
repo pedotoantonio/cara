@@ -6,11 +6,11 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cara.api.deps import get_current_user
+from cara.api.deps import get_current_user, require_admin
 from cara.cda import (
     CdaError,
     DiscoverRequest,
@@ -19,7 +19,11 @@ from cara.cda import (
     record_feedback_regenerated,
     record_feedback_started,
     record_feedback_stopped,
+    set_item_active,
 )
+from cara.services import audit as audit_svc
+from cara.cda.rate_limit import CdaRateLimitError, check_and_record
+from cara.config import settings
 from cara.models.user import User
 from cara.store import get_session
 
@@ -56,6 +60,14 @@ async def discover_endpoint(
     user: User = Depends(get_current_user),  # noqa: B008
     session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> DiscoverOut:
+    try:
+        await check_and_record(user.id, "discover", settings.cda_rate_limit_per_minute)
+    except CdaRateLimitError as exc:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            str(exc),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
     try:
         result = await cda_discover(
             session,
@@ -110,11 +122,20 @@ class KbItemOut(BaseModel):
 async def items_endpoint(
     content_type: ContentTypeIn | Literal["article_feed"] | None = None,
     limit: int = 50,
+    include_inactive: bool = False,
+    all_users: bool = False,
     user: User = Depends(get_current_user),  # noqa: B008
     session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> list[KbItemOut]:
+    # Non-admin callers cannot use the privileged flags; silently downgrade.
+    show_inactive = include_inactive and user.is_admin
+    scope_user_id: int | None = None if (all_users and user.is_admin) else user.id
     rows = await list_user_kb(
-        session, user_id=user.id, content_type=content_type, limit=min(limit, 200)  # type: ignore[arg-type]
+        session,
+        user_id=scope_user_id,
+        content_type=content_type,  # type: ignore[arg-type]
+        limit=min(limit, 200),
+        only_active=not show_inactive,
     )
     return [
         KbItemOut(
@@ -134,6 +155,50 @@ async def items_endpoint(
         )
         for r in rows
     ]
+
+
+# ---- admin endpoints ----------------------------------------------------
+
+
+class ItemActivePatch(BaseModel):
+    is_active: bool
+
+
+@router.patch("/items/{item_id}/active", response_model=KbItemOut)
+async def admin_set_item_active(
+    item_id: uuid.UUID,
+    body: ItemActivePatch,
+    request: Request,
+    admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> KbItemOut:
+    item = await set_item_active(session, item_id, is_active=body.is_active)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
+    await audit_svc.record(
+        session,
+        actor=admin,
+        action="cda.item.set_active",
+        target_kind="cda_content_item",
+        target_id=str(item_id),
+        detail={"is_active": body.is_active, "url": item.url},
+        ip=request.client.host if request.client else None,
+    )
+    return KbItemOut(
+        id=item.id,
+        content_type=item.content_type,
+        url=item.url,
+        title=item.title,
+        source_domain=item.source_domain,
+        metadata=item.metadata_ or {},
+        confidence_score=float(item.confidence_score),
+        success_count=item.success_count,
+        failure_count=item.failure_count,
+        last_verified_at=item.last_verified_at,
+        discovered_via=item.discovered_via,
+        discovered_at=item.discovered_at,
+        is_active=item.is_active,
+    )
 
 
 # ---- feedback endpoints -------------------------------------------------

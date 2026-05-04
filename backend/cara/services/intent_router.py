@@ -162,6 +162,31 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
         "Cerco e ti dico.",
         lambda m: {"query": m.group("q").strip(), "kind": "article"},
     ),
+    # ---- Sleep / wake — LUMO-style FSM transitions (no LLM, no hardware) --
+    # Transitions the global StateMachine into sleeping/idle so frontend
+    # bridges (Edo expression, halo color) update without a chat round-trip.
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?(?:buona\s*notte|buonanotte|"
+            r"vai\s+a\s+dormire|dormi|riposa(?:ti)?|"
+            r"a\s+dopo|spegniti)\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "go_sleep",
+        "Buonanotte.",
+        lambda m: {},
+    ),
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?(?:sveglia(?:ti)?|"
+            r"buon\s*giorno|buongiorno|"
+            r"ciao\s+cara|ehi\s+cara|alzati)\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "wake_up",
+        "Eccomi.",
+        lambda m: {},
+    ),
 ]
 
 

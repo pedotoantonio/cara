@@ -61,6 +61,18 @@ DEFAULTS: dict[str, Any] = {
     # Hot-swappable LLM size variant. "fast" = 1.5B (~9 tok/s), "quality" =
     # 3B (~4 tok/s, less hallucination). Switch is destroy+load (~10 s).
     "llm_quality_mode": "fast",
+    # Skill Factory v0.7 — Phase D (Skill Author).
+    # Master switch. When OFF, /admin/skills/author returns 503 even if the
+    # ANTHROPIC_API_KEY is set — gives the admin a one-click kill switch.
+    "skill_author_enabled": False,
+    # Free-form override of the system prompt used to brief the cloud LLM.
+    # None → use the default in cara.skills.author.DEFAULT_AUTHOR_PROMPT.
+    "skill_author_prompt": None,
+    # Override of the provider/model. None → fall back to env-set
+    # SKILL_AUTHOR_PROVIDER / SKILL_AUTHOR_MODEL. Useful to flip Haiku ↔ Sonnet
+    # at runtime without redeploy.
+    "skill_author_provider": None,
+    "skill_author_model": None,
 }
 
 

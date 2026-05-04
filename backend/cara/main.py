@@ -10,7 +10,11 @@ from cara import __version__
 from cara.ai.llm import LLMUnavailableError, init_llm_service, shutdown_llm_service
 from cara.ai.tts import init_tts_service, shutdown_tts_service
 from cara.api.v1 import router as api_v1_router
+from cara.cda.maintenance import start_maintenance, stop_maintenance
+from cara.cda.rate_limit import attach_redis_url as cda_attach_redis_url
+from cara.skills import primitives as _skill_primitives  # noqa: F401 — register @primitive
 from cara.config import settings
+from cara.core import get_state_machine
 from cara.integrations.telegram import start_telegram_bot, stop_telegram_bot
 from cara.store import init_engine, shutdown_engine
 
@@ -21,6 +25,7 @@ logger = structlog.get_logger(__name__)
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logger.info("cara.startup", env=settings.env, version=__version__)
     await init_engine()
+    cda_attach_redis_url(settings.redis_url)
     try:
         await init_llm_service()
     except LLMUnavailableError as exc:
@@ -42,9 +47,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await start_telegram_bot()
     except Exception as exc:  # noqa: BLE001
         logger.error("cara.telegram_start_failed", error=str(exc))
+    sm = get_state_machine()
+    sm.start_watchdog()
+    logger.info("cara.fsm_started", state=sm.state.value)
+    start_maintenance()
     try:
         yield
     finally:
+        await stop_maintenance()
+        await sm.stop_watchdog()
         await stop_telegram_bot()
         await shutdown_tts_service()
         await shutdown_llm_service()

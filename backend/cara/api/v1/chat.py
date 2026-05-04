@@ -40,12 +40,21 @@ from cara.ai.llm import LLMUnavailableError
 from cara.api.deps import get_current_user
 from cara.cda import CdaError, DiscoverRequest, discover as cda_discover
 from cara.cda.memory import content_kb as cda_kb
+from cara.core import LumoState, get_bus, get_state_machine
 from cara.services import event_log, intent_router
 from cara.config import settings
 from cara.models.user import User
 from cara.schemas.chat import ChatMessage, ChatRequest
 from cara.services import conversations as convo_svc
 from cara.services import files as file_svc
+from cara.services import recipe_chain
+from cara.skills import dispatcher as skill_dispatcher
+from cara.skills.executor import (
+    SkillExecutionError,
+    render_fallback as _skill_render_fallback,
+    render_response as _skill_render_response,
+    run as skill_run,
+)
 from cara.store import get_session
 
 logger = structlog.get_logger(__name__)
@@ -66,6 +75,22 @@ async def _resolve_routed_intent(
     return in well under a second so we keep the latency promise."""
     kind = routed.kind
     args = routed.args
+
+    if kind == "go_sleep":
+        sm = get_state_machine()
+        # Allow direct idle→sleeping; from any other state, route via idle first
+        # so the FSM transition table doesn't reject it.
+        if sm.state != LumoState.IDLE and sm.state != LumoState.SLEEPING:
+            sm.transition(LumoState.IDLE)
+        sm.transition(LumoState.SLEEPING)
+        return routed.canned_reply or "Buonanotte."
+
+    if kind == "wake_up":
+        sm = get_state_machine()
+        if sm.state in (LumoState.SLEEPING, LumoState.DEEP_SLEEP):
+            sm.transition(LumoState.IDLE)
+        sm.mark_activity()
+        return routed.canned_reply or "Eccomi."
 
     if kind == "answer_datetime":
         # Use the very same context block we'd inject into the LLM prompt.
@@ -456,6 +481,11 @@ async def chat(
             duration_ms=0,
             query=last_user_q[:80],
         )
+        get_bus().emit(
+            "chat.noise_bypass",
+            {"user_id": user.id, "query": last_user_q[:80]},
+        )
+        get_state_machine().mark_activity()
 
         async def _noise_stream() -> AsyncIterator[bytes]:
             yield _sse("meta", {"conversation_id": convo_id_str_n})
@@ -478,6 +508,106 @@ async def chat(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # ---- Tier-0.4: Skill Factory dispatcher (Tier-1 regex match) --------
+    # Looks up the user's message against the active skills in the DB. If a
+    # skill matches, executes its plan via the deterministic Executor and
+    # returns a one-shot SSE response. This is the data-driven replacement
+    # for the per-case hardcoded chains (Step 65 recipe_chain). See
+    # `/opt/cara/docs/skill-factory-extension-prompt.md`.
+    skill_match = (
+        await skill_dispatcher.match(session, last_user_q)
+        if last_user_q and not attached_files
+        else None
+    )
+    if skill_match is not None:
+        sk, slots = skill_match
+        try:
+            ctx = await skill_run(session, skill=sk, user_id=user.id, slots=slots)
+            summary = _skill_render_response(sk, ctx)
+            routed_label = f"skill:{sk.name}"
+        except SkillExecutionError as exc:
+            logger.warning(
+                "chat.skill_run_failed", skill=sk.name, step=exc.step_id,
+                error=str(exc.cause),
+            )
+            summary = _skill_render_fallback(sk, dict(slots), str(exc.cause))
+            routed_label = f"skill_fallback:{sk.name}"
+        await convo_svc.add_message(
+            session, conversation_id=convo.id, role="assistant", content=summary,
+        )
+        await session.commit()
+        convo_id_str_s = str(convo.id)
+        logger.info("chat.skill_run", skill=sk.name, slots=slots, summary_len=len(summary))
+        get_state_machine().mark_activity()
+
+        async def _skill_stream() -> AsyncIterator[bytes]:
+            yield _sse("meta", {"conversation_id": convo_id_str_s})
+            yield _sse("token", {"text": summary, "token_id": -1})
+            yield _sse(
+                "done",
+                {
+                    "conversation_id": convo_id_str_s,
+                    "tokens": 0,
+                    "first_token_seconds": 0.0,
+                    "total_seconds": 0.0,
+                    "tokens_per_second": 0.0,
+                    "routed": routed_label,
+                },
+            )
+
+        return StreamingResponse(
+            _skill_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # ---- Tier-0.5: server-side recipe → ingredients chain (LEGACY) -----
+    # Kept as fallback in case the corresponding skill in DB is disabled.
+    # The active `ricetta_to_spesa` skill above handles this pattern via
+    # the dispatcher; this branch only fires when the skill is missing.
+    recipe_dish = (
+        recipe_chain.detect_intent(last_user_q)
+        if last_user_q and not attached_files
+        else None
+    )
+    if recipe_dish:
+        try:
+            summary = await recipe_chain.run(session, user_id=user.id, dish=recipe_dish)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("chat.recipe_chain_failed", dish=recipe_dish, error=str(exc))
+            summary = (
+                f"Ho avuto un problema cercando la ricetta di {recipe_dish}. "
+                "Riprova fra un momento."
+            )
+        await convo_svc.add_message(
+            session, conversation_id=convo.id, role="assistant", content=summary,
+        )
+        await session.commit()
+        convo_id_str_r = str(convo.id)
+        logger.info("chat.recipe_chain", dish=recipe_dish, summary_len=len(summary))
+        get_state_machine().mark_activity()
+
+        async def _recipe_stream() -> AsyncIterator[bytes]:
+            yield _sse("meta", {"conversation_id": convo_id_str_r})
+            yield _sse("token", {"text": summary, "token_id": -1})
+            yield _sse(
+                "done",
+                {
+                    "conversation_id": convo_id_str_r,
+                    "tokens": 0,
+                    "first_token_seconds": 0.0,
+                    "total_seconds": 0.0,
+                    "tokens_per_second": 0.0,
+                    "routed": "recipe_chain",
+                },
+            )
+
+        return StreamingResponse(
+            _recipe_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     # ---- Tier-1: deterministic intent router ----------------------------
     #
     # Catch the canonical commands ("metti rai radio 1", "che giorno è oggi",
@@ -488,6 +618,13 @@ async def chat(
     if routed is not None:
         import time as _t
         _t0 = _t.perf_counter()
+        sm = get_state_machine()
+        bus = get_bus()
+        sm.transition(LumoState.THINKING)
+        bus.emit(
+            "chat.routed.start",
+            {"user_id": user.id, "intent": routed.kind, "query": last_user_q[:80]},
+        )
         canned = await _resolve_routed_intent(
             session=session, user_id=user.id, routed=routed,
         )
@@ -509,6 +646,17 @@ async def chat(
             query=last_user_q[:80],
             args=routed.args,
         )
+        bus.emit(
+            "chat.routed.done",
+            {
+                "user_id": user.id,
+                "intent": routed.kind,
+                "duration_ms": _elapsed,
+                "reply_chars": len(canned),
+            },
+        )
+        sm.transition(LumoState.SPEAKING)
+        sm.transition(LumoState.IDLE)
 
         async def _routed_stream() -> AsyncIterator[bytes]:
             yield _sse("meta", {"conversation_id": convo_id_str_r})
@@ -736,6 +884,14 @@ async def chat(
     async def stream() -> AsyncIterator[bytes]:
         yield _sse("meta", {"conversation_id": convo_id_str})
 
+        sm = get_state_machine()
+        bus = get_bus()
+        sm.transition(LumoState.THINKING)
+        bus.emit(
+            "chat.llm.start",
+            {"user_id": user.id, "prompt_chars": len(prompt)},
+        )
+
         t_start = time.monotonic()
         t_first: float | None = None
         n = 0
@@ -744,6 +900,11 @@ async def chat(
             async for chunk in llm.generate(prompt, max_new_tokens=effective_max):
                 if t_first is None:
                     t_first = time.monotonic() - t_start
+                    sm.transition(LumoState.SPEAKING)
+                    bus.emit(
+                        "chat.llm.first_token",
+                        {"user_id": user.id, "first_token_seconds": round(t_first, 3)},
+                    )
                 n += 1
                 buf.append(chunk.text)
                 yield _sse("token", {"text": chunk.text, "token_id": chunk.token_id})
@@ -948,6 +1109,16 @@ async def chat(
                 )
                 await s2.commit()
 
+        bus.emit(
+            "chat.llm.done",
+            {
+                "user_id": user.id,
+                "tokens": n,
+                "total_seconds": round(t_total, 2),
+                "agent_loop_fired": agent_loop_fired,
+            },
+        )
+        sm.transition(LumoState.IDLE)
         yield _sse(
             "done",
             {

@@ -7,6 +7,7 @@ from cara.models.conversation import Conversation, Message
 from cara.models.file import UploadedFile
 from cara.models.note import Note
 from cara.models.shopping import ShoppingItem
+from cara.models.skill import Skill
 from cara.models.task import Task
 from cara.models.user import User
 
@@ -21,6 +22,7 @@ __all__ = [
     "Message",
     "Note",
     "ShoppingItem",
+    "Skill",
     "Task",
     "UploadedFile",
     "User",

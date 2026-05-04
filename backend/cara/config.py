@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     cda_default_search_timeout: float = Field(
         default=8.0, validation_alias="CDA_SEARCH_TIMEOUT"
     )
+    # Per-user rate limit on /cda/discover (sliding 60s window). Generous by
+    # default — protects against runaway frontend loops, not against the user.
+    cda_rate_limit_per_minute: int = Field(
+        default=20, validation_alias="CDA_RATE_LIMIT_PER_MINUTE"
+    )
+    # Background pass over active audio_stream items: re-validates each and
+    # bumps success/failure counts. 0 disables the loop entirely.
+    cda_verify_interval_hours: float = Field(
+        default=6.0, validation_alias="CDA_VERIFY_INTERVAL_HOURS"
+    )
 
     # Whisper STT fallback (server-side). Used when the browser SR doesn't
     # produce a transcript. Model is lazy-loaded on first request.
@@ -137,6 +147,30 @@ class Settings(BaseSettings):
         default=15, validation_alias="FAMILY_PRESENCE_WINDOW_MINUTES"
     )
 
+    # Skill Author (Phase D) — cloud LLM that drafts a JSON skill plan when an
+    # intent is not handled by any local skill. Disabled by default; needs both
+    # the env-set API key and the admin flag `skill_author_enabled`.
+    anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
+    skill_author_provider: str = Field(
+        default="anthropic_haiku", validation_alias="SKILL_AUTHOR_PROVIDER"
+    )  # anthropic_haiku | anthropic_sonnet | disabled
+    skill_author_model: str = Field(
+        default="claude-haiku-4-5-20251001", validation_alias="SKILL_AUTHOR_MODEL"
+    )
+    skill_author_max_retries: int = Field(
+        default=2, validation_alias="SKILL_AUTHOR_MAX_RETRIES"
+    )
+    # Per-user/day budget (Redis bucket). 0 disables the limit.
+    skill_author_max_per_day: int = Field(
+        default=50, validation_alias="SKILL_AUTHOR_MAX_PER_DAY"
+    )
+    skill_author_max_tokens: int = Field(
+        default=2048, validation_alias="SKILL_AUTHOR_MAX_TOKENS"
+    )
+    skill_author_timeout_seconds: float = Field(
+        default=30.0, validation_alias="SKILL_AUTHOR_TIMEOUT_SECONDS"
+    )
+
     # Telegram bot (optional). If empty the bot module is not started.
     # Owner sets `CARA_TELEGRAM_BOT_TOKEN` in .env (token from @BotFather)
     # and `CARA_TELEGRAM_CHAT_OWNERS` (comma-separated chat IDs allowed).
@@ -175,8 +209,11 @@ class Settings(BaseSettings):
             "discover invece di inventare numeri o testi tra virgolette.\n\n"
 
             "## STRUMENTI DISPONIBILI\n"
-            "Usa AL MASSIMO UNO per turno. Subito dopo il tool, scrivi UNA breve "
-            "frase che presenta il risultato.\n\n"
+            "Per turno usa UN SOLO TIPO di tool. Puoi però emettere PIÙ "
+            "istanze dello stesso tipo se l'utente elenca più cose (es. "
+            "'aggiungi pane e latte alla spesa' → due [TOOL: add_shopping]). "
+            "Subito dopo il tool, scrivi UNA breve frase che presenta il "
+            "risultato.\n\n"
             "[TOOL: add_task title=\"...\"]                 — aggiungi una cosa da fare\n"
             "[TOOL: complete_task title=\"...\"]            — completa una task\n"
             "[TOOL: list_tasks]                           — mostra le cose da fare\n"
@@ -194,6 +231,10 @@ class Settings(BaseSettings):
             "A: [TOOL: list_tasks]\nEcco la tua lista.\n\n"
             "U: aggiungi il latte alla spesa\n"
             "A: [TOOL: add_shopping title=\"latte\"]\nMesso.\n\n"
+            "U: aggiungi pane, latte e uova alla spesa\n"
+            "A: [TOOL: add_shopping title=\"pane\"]\n"
+            "[TOOL: add_shopping title=\"latte\"]\n"
+            "[TOOL: add_shopping title=\"uova\"]\nFatto, tre cose nella spesa.\n\n"
             "U: chi è in casa?\n"
             "A: [TOOL: who_is_home]\nGuardo subito.\n\n"
             "U: che tempo fa domani a Ferrara?\n"
