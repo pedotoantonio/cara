@@ -53,6 +53,7 @@ from cara.api.v1._chat_prompt import (
     render_qwen_prompt as _render_qwen_prompt,
     runtime_context_message as _runtime_context_message,
 )
+from cara.api.v1._chat_routing import ROUTING_TIERS
 from cara.api.v1._chat_sse import sse_frame as _sse
 from cara.cda import CdaError, DiscoverRequest, discover as cda_discover
 from cara.cda.memory import content_kb as cda_kb
@@ -83,134 +84,11 @@ _IM_START = "<|im_start|>"
 _IM_END = "<|im_end|>"
 
 
-async def _resolve_routed_intent(
-    *,
-    session: AsyncSession,
-    user_id: int,
-    routed: "intent_router.RoutedIntent",
-) -> str:
-    """Execute the side-effect implied by a routed intent and return the
-    canned reply text. Stays small: every branch must be O(1) calls and
-    return in well under a second so we keep the latency promise."""
-    kind = routed.kind
-    args = routed.args
-
-    if kind == "go_sleep":
-        sm = get_state_machine()
-        # Allow direct idle→sleeping; from any other state, route via idle first
-        # so the FSM transition table doesn't reject it.
-        if sm.state != LumoState.IDLE and sm.state != LumoState.SLEEPING:
-            sm.transition(LumoState.IDLE)
-        sm.transition(LumoState.SLEEPING)
-        return routed.canned_reply or "Buonanotte."
-
-    if kind == "wake_up":
-        sm = get_state_machine()
-        if sm.state in (LumoState.SLEEPING, LumoState.DEEP_SLEEP):
-            sm.transition(LumoState.IDLE)
-        sm.mark_activity()
-        return routed.canned_reply or "Eccomi."
-
-    if kind == "answer_datetime":
-        # Use the very same context block we'd inject into the LLM prompt.
-        ctx = _runtime_context_message()
-        # Take the first two informational lines and stitch them into prose.
-        lines = [
-            ln.lstrip("- ").rstrip(".")
-            for ln in ctx.splitlines()
-            if ln.startswith("- Oggi") or ln.startswith("- Ora")
-        ]
-        if lines:
-            return ". ".join(lines) + "."
-        return routed.canned_reply
-
-    if kind == "discover_audio":
-        try:
-            res = await cda_discover(
-                session,
-                DiscoverRequest(
-                    user_id=user_id,
-                    raw_query=args.get("query", ""),
-                    content_type="audio_stream",
-                ),
-            )
-            return f"In onda: {res.title or args.get('query', '')}."
-        except CdaError as exc:
-            return f"Non sono riuscita a trovare la radio: {exc}"
-
-    if kind == "discover_article":
-        try:
-            res = await cda_discover(
-                session,
-                DiscoverRequest(
-                    user_id=user_id,
-                    raw_query=args.get("query", ""),
-                    content_type="article",
-                ),
-            )
-        except CdaError as exc:
-            return f"Non sono riuscita a trovarlo: {exc}"
-        cached = (res.metadata or {}).get("cached_answer")
-        if cached and isinstance(cached, str):
-            attribution = f"\n\n*(fonte: {res.source_domain})*" if res.source_domain else ""
-            return cached + attribution
-        # No cached answer yet — return a brief stub so the user knows we
-        # found something. The agent loop normally fills this in for free,
-        # but routed intents skip the LLM entirely; we accept the trade-off
-        # of a thinner first answer here in exchange for sub-second latency.
-        title = res.title or args.get("query", "")
-        src = f" (fonte: {res.source_domain})" if res.source_domain else ""
-        return f"Ho trovato: {title}{src}. Apri il link nelle scoperte per leggerlo."
-
-    if kind == "list_tasks":
-        from cara.services import tasks as task_svc
-        items = await task_svc.list_tasks(session, user_id=user_id, include_done=False)
-        if not items:
-            return "Niente da fare al momento."
-        body = "\n".join(f"• {t.title}" for t in items[:10])
-        more = f"\n…(+{len(items) - 10} altre)" if len(items) > 10 else ""
-        return f"Ecco le tue cose da fare:\n{body}{more}"
-
-    if kind == "add_task":
-        from cara.services import tasks as task_svc
-        title = args.get("title", "").strip()
-        if not title:
-            return "Cosa devo aggiungere?"
-        t = await task_svc.create_task(session, user_id=user_id, title=title)
-        return f"Aggiunto: \"{t.title}\"."
-
-    if kind == "add_shopping":
-        from cara.services import shopping as shop_svc
-        title = args.get("title", "").strip()
-        if not title:
-            return "Cosa devo aggiungere alla spesa?"
-        s = await shop_svc.create_item(session, user_id=user_id, title=title)
-        return f"Messo nella spesa: \"{s.title}\"."
-
-    if kind == "who_is_home":
-        from cara.services.family import FamilyPresenceUnavailable, people_present
-        try:
-            seen = await people_present(window_minutes=15)
-        except FamilyPresenceUnavailable as exc:
-            return f"Non riesco a controllare le telecamere: {exc}"
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("chat.routed.who_is_home_error", error=str(exc))
-            return "Non riesco a controllare le telecamere in questo momento."
-        if not seen:
-            return "In questo momento non vedo nessuno in casa."
-        names = ", ".join(p.name for p in seen)
-        return f"In casa adesso: {names}."
-
-    if kind == "get_news":
-        from cara.services import news as news_svc
-        cat = args.get("category", "all")
-        items = await news_svc.fetch_category(cat, limit=5)
-        if not items:
-            return "Non ho trovato notizie al momento."
-        digest = news_svc.make_digest(items[:5], category=cat)
-        return digest
-
-    return routed.canned_reply or "Fatto."
+# `_resolve_routed_intent` and the per-tier routing handlers (Tier-0.4
+# skill dispatcher, Tier-0.5 recipe chain, Tier-1 intent router) were
+# moved to `cara/api/v1/_chat_routing.py` (Step 0.2 phase C). The
+# orchestrator below walks `ROUTING_TIERS` in order and returns the
+# first non-None `StreamingResponse`.
 
 
 # ---------------------------------------------------------------------------
@@ -393,210 +271,22 @@ async def chat(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # ---- Tier-0.4: Skill Factory dispatcher (Tier-1 regex match) --------
-    # Looks up the user's message against the active skills in the DB. If a
-    # skill matches, executes its plan via the deterministic Executor and
-    # returns a one-shot SSE response. This is the data-driven replacement
-    # for the per-case hardcoded chains (Step 65 recipe_chain). See
-    # `/opt/cara/docs/skill-factory-extension-prompt.md`.
-    skill_match = (
-        await skill_dispatcher.match(session, last_user_q)
-        if last_user_q and not attached_files
-        else None
-    )
-    if skill_match is not None:
-        sk, slots = skill_match
-        try:
-            ctx = await skill_run(session, skill=sk, user_id=user.id, slots=slots)
-            summary = _skill_render_response(sk, ctx)
-            routed_label = f"skill:{sk.name}"
-        except SkillExecutionError as exc:
-            logger.warning(
-                "chat.skill_run_failed", skill=sk.name, step=exc.step_id,
-                error=str(exc.cause),
-            )
-            summary = _skill_render_fallback(sk, dict(slots), str(exc.cause))
-            routed_label = f"skill_fallback:{sk.name}"
-        await convo_svc.add_message(
-            session, conversation_id=convo.id, role="assistant", content=summary,
-        )
-        await session.commit()
-        convo_id_str_s = str(convo.id)
-        logger.info("chat.skill_run", skill=sk.name, slots=slots, summary_len=len(summary))
-        get_state_machine().mark_activity()
-        # Episodic: skill dispatcher hit (Tier-0.4). Reflective batch
-        # (Step 8.5) doesn't cluster these — they're already a clean
-        # success path — but the diagnostics page needs the count.
-        await episodic.record_async(
-            kind="router.skill_hit",
-            user_id=user.id,
-            ref_id=convo_id_str_s,
-            outcome="ok",
-            payload={
-                "skill": sk.name, "slots": dict(slots),
-                "summary_len": len(summary),
-                "label": routed_label,
-            },
-        )
-
-        async def _skill_stream() -> AsyncIterator[bytes]:
-            yield _sse("meta", {"conversation_id": convo_id_str_s})
-            yield _sse("token", {"text": summary, "token_id": -1})
-            yield _sse(
-                "done",
-                {
-                    "conversation_id": convo_id_str_s,
-                    "tokens": 0,
-                    "first_token_seconds": 0.0,
-                    "total_seconds": 0.0,
-                    "tokens_per_second": 0.0,
-                    "routed": routed_label,
-                },
-            )
-
-        return StreamingResponse(
-            _skill_stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    # ---- Tier-0.5: server-side recipe → ingredients chain (LEGACY) -----
-    # Kept as fallback in case the corresponding skill in DB is disabled.
-    # The active `ricetta_to_spesa` skill above handles this pattern via
-    # the dispatcher; this branch only fires when the skill is missing.
-    recipe_dish = (
-        recipe_chain.detect_intent(last_user_q)
-        if last_user_q and not attached_files
-        else None
-    )
-    if recipe_dish:
-        try:
-            summary = await recipe_chain.run(session, user_id=user.id, dish=recipe_dish)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("chat.recipe_chain_failed", dish=recipe_dish, error=str(exc))
-            summary = (
-                f"Ho avuto un problema cercando la ricetta di {recipe_dish}. "
-                "Riprova fra un momento."
-            )
-        await convo_svc.add_message(
-            session, conversation_id=convo.id, role="assistant", content=summary,
-        )
-        await session.commit()
-        convo_id_str_r = str(convo.id)
-        logger.info("chat.recipe_chain", dish=recipe_dish, summary_len=len(summary))
-        get_state_machine().mark_activity()
-        await episodic.record_async(
-            kind="router.recipe_chain_hit",
-            user_id=user.id,
-            ref_id=convo_id_str_r,
-            outcome="ok",
-            payload={"dish": recipe_dish, "summary_len": len(summary)},
-        )
-
-        async def _recipe_stream() -> AsyncIterator[bytes]:
-            yield _sse("meta", {"conversation_id": convo_id_str_r})
-            yield _sse("token", {"text": summary, "token_id": -1})
-            yield _sse(
-                "done",
-                {
-                    "conversation_id": convo_id_str_r,
-                    "tokens": 0,
-                    "first_token_seconds": 0.0,
-                    "total_seconds": 0.0,
-                    "tokens_per_second": 0.0,
-                    "routed": "recipe_chain",
-                },
-            )
-
-        return StreamingResponse(
-            _recipe_stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    # ---- Tier-1: deterministic intent router ----------------------------
+    # ---- Routing tiers (Step 0.2 phase C) -----------------------------
     #
-    # Catch the canonical commands ("metti rai radio 1", "che giorno è oggi",
-    # "cosa devo fare", "cos'è X", …) BEFORE the LLM is invoked. Saves 6-90 s
-    # of token latency and avoids the 1.5B's tool-emission typos. Anything
-    # ambiguous falls through to the regular flow.
-    routed = intent_router.match(last_user_q) if last_user_q and not attached_files else None
-    if routed is not None:
-        import time as _t
-        _t0 = _t.perf_counter()
-        sm = get_state_machine()
-        bus = get_bus()
-        sm.transition(LumoState.THINKING)
-        bus.emit(
-            "chat.routed.start",
-            {"user_id": user.id, "intent": routed.kind, "query": last_user_q[:80]},
+    # Walk the deterministic routing tiers in order; return the first
+    # canned response. Each handler in `ROUTING_TIERS` performs its own
+    # match / side-effects / SSE shape and returns Optional[StreamingResponse].
+    # See `cara/api/v1/_chat_routing.py` for the per-tier implementations.
+    for handler in ROUTING_TIERS:
+        resp = await handler(
+            session=session,
+            user=user,
+            last_user_q=last_user_q,
+            attached_files=attached_files,
+            convo=convo,
         )
-        canned = await _resolve_routed_intent(
-            session=session, user_id=user.id, routed=routed,
-        )
-        _elapsed = int((_t.perf_counter() - _t0) * 1000)
-        await convo_svc.add_message(
-            session, conversation_id=convo.id, role="assistant", content=canned,
-        )
-        await session.commit()
-        convo_id_str_r = str(convo.id)
-        logger.info(
-            "chat.intent_routed",
-            kind=routed.kind, args=routed.args, reply_chars=len(canned),
-        )
-        event_log.record(
-            "intent_router.match",
-            user_id=user.id,
-            duration_ms=_elapsed,
-            intent=routed.kind,
-            query=last_user_q[:80],
-            args=routed.args,
-        )
-        await episodic.record_async(
-            kind="router.intent_hit",
-            user_id=user.id,
-            ref_id=convo_id_str_r,
-            outcome="ok",
-            duration_ms=_elapsed,
-            payload={
-                "intent": routed.kind,
-                "args": routed.args,
-                "query": last_user_q[:200] if last_user_q else "",
-                "reply_chars": len(canned),
-            },
-        )
-        bus.emit(
-            "chat.routed.done",
-            {
-                "user_id": user.id,
-                "intent": routed.kind,
-                "duration_ms": _elapsed,
-                "reply_chars": len(canned),
-            },
-        )
-        sm.transition(LumoState.SPEAKING)
-        sm.transition(LumoState.IDLE)
-
-        async def _routed_stream() -> AsyncIterator[bytes]:
-            yield _sse("meta", {"conversation_id": convo_id_str_r})
-            yield _sse("token", {"text": canned, "token_id": -1})
-            yield _sse(
-                "done",
-                {
-                    "conversation_id": convo_id_str_r,
-                    "tokens": 0,
-                    "first_token_seconds": 0.0,
-                    "total_seconds": 0.0,
-                    "tokens_per_second": 0.0,
-                    "routed": routed.kind,
-                },
-            )
-
-        return StreamingResponse(
-            _routed_stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        if resp is not None:
+            return resp
 
     # ---- Early-bypass: did we already answer this question once? ----
     #
