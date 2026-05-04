@@ -23,6 +23,15 @@ from cara.learning.episodic import (
     query as episodic_query,
     record as episodic_record,
 )
+from cara.learning.semantic import (
+    confirm_fact as semantic_confirm_fact,
+    deactivate_fact as semantic_deactivate_fact,
+    detect_facts as semantic_detect_facts,
+    list_facts as semantic_list_facts,
+    save_fact as semantic_save_fact,
+    save_facts_from_message as semantic_save_facts_from_message,
+    top_k_for_query as semantic_top_k_for_query,
+)
 from cara.learning.tool_metrics import (
     record_attempt as tool_metrics_record,
     recent_failures as tool_metrics_recent_failures,
@@ -34,6 +43,13 @@ __all__ = [
     "episodic_cleanup_old",
     "episodic_query",
     "episodic_record",
+    "semantic_confirm_fact",
+    "semantic_deactivate_fact",
+    "semantic_detect_facts",
+    "semantic_list_facts",
+    "semantic_save_fact",
+    "semantic_save_facts_from_message",
+    "semantic_top_k_for_query",
     "tool_metrics_recent_failures",
     "tool_metrics_record",
     "tool_metrics_stats",
