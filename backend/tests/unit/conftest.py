@@ -42,6 +42,7 @@ import cara.models  # noqa: E402, F401 — side-effect import
 # These aren't yet in cara/models/__init__ to avoid a merge conflict
 # with Antonio's Step 66 working tree, so import them explicitly.
 from cara.models.device import Device  # noqa: E402, F401
+from cara.models.device_permission import DevicePermission  # noqa: E402, F401
 from cara.models.event import Event  # noqa: E402, F401
 from cara.models.fact import Fact  # noqa: E402, F401
 from cara.models.tool_metric import ToolCallMetric  # noqa: E402, F401
