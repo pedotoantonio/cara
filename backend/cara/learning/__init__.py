@@ -29,6 +29,11 @@ from cara.learning.habits import (
     list_pending as habits_list_pending,
     review_candidate as habits_review_candidate,
 )
+from cara.learning.reflective import (
+    detect_router_miss_clusters as reflective_miss_clusters,
+    detect_tool_failure_clusters as reflective_failure_clusters,
+    run_weekly as reflective_run_weekly,
+)
 from cara.learning.semantic import (
     confirm_fact as semantic_confirm_fact,
     deactivate_fact as semantic_deactivate_fact,
@@ -53,6 +58,9 @@ __all__ = [
     "habits_detect_in_events",
     "habits_list_pending",
     "habits_review_candidate",
+    "reflective_failure_clusters",
+    "reflective_miss_clusters",
+    "reflective_run_weekly",
     "semantic_confirm_fact",
     "semantic_deactivate_fact",
     "semantic_detect_facts",
