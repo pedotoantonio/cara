@@ -1,6 +1,6 @@
 # CARA v1.0 — Handoff document, branch `epic-0-foundations`
 
-Stato a fine sessione 2026-05-04 (consolidata in dieci ondate). **372 test verdi** (311 unit + 61 smoke). **Epic 0 (Foundations) COMPLETO**. Step 67 di Antonio mergiato; modelli wire-up; KV cache RKLLM live (TTFT 8.3× più veloce); episodic memory live su 5+ punti decisionali; **routing pipeline operativo** con per-stage telemetry; REST endpoint live per weather/memory/widgets/smarthome/tools/admin-learning; chat.py 1322 → 808 righe (-39%).
+Stato a fine sessione 2026-05-04 (undici ondate). **422 test verdi** (344 unit + 78 smoke). Epic 0 COMPLETE; Steps 1.5, 3.5, 5.4, 8.6 done. Step 67 di Antonio mergiato; KV cache 8.3× più veloce; episodic memory live; routing pipeline operativo; chat.py 1322→808; **Budget/Expense + Device aliases + Proactivity engine** infrastrutture pronte per i widget Wallet, ReceiptWorkflow, admin voice-mapping-test, e rules concrete.
 
 ## Cosa è stato fatto
 
@@ -41,6 +41,10 @@ Branch `epic-0-foundations` su `/opt/cara/`. Tutti commit additivi
 | 0.2 phase B+ | router events + admin learning API | `cara/api/v1/{chat,admin_learning}.py` | 12 smoke + live verified |
 | 0.2 phase C | extract 3 routing tiers into dispatch loop | `cara/api/v1/_chat_routing.py` (3 try_* + _resolve_routed_intent + ROUTING_TIERS) | live verified — chat.py 1058 → 807 (-22%) |
 | 0.2 phase D | Pipeline.route() integration + tool-metrics endpoint | `cara/api/v1/{_chat_pipeline,tools}.py` | live verified — `router.stage ×3` events + `tool_call_metrics` rows from frontend |
+| 1.5 | System prompt segmentato (base/tone/facts + KV-cache fingerprint) | `cara/api/v1/_chat_system_prompt.py` | 16 unit |
+| 3.5 | Budgets + Expenses model/service/API + month rollup | `cara/models/budget.py`, `services/budgets.py`, `api/v1/budgets.py` + migration `c5a8e0f4d619` | 11 smoke |
+| 5.4 | Device aliases model + admin endpoint | `cara/models/device_alias.py`, `services/device_aliases.py`, `api/v1/device_aliases.py` + migration `e2bc7a1f8d34` | 6 smoke |
+| 8.6 | Proactivity engine (registry + decorator + rule isolation + cooldown + silent hours) | `cara/services/proactivity/` | 17 unit |
 
 Migrazioni Alembic applicate al DB live (`cara-postgres`):
 `c8a7d94e1f02 → d4e1f8b3a201 → e8a2c5f7b310`. Idempotenti, downgrade
