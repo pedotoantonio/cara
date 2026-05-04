@@ -1,6 +1,6 @@
 # CARA v1.0 — Handoff document, branch `epic-0-foundations`
 
-Stato a fine sessione 2026-05-04 (consolidata in due ondate). **195 test verdi** (180 unit + 15 smoke).
+Stato a fine sessione 2026-05-04 (consolidata in tre ondate). **309 test verdi** (294 unit + 15 smoke).
 
 ## Cosa è stato fatto
 
@@ -24,6 +24,12 @@ Branch `epic-0-foundations` su `/opt/cara/`. Tutti commit additivi
 | 5.1 | Smart-home abstraction layer | `cara/smarthome/{__init__,base}.py` | 13 unit |
 | 6.3 | Device registry | `cara/models/device.py` + migration `f3c9d72e8b14` | (model only) |
 | 2.2 | Fact model + semantic memory | `cara/models/fact.py`, `cara/learning/semantic.py` + migration `d6e2f9a4d825` | 19 unit |
+| 5.2 | HA REST adapter (concrete) | `cara/smarthome/homeassistant.py` | 22 unit |
+| 5.5 | Smart-home NLU | `cara/smarthome/nlu.py` | 19 unit |
+| 5.8 | Device permissions per role | `cara/models/device_permission.py`, `cara/services/smarthome_permissions.py` + migration `a7b9c1e3d245` | 20 unit |
+| 7.1+7.2 | Wallet engine + 7 widget catalog | `cara/widgets/{__init__,base,catalog}.py` | 22 unit |
+| 8.4 | Habit detection | `cara/models/habit.py`, `cara/learning/habits.py` + migration `b5d4f1a82e36` | 17 unit |
+| 8.5 | Reflective batch | `cara/learning/reflective.py` | 14 unit |
 
 Migrazioni Alembic applicate al DB live (`cara-postgres`):
 `c8a7d94e1f02 → d4e1f8b3a201 → e8a2c5f7b310`. Idempotenti, downgrade
@@ -88,20 +94,24 @@ contiene anche `Skill`):
 
 ```python
 from cara.models.device import Device
+from cara.models.device_permission import DevicePermission
 from cara.models.event import Event
 from cara.models.fact import Fact
+from cara.models.habit import HabitCandidate
 from cara.models.tool_metric import ToolCallMetric
 
 __all__ = [
     # ... le tue voci esistenti ...
     "Device",
+    "DevicePermission",
     "Event",
     "Fact",
+    "HabitCandidate",
     "ToolCallMetric",
 ]
 ```
 
-Quattro classi nuove. Le ho lasciate fuori per evitare conflitti col tuo working tree.
+Sei classi nuove. Le ho lasciate fuori per evitare conflitti col tuo working tree.
 
 ### 4. Step 0.2 — refactor `chat.py`
 
@@ -141,7 +151,7 @@ modifica chirurgica di poche righe.
 
 ```
 $ alembic current
-d6e2f9a4d825 (head)
+b5d4f1a82e36 (head)
 ```
 
 Catena completa:
@@ -155,6 +165,8 @@ e7ff (initial) → df31 (users) → b984 (tasks) → 8ac2 (task_due) → ed5d (s
   → e8a2 (tool_call_metrics) ← Step 0.4
   → f3c9 (devices) ← Step 6.3
   → d6e2 (facts) ← Step 2.2
+  → a7b9 (device_permissions) ← Step 5.8
+  → b5d4 (habit_candidates) ← Step 8.4
 ```
 
 ## Comandi utili
@@ -187,25 +199,32 @@ serve ri-spiegarmi il piano.
 
 ## TL;DR del lavoro fatto
 
-**14 Step** completati come **infrastruttura pronta per il wiring**:
+**20 Step** completati come **infrastruttura pronta per il wiring**:
 
 - **Epic 0** (foundations): 0.1 + 0.3 + 0.4 + 0.6 — bloccati 0.2 + 0.5
 - **Epic 1** (voce): 1.1 + 1.4 — bloccati 1.2 + 1.3 + 1.5
 - **Epic 2** (memoria): 2.1 + 2.2 + 2.3
 - **Epic 3** (workflow): 3.1 + 3.2
-- **Epic 5** (smart home): 5.1
+- **Epic 5** (smart home): 5.1 + 5.2 + 5.5 + 5.8
 - **Epic 6** (multi-device): 6.3
-- **Epic 8** (proattività): 8.1
+- **Epic 7** (wallet): 7.1 + 7.2
+- **Epic 8** (proattività): 8.1 + 8.4 + 8.5
 
-Nessun comportamento utente è cambiato (tutto additivo). **195 test
+Nessun comportamento utente è cambiato (tutto additivo). **309 test
 verdi** proteggono il prossimo refactor di `chat.py`. Quando commiti
 il tuo Step 66, in una giornata si chiudono i 4 step bloccati (0.2 +
 0.5 + 1.3 + 1.5) e l'infrastruttura sopra inizia a essere wired uno
 per uno: episodic.record nelle hot path, semantic facts iniettati nel
-system prompt, response cache come primo stage del Pipeline, weather
-expose come endpoint REST, NER+OCR consumate dal ReceiptWorkflow, etc.
+system prompt, response cache come primo stage del Pipeline, HA NLU
++ permission check come stage successivo, weather + widgets esposti
+come endpoint REST, NER + OCR consumate dal ReceiptWorkflow, habit
+detection batch + reflective batch nel Celery beat, etc.
 
-**Pacchetti nuovi** disponibili nel codebase: `cara.learning`,
-`cara.router`, `cara.workflows`, `cara.smarthome`, oltre alle
-estensioni di `cara.ai` (embeddings/ner/ocr/tts.normalizer) e
-`cara.services` (response_cache/weather).
+**Pacchetti nuovi** disponibili nel codebase:
+- `cara.learning` — episodic, semantic, tool_metrics, habits, reflective
+- `cara.router` — pipeline + Stage Protocol
+- `cara.workflows` — Workflow Protocol + registry
+- `cara.smarthome` — base + HA REST adapter + NLU
+- `cara.widgets` — engine + 7-widget catalog
+- estensioni di `cara.ai` (embeddings, ner, ocr, tts.normalizer)
+- estensioni di `cara.services` (response_cache, weather, smarthome_permissions)
