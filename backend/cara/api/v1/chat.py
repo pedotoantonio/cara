@@ -424,6 +424,20 @@ async def chat(
         convo_id_str_s = str(convo.id)
         logger.info("chat.skill_run", skill=sk.name, slots=slots, summary_len=len(summary))
         get_state_machine().mark_activity()
+        # Episodic: skill dispatcher hit (Tier-0.4). Reflective batch
+        # (Step 8.5) doesn't cluster these — they're already a clean
+        # success path — but the diagnostics page needs the count.
+        await episodic.record_async(
+            kind="router.skill_hit",
+            user_id=user.id,
+            ref_id=convo_id_str_s,
+            outcome="ok",
+            payload={
+                "skill": sk.name, "slots": dict(slots),
+                "summary_len": len(summary),
+                "label": routed_label,
+            },
+        )
 
         async def _skill_stream() -> AsyncIterator[bytes]:
             yield _sse("meta", {"conversation_id": convo_id_str_s})
@@ -471,6 +485,13 @@ async def chat(
         convo_id_str_r = str(convo.id)
         logger.info("chat.recipe_chain", dish=recipe_dish, summary_len=len(summary))
         get_state_machine().mark_activity()
+        await episodic.record_async(
+            kind="router.recipe_chain_hit",
+            user_id=user.id,
+            ref_id=convo_id_str_r,
+            outcome="ok",
+            payload={"dish": recipe_dish, "summary_len": len(summary)},
+        )
 
         async def _recipe_stream() -> AsyncIterator[bytes]:
             yield _sse("meta", {"conversation_id": convo_id_str_r})
@@ -530,6 +551,19 @@ async def chat(
             intent=routed.kind,
             query=last_user_q[:80],
             args=routed.args,
+        )
+        await episodic.record_async(
+            kind="router.intent_hit",
+            user_id=user.id,
+            ref_id=convo_id_str_r,
+            outcome="ok",
+            duration_ms=_elapsed,
+            payload={
+                "intent": routed.kind,
+                "args": routed.args,
+                "query": last_user_q[:200] if last_user_q else "",
+                "reply_chars": len(canned),
+            },
         )
         bus.emit(
             "chat.routed.done",
@@ -772,6 +806,20 @@ async def chat(
     # Invalidated when the admin edits the runtime system prompt
     # (cara.ai.kv_cache.flush_one is what the admin handler will call).
     kv_path = kv_cache.path_for_conversation(convo_id_str)
+
+    # Reaching this point means none of the deterministic routing tiers
+    # (skill / recipe_chain / intent_router) matched the user message —
+    # we're falling through to the full LLM generation. Record a
+    # `router.miss` so the reflective batch (Step 8.5) can cluster
+    # frequently-missed phrases and propose new intents to the admin.
+    if last_user_q:
+        await episodic.record_async(
+            kind="router.miss",
+            user_id=user.id,
+            ref_id=convo_id_str,
+            outcome="fallthrough",
+            payload={"message": last_user_q[:300]},
+        )
 
     async def stream() -> AsyncIterator[bytes]:
         yield _sse("meta", {"conversation_id": convo_id_str})
