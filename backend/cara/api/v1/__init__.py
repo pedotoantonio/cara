@@ -13,12 +13,16 @@ from cara.api.v1 import (
     events,
     family,
     files,
+    memory,
     news,
     notes,
     radio,
     shopping,
+    smarthome,
     tasks,
     voice,
+    weather,
+    widgets,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -32,9 +36,13 @@ router.include_router(diagnostics.router)
 router.include_router(events.router)
 router.include_router(family.router)
 router.include_router(files.router)
+router.include_router(memory.router)
 router.include_router(news.router)
 router.include_router(notes.router)
 router.include_router(radio.router)
 router.include_router(shopping.router)
+router.include_router(smarthome.router)
 router.include_router(tasks.router)
 router.include_router(voice.router)
+router.include_router(weather.router)
+router.include_router(widgets.router)
