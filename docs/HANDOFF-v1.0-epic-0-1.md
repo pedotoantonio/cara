@@ -1,6 +1,6 @@
 # CARA v1.0 — Handoff document, branch `epic-0-foundations`
 
-Stato a fine sessione 2026-05-04 (consolidata in cinque ondate). **353 test verdi** (311 unit + 42 smoke). Step 67 di Antonio mergiato; modelli wire-up; KV cache RKLLM; **REST endpoint per weather/memory/widgets/smarthome esposti e live**.
+Stato a fine sessione 2026-05-04 (consolidata in sei ondate). **353 test verdi** (311 unit + 42 smoke). Step 67 di Antonio mergiato; modelli wire-up; KV cache RKLLM; REST endpoint live per weather/memory/widgets/smarthome; **`chat.py` refactor phase A iniziato** (1322 → 1034 righe, helper estratti).
 
 ## Cosa è stato fatto
 
@@ -36,6 +36,7 @@ Branch `epic-0-foundations` su `/opt/cara/`. Tutti commit additivi
 | api/memory | `/memory/facts` CRUD + extract + GDPR export/purge | `cara/api/v1/memory.py` + `schemas/memory.py` | 7 smoke |
 | api/widgets | `/widgets` catalog + render-many | `cara/api/v1/widgets.py` | 9 smoke |
 | api/smarthome | `/smarthome/entities,scenes,services,resolve,health` | `cara/api/v1/smarthome.py` | 7 smoke |
+| 0.2 phase A | extract pure helpers from chat.py | `cara/api/v1/_chat_{prompt,grounding,sse}.py` | (covered by smoke) |
 
 Migrazioni Alembic applicate al DB live (`cara-postgres`):
 `c8a7d94e1f02 → d4e1f8b3a201 → e8a2c5f7b310`. Idempotenti, downgrade
@@ -43,13 +44,14 @@ testabile.
 
 ## Cosa NON è stato fatto (di proposito)
 
-Tre Step rimangono fuori scope:
+Tre Step rimangono parzialmente fuori scope:
 
-| Step | Motivo |
-|------|--------|
-| 0.2 — spezzare `chat.py` (ora 1322 righe dopo Step 67) | il refactor più rischioso del piano: serve sessione dedicata con focus singolo |
-| 1.3 — TTS streaming chunked | richiede coordinamento backend SSE + frontend WebAudio |
-| 1.5 — system prompt corto + segmentato | dipende da 0.2 (estrazione `prompt_builder.py`) |
+| Step | Stato | Motivo |
+|------|-------|--------|
+| 0.2 phase A | ✓ done (chat.py 1322 → 1034) | Helper estratti, smoke 42/42 verde. |
+| 0.2 phase B | da fare | Sostituire l'orchestratore `chat()` con il `Pipeline` di Step 0.6, wiring `prompt_cache_path` (Step 0.5), `episodic.record_async` su decisioni, `tool_metrics.record_attempt` su dispatch. Sessione dedicata. |
+| 1.3 — TTS streaming chunked | bloccato | Richiede coordinamento backend SSE (post-0.2 phase B) + frontend WebAudio queue. |
+| 1.5 — system prompt corto + segmentato | bloccato | Dipende da 0.2 phase B (l'orchestratore deve consumare `_chat_prompt.runtime_context_message` + segmenti separati). |
 
 L'infrastruttura sotto è già pronta:
 - KV cache lato `LLMService.generate()` → `prompt_cache_path=`
