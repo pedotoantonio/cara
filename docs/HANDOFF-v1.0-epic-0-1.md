@@ -1,6 +1,6 @@
 # CARA v1.0 — Handoff document, branch `epic-0-foundations`
 
-Stato a fine sessione 2026-05-04 (consolidata in tre ondate). **309 test verdi** (294 unit + 15 smoke).
+Stato a fine sessione 2026-05-04 (consolidata in quattro ondate). **326 test verdi** (311 unit + 15 smoke). Step 67 di Antonio già mergiato; modelli wire-up completato; KV cache RKLLM disponibile.
 
 ## Cosa è stato fatto
 
@@ -30,6 +30,8 @@ Branch `epic-0-foundations` su `/opt/cara/`. Tutti commit additivi
 | 7.1+7.2 | Wallet engine + 7 widget catalog | `cara/widgets/{__init__,base,catalog}.py` | 22 unit |
 | 8.4 | Habit detection | `cara/models/habit.py`, `cara/learning/habits.py` + migration `b5d4f1a82e36` | 17 unit |
 | 8.5 | Reflective batch | `cara/learning/reflective.py` | 14 unit |
+| 0.5 | RKLLM prompt-cache (KV reuse) | `cara/ai/kv_cache.py` + `cara/ai/llm.py` (chirurgico) | 17 unit |
+| wire | `cara/models/__init__.py` add 6 classes | (one-line edits) | – |
 
 Migrazioni Alembic applicate al DB live (`cara-postgres`):
 `c8a7d94e1f02 → d4e1f8b3a201 → e8a2c5f7b310`. Idempotenti, downgrade
@@ -37,115 +39,78 @@ testabile.
 
 ## Cosa NON è stato fatto (di proposito)
 
-Tutti gli step che richiedono di toccare file nel working tree del tuo
-Step 66 sono rimasti **fuori scope** finché non commiti. Concretamente:
+Tre Step rimangono fuori scope:
 
-| Step bloccato | Motivo |
-|---------------|--------|
-| 0.2 — spezzare `chat.py` 1151 righe | `chat.py` modified nel tuo working tree |
-| 0.5 — abilitare `prompt_cache_params` RKLLM | `cara/ai/llm.py` non l'ho voluto rischiare in parallelo |
-| 1.3 — TTS streaming chunked | tocca `chat.py` + `tts/service.py` |
-| 1.5 — system prompt corto + segmentato | tocca `chat.py` |
+| Step | Motivo |
+|------|--------|
+| 0.2 — spezzare `chat.py` (ora 1322 righe dopo Step 67) | il refactor più rischioso del piano: serve sessione dedicata con focus singolo |
+| 1.3 — TTS streaming chunked | richiede coordinamento backend SSE + frontend WebAudio |
+| 1.5 — system prompt corto + segmentato | dipende da 0.2 (estrazione `prompt_builder.py`) |
 
-Tutte le infrastrutture (episodic, tool_metrics, router, normalizer,
-cache, weather) sono pronte per essere **wirate** quando questi Step
-diventano sbloccati.
+L'infrastruttura sotto è già pronta:
+- KV cache lato `LLMService.generate()` → `prompt_cache_path=`
+- `kv_cache.path_for_conversation(conv_id)` per la pathing
+- Pipeline + Stage Protocol per il routing dopo lo split
+- Tool-metrics recorder per il dispatch tracciato
+- Response cache, NLU domotico, permission check, semantic facts retrieval pronti come dipendenze
 
 ## Cosa devi fare per riprendere
 
-### 1. Committa il tuo Step 66
+### 1. Mergia `epic-0-foundations` su `main`
 
-Tutti i file modified + untracked nel working tree che hai descritto
-come Skill Factory v0.7. Suggerimento di commit (puoi usare il tuo
-nome utente):
+Step 67 è già committato sul branch (`a64b196`). Tutti i miei step si
+applicano sopra il tuo lavoro senza conflitti.
 
 ```bash
 cd /opt/cara
-git checkout main  # o resta su epic-0-foundations e fai un branch a parte
-git add backend/cara/api backend/cara/cda backend/cara/config.py \
-        backend/cara/main.py backend/cara/models backend/cara/services \
-        backend/cara/skills backend/cara/core backend/cara/store \
-        backend/alembic/versions/6061bac37e44_add_skills_table.py \
-        backend/alembic/versions/c8a7d94e1f02_seed_skill_ricetta_to_spesa.py \
-        frontend/src docs/skill-factory-extension-prompt.md
-git commit -m "feat: Step 66 — Skill Factory v0.7 vertical slice + recipe_chain + verify_streams"
-```
-
-(Adatta il messaggio. L'importante è che lo Step 66 finisca in un singolo
-commit identificabile.)
-
-### 2. Mergia `epic-0-foundations` su `main`
-
-```bash
 git checkout main
 git merge epic-0-foundations
-make test  # deve dare 107/107 verde
+make test  # deve dare 326/326 verde (311 unit + 15 smoke)
 ```
 
-Se ci sono conflitti, dovrebbero essere zero o quasi: io non ho toccato
-nessuno dei file che hai editato tu. Le uniche cose che potrebbero
-collidere sono `pyproject.toml` (ho aggiunto `pyyaml`) e
-`alembic_version` nel DB (già `e8a2c5f7b310`, due step avanti).
+### 2. (Opzionale) Wire-up modelli
 
-### 3. Aggiungi i nuovi modelli a `cara/models/__init__.py`
+Già fatto in `c4e1c11 feat(llm): Step 0.5 + model wire-up`. I sei modelli
+nuovi (`Event`, `ToolCallMetric`, `Device`, `DevicePermission`, `Fact`,
+`HabitCandidate`) sono già in `cara/models/__init__.py`.
 
-Quando il merge è pulito, aggiungi nel tuo `__init__.py` (che adesso
-contiene anche `Skill`):
+### 3. Step 0.2 — refactor `chat.py`
 
-```python
-from cara.models.device import Device
-from cara.models.device_permission import DevicePermission
-from cara.models.event import Event
-from cara.models.fact import Fact
-from cara.models.habit import HabitCandidate
-from cara.models.tool_metric import ToolCallMetric
-
-__all__ = [
-    # ... le tue voci esistenti ...
-    "Device",
-    "DevicePermission",
-    "Event",
-    "Fact",
-    "HabitCandidate",
-    "ToolCallMetric",
-]
-```
-
-Sei classi nuove. Le ho lasciate fuori per evitare conflitti col tuo working tree.
-
-### 4. Step 0.2 — refactor `chat.py`
-
-Adesso che il working tree è pulito, posso (o puoi) iniziare a spezzare
-`chat()` in stage del nuovo Pipeline. Ordine consigliato:
+Il file `chat.py` è ora **1322 righe** (1151 originale + 171 di Step 67).
+Spezzarlo è il refactor più rischioso del piano. Ordine consigliato:
 
 1. Estrai `_render_qwen_prompt`, `_runtime_context_message` in un nuovo
    `prompt_builder.py`.
 2. Estrai parser tool call e dispatch in `tool_dispatch.py` — wira al
-   volo il `tool_metrics.record_attempt` per ogni tentativo.
+   volo `tool_metrics.record_attempt` per ogni tentativo.
 3. Estrai grounding (`_needs_grounding`, `_infer_kind`,
    `_has_discover_tool`) in `grounding.py`.
-4. Trasforma il routing inline (`intent_router → recipe_chain → skills →
-   tool_calling → fallback`) in 5 `Stage` del `Pipeline`. Cache stage si
-   inserisce per primo.
-5. `episodic.record` su ogni decisione: `router.stage`, `tool.call`,
-   `chat.turn`.
-6. Smoke test deve passare invariato. Se non passa, il refactor sta
+4. Trasforma il routing inline (cache → intent_router → recipe_chain →
+   skills → tool_calling → fallback) in `Stage` del `Pipeline` già
+   pronto in `cara.router.pipeline`.
+5. `episodic.record_async` su ogni decisione: `router.stage`,
+   `tool.call`, `chat.turn`.
+6. **Wire `prompt_cache_path = kv_cache.path_for_conversation(conv_id)`**
+   sulla chiamata a `llm.generate(...)` per attivare il KV cache della
+   sessione. Invalidate via `kv_cache.flush_one(conv_id)` quando il
+   system prompt cambia.
+7. Smoke test deve passare invariato. Se non passa, il refactor sta
    cambiando il comportamento esterno → fermarsi e investigare.
 
 Target: `chat()` <250 righe.
 
-### 5. Step 0.5 — KV cache RKLLM
-
-Una linea in `cara/ai/llm.py:230` (dove `infer.prompt_cache_params =
-None`). Crea un `RKLLMPromptCacheParam` con un percorso per-conversation
-sotto `/app/cache/kv/<conversation_id>.bin`. Invalidation: cambio system
-prompt → flush all; conversazione idle 30 min → file remove.
-
-### 6. Step 1.3 e 1.5
+### 4. Step 1.3 e 1.5
 
 Step 1.3 (TTS streaming chunked) e Step 1.5 (system prompt segmentato +
 corto): entrambi nel post-refactor di `chat.py`, dove ognuno è una
 modifica chirurgica di poche righe.
+
+Per Step 1.5 in particolare: il prompt corto va segmentato in 3 file
+sotto `config/prompts/`:
+- `base.md` (statico, cacheabile per sempre)
+- `tone_<role>.md` (statico per ruolo)
+- `family_facts.md` (dinamico, top-k iniettato via
+  `cara.learning.semantic.top_k_for_query`)
 
 ## Stato Alembic
 
@@ -160,7 +125,7 @@ e7ff (initial) → df31 (users) → b984 (tasks) → 8ac2 (task_due) → ed5d (s
   → 04f5 (notes) → c64d (user_role) → 1727 (admin_settings+audit)
   → 0efc (user_birth_date) → d1b1 (files) → a3f1 (cda)
   → 6061 (skills) ← Antonio Step 66
-  → c8a7 (seed ricetta) ← Antonio Step 66
+  → c8a7 (seed ricetta) ← Antonio Step 66/67
   → d4e1 (events) ← Step 0.3
   → e8a2 (tool_call_metrics) ← Step 0.4
   → f3c9 (devices) ← Step 6.3
@@ -168,6 +133,10 @@ e7ff (initial) → df31 (users) → b984 (tasks) → 8ac2 (task_due) → ed5d (s
   → a7b9 (device_permissions) ← Step 5.8
   → b5d4 (habit_candidates) ← Step 8.4
 ```
+
+Antonio's Step 67 added the Skill Author Phase D feature (cloud LLM
+authoring) without further DB schema changes — it reuses the
+existing `skills` table.
 
 ## Comandi utili
 
