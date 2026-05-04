@@ -1,6 +1,6 @@
 # CARA v1.0 — Handoff document, branch `epic-0-foundations`
 
-Stato a fine sessione 2026-05-04 (undici ondate). **422 test verdi** (344 unit + 78 smoke). Epic 0 COMPLETE; Steps 1.5, 3.5, 5.4, 8.6 done. Step 67 di Antonio mergiato; KV cache 8.3× più veloce; episodic memory live; routing pipeline operativo; chat.py 1322→808; **Budget/Expense + Device aliases + Proactivity engine** infrastrutture pronte per i widget Wallet, ReceiptWorkflow, admin voice-mapping-test, e rules concrete.
+Stato a fine sessione 2026-05-04 (dodici ondate). **449 test verdi** (361 unit + 88 smoke). **Epic 0 + Epic 1 + Epic 2 COMPLETE** — 3 Epic backend chiusi al 100%. Step 67 di Antonio mergiato; KV cache 8.3× più veloce; episodic memory live; routing pipeline operativo; chat.py 1322→808; **Budget/Expense + Device aliases + Proactivity engine + TTS admin overrides + sentence buffer** infrastrutture pronte per il frontend.
 
 ## Cosa è stato fatto
 
@@ -45,6 +45,8 @@ Branch `epic-0-foundations` su `/opt/cara/`. Tutti commit additivi
 | 3.5 | Budgets + Expenses model/service/API + month rollup | `cara/models/budget.py`, `services/budgets.py`, `api/v1/budgets.py` + migration `c5a8e0f4d619` | 11 smoke |
 | 5.4 | Device aliases model + admin endpoint | `cara/models/device_alias.py`, `services/device_aliases.py`, `api/v1/device_aliases.py` + migration `e2bc7a1f8d34` | 6 smoke |
 | 8.6 | Proactivity engine (registry + decorator + rule isolation + cooldown + silent hours) | `cara/services/proactivity/` | 17 unit |
+| 1.2 | Admin TTS overrides API (storage + hot-swap + preview) | `cara/api/v1/admin_tts.py` + admin_settings key | 10 smoke + live verified |
+| 1.3 | TTS sentence buffer + audio chunk SSE payload | `cara/api/v1/_chat_tts_stream.py` (wiring deferred) | 17 unit |
 
 Migrazioni Alembic applicate al DB live (`cara-postgres`):
 `c8a7d94e1f02 → d4e1f8b3a201 → e8a2c5f7b310`. Idempotenti, downgrade
