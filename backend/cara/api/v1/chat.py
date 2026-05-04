@@ -38,6 +38,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cara.ai import LLMService, get_llm_service
 from cara.ai.llm import LLMUnavailableError
 from cara.api.deps import get_current_user
+from cara.api.v1._chat_grounding import (
+    has_discover_tool as _has_discover_tool,
+    infer_kind as _infer_kind,
+    needs_grounding as _needs_grounding,
+)
+from cara.api.v1._chat_prompt import (
+    AGENT_GROUNDING_SUFFIX as _AGENT_GROUNDING_SUFFIX,
+    MONTHS_IT as _MONTHS_IT,
+    TONE_DIRECTIVE as _TONE_DIRECTIVE,
+    WEEKDAYS_IT as _WEEKDAYS_IT,
+    render_qwen_prompt as _render_qwen_prompt,
+    runtime_context_message as _runtime_context_message,
+)
+from cara.api.v1._chat_sse import sse_frame as _sse
 from cara.cda import CdaError, DiscoverRequest, discover as cda_discover
 from cara.cda.memory import content_kb as cda_kb
 from cara.core import LumoState, get_bus, get_state_machine
@@ -60,6 +74,9 @@ from cara.store import get_session
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["chat"])
 
+# `_IM_START` / `_IM_END` were only consumed by `_render_qwen_prompt`,
+# which now lives in `_chat_prompt`. Kept here as module-level aliases
+# in case any other reader (or future tool-call parser) imports them.
 _IM_START = "<|im_start|>"
 _IM_END = "<|im_end|>"
 
@@ -194,150 +211,16 @@ async def _resolve_routed_intent(
     return routed.canned_reply or "Fatto."
 
 
-def _render_qwen_prompt(messages: list[ChatMessage]) -> str:
-    parts: list[str] = []
-    for m in messages:
-        parts.append(f"{_IM_START}{m.role}\n{m.content}{_IM_END}\n")
-    parts.append(f"{_IM_START}assistant\n")
-    return "".join(parts)
-
-
-# Persona tone presets — appended to the system prompt and (in privacy mode)
-# also drop the historical messages from the prompt, mirroring Lumo's three
-# tones (normale / neutro / sarcastico). Reset on every restart of the
-# backend container is fine: this is intentionally non-persistent at the
-# message layer (the key is in admin_settings, but no per-conversation
-# override).
-_TONE_DIRECTIVE = {
-    "default": "",
-    "privacy": (
-        "\n\n## MODALITÀ PRIVACY ATTIVA\n"
-        "Non usare il nome dell'utente. Non fare riferimento alla cronologia. "
-        "Rispondi al turno corrente con il minimo di informazioni necessarie. "
-        "Niente domande personali, niente memorie."
-    ),
-    "playful": (
-        "\n\n## MODALITÀ SCHERZOSA ATTIVA\n"
-        "Aggiungi un tocco di leggerezza e ironia gentile alle risposte, ma "
-        "senza esagerare. Niente sarcasmo cattivo, niente prese in giro. "
-        "Pensa a una zia simpatica che racconta cose. Resta concisa."
-    ),
-}
-
-
-_WEEKDAYS_IT = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
-_MONTHS_IT = [
-    "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
-    "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre",
-]
-
-
 # ---------------------------------------------------------------------------
-# Agent loop — forced grounding for info-need queries.
-#
-# When the user asks something the LLM is likely to hallucinate ("cos'è X",
-# "chi è Y", "che tempo fa", "quanto costa Z"), or when the model itself
-# emitted [TOOL: discover ...] indicating it knows it should look it up, we:
-#  1. Run the CDA discover pipeline server-side.
-#  2. Take the extracted article text.
-#  3. Re-prompt the LLM with that text injected as a system message.
-#  4. Stream the second pass as a `revision` SSE event so the frontend
-#     replaces the (potentially hallucinated) first reply.
+# Helpers extracted to sibling modules (Step 0.2 refactor):
+# - `_render_qwen_prompt`, `_runtime_context_message`,
+#   `_TONE_DIRECTIVE`, `_WEEKDAYS_IT`, `_MONTHS_IT`,
+#   `_AGENT_GROUNDING_SUFFIX` → `_chat_prompt.py`
+# - `_needs_grounding`, `_infer_kind`, `_has_discover_tool` → `_chat_grounding.py`
+# - `_sse` → `_chat_sse.py`
+# Imported above with the same underscore names so the orchestrator
+# below didn't change.
 # ---------------------------------------------------------------------------
-
-_GROUND_PATTERNS = [
-    r"\bcos[a']?\s*[èe']\b",            # cos'è, cosa è
-    r"\bchi\s*[èe]\b",                   # chi è
-    r"\bdove\s+(?:[èe]|si\s+trova)\b",
-    r"\bquando\s+(?:[èe]|sarà|è\s+stato)\b",
-    r"\bspiegami\b",
-    r"\bdefinisci\b",
-    r"\bche\s+(?:vuol\s+dire|significa)\b",
-    r"\bdimmi\s+(?:cosa|chi|dove|quando)\b",
-    r"\bmeteo\b",
-    r"\bprevisioni\b",
-    r"\bvincitore\b",
-    r"\bquanto\s+costa\b",
-    r"\bin\s+che\s+anno\b",
-    r"\bha\s+vinto\b",
-    r"\bè\s+vero\s+che\b",
-]
-_GROUND_RE = re.compile("|".join(_GROUND_PATTERNS), re.IGNORECASE)
-
-
-def _needs_grounding(question: str) -> bool:
-    """True if the user's question likely needs grounded information."""
-    return bool(_GROUND_RE.search(question or ""))
-
-
-def _infer_kind(question: str) -> str:
-    """Cheap classifier: pick the right `kind` for discover from the question."""
-    q = (question or "").lower()
-    if re.search(r"\b(podcast|puntata)\b", q):
-        return "podcast"
-    if re.search(r"\b(ascolta|ascoltare|radio|musica)\b", q):
-        return "audio_stream"
-    if re.search(r"\b(video|trailer|guarda)\b", q):
-        return "video"
-    if re.search(r"\b(foto|immagine|immagini)\b", q):
-        return "image"
-    return "article"
-
-
-def _has_discover_tool(text: str) -> bool:
-    """Best-effort detection of the model emitting any `discover` tool call,
-    tolerant of the 1.5B's typical typos (TOOL/TUPO/TWOOL/TU prefix)."""
-    return bool(re.search(r"\[\s*[A-Z_]*\s*:?\s*discover\b", text, flags=re.IGNORECASE))
-
-
-_AGENT_GROUNDING_SUFFIX = (
-    "Usa SOLO questa informazione per rispondere all'ultima domanda dell'utente. "
-    "Rispondi in italiano, in 2-4 frasi, in modo naturale e conciso. "
-    "Se la fonte non contiene la risposta, dillo onestamente. "
-    "NON emettere [TOOL: ...] in questa risposta."
-)
-
-
-
-def _runtime_context_message() -> str:
-    """Date, time and timezone — injected into the prompt as a system message
-    on every turn so the model knows where/when it is.
-
-    Without this, the 1.5B happily anchors to its training-data cutoff
-    (e.g. "oggi è il 28 settembre 2023") and refuses date queries on the
-    grounds that "non ho accesso alla data corrente".
-
-    We pre-compute common derivations (current month name, days to Christmas,
-    days to next New Year's Eve) because the 1.5B can't do date arithmetic
-    reliably — observed in QA "tra quanto tempo è Natale?" → "tra 19 giorni
-    e 4 giorni" (nonsense), and "in che mese siamo?" → "siamo in marzo"
-    even with the date already shown.
-    """
-    now = datetime.now(ZoneInfo("Europe/Rome"))
-    today_date = now.date()
-    # Next Christmas / New Year (this year if not yet passed, else next year).
-    from datetime import date
-
-    christmas_year = now.year if today_date <= date(now.year, 12, 25) else now.year + 1
-    days_to_xmas = (date(christmas_year, 12, 25) - today_date).days
-    new_year_target = date(now.year + 1, 1, 1) if today_date > date(now.year, 1, 1) else date(now.year, 1, 1)
-    days_to_new_year = (new_year_target - today_date).days
-
-    return (
-        "## CONTESTO RUNTIME (informazioni precise, NON cercare su internet, NON ricalcolare)\n"
-        f"- Oggi è {_WEEKDAYS_IT[now.weekday()]} {now.day} {_MONTHS_IT[now.month - 1]} {now.year}.\n"
-        f"- Mese corrente: {_MONTHS_IT[now.month - 1]}. Anno corrente: {now.year}.\n"
-        f"- Ora attuale: {now.hour:02d}:{now.minute:02d} (fuso Europe/Rome, Italia).\n"
-        f"- Giorni mancanti al prossimo Natale (25 dicembre): {days_to_xmas}.\n"
-        f"- Giorni mancanti al prossimo Capodanno (1 gennaio): {days_to_new_year}.\n"
-        "Per domande su \"che giorno/ora/mese/anno è\", \"tra quanto tempo è Natale\", "
-        "\"tra quanto è Capodanno\" rispondi DIRETTAMENTE con il dato sopra, "
-        "SENZA usare il tool discover e SENZA fare aritmetica tu stesso."
-    )
-
-
-def _sse(event: str, payload: dict) -> bytes:
-    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 
 
 @router.post("/chat", response_class=StreamingResponse)
