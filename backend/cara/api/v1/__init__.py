@@ -26,6 +26,7 @@ from cara.api.v1 import (
     tasks,
     tools,
     voice,
+    wallet,
     weather,
     widgets,
     workflows,
@@ -55,6 +56,7 @@ router.include_router(smarthome.router)
 router.include_router(tasks.router)
 router.include_router(tools.router)
 router.include_router(voice.router)
+router.include_router(wallet.router)
 router.include_router(weather.router)
 router.include_router(widgets.router)
 router.include_router(workflows.router)

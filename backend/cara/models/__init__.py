@@ -18,6 +18,7 @@ from cara.models.skill import Skill
 from cara.models.task import Task
 from cara.models.tool_metric import ToolCallMetric
 from cara.models.user import User
+from cara.models.wallet_layout import WalletLayout
 from cara.models.workflow_trust import WorkflowTrust
 
 __all__ = [
@@ -44,5 +45,6 @@ __all__ = [
     "ToolCallMetric",
     "UploadedFile",
     "User",
+    "WalletLayout",
     "WorkflowTrust",
 ]

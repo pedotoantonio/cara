@@ -42,6 +42,10 @@ from cara.widgets.catalog import (
     _Fetchers,
     register_all,
 )
+from cara.widgets.catalog_extra import (
+    _ExtraFetchers,
+    register_extras,
+)
 
 
 router = APIRouter(prefix="/widgets", tags=["widgets"])
@@ -118,12 +122,126 @@ def _ensure_registry() -> None:
     _REGISTRY_INITIALISED = True
 
 
+def _make_extras(session: AsyncSession) -> _ExtraFetchers:
+    """Bind the 6 extra widgets (Step 7.6) to a request-scoped session."""
+
+    async def budget_rollup(year: int, month: int) -> dict[str, Any]:
+        from cara.services import budgets as budget_svc
+        rollup = await budget_svc.month_rollup(session, year=year, month=month)
+        return rollup.to_dict()
+
+    async def kids_homework(user_id: int) -> list[dict[str, Any]]:
+        # Heuristic: tasks whose title mentions a school keyword. Once
+        # the data model adds a `category` column we'll filter on that
+        # instead. Conservative — we don't want to surface a private
+        # task as "homework" because the title says "scuola".
+        rows = await tasks_svc.list_tasks(
+            session, user_id=user_id, include_done=False,
+        )
+        keywords = ("compit", "scuola", "lezion", "verifica", "interrog", "studi")
+        out: list[dict[str, Any]] = []
+        for t in rows:
+            title_lower = (t.title or "").lower()
+            if not any(k in title_lower for k in keywords):
+                continue
+            out.append({
+                "id": str(t.id),
+                "title": t.title,
+                "done": bool(t.done),
+                "due_unix": t.due_date.timestamp() if t.due_date else None,
+            })
+        return out
+
+    async def habit_next(user_id: int) -> list[dict[str, Any]]:
+        # Walks accepted habit candidates for `user_id`. Sorted: active
+        # weekday matches first, then by hour bucket.
+        from datetime import datetime
+        from sqlalchemy import select
+        from cara.models.habit import HABIT_STATUS_ACCEPTED, HabitCandidate
+
+        rows = list((await session.execute(
+            select(HabitCandidate)
+            .where(HabitCandidate.user_id == user_id)
+            .where(HabitCandidate.status == HABIT_STATUS_ACCEPTED)
+            .order_by(HabitCandidate.confidence.desc())
+            .limit(20)
+        )).scalars().all())
+        if not rows:
+            return []
+        try:
+            from zoneinfo import ZoneInfo
+            now = datetime.now(ZoneInfo("Europe/Rome"))
+        except Exception:
+            now = datetime.now()
+        cur_wd = now.weekday()
+        cur_hb = now.hour // 3
+        # Distance metric: same weekday=0; +7 for next-week wrap.
+        # Inside the day, |hour_bucket - now_bucket| breaks the tie.
+        def _distance(c: HabitCandidate) -> tuple[int, int]:
+            wd_delta = (c.weekday - cur_wd) % 7
+            hb_delta = abs(c.hour_bucket - cur_hb)
+            return (wd_delta, hb_delta)
+        rows.sort(key=_distance)
+        return [
+            {
+                "kind": c.kind,
+                "weekday": c.weekday,
+                "hour_bucket": c.hour_bucket,
+                "pattern": c.pattern,
+                "last_seen": c.last_seen.isoformat() if c.last_seen else None,
+            }
+            for c in rows[:5]
+        ]
+
+    async def news_brief(category: str, limit: int) -> list[dict[str, Any]]:
+        # Lazy-import: cara.services.news pulls feedparser which is a
+        # heavy dependency we don't want at module import time.
+        try:
+            from cara.services import news as news_svc
+        except ImportError:
+            return []
+        try:
+            items = await news_svc.fetch_category(category, limit=limit)
+        except Exception:
+            return []
+        out: list[dict[str, Any]] = []
+        for it in items:
+            out.append({
+                "title": getattr(it, "title", "") or it.get("title", ""),
+                "summary": (
+                    getattr(it, "summary", None) or it.get("summary", "")
+                )[:200] if isinstance(it, dict) or hasattr(it, "summary") else "",
+                "source": getattr(it, "source", None) or it.get("source", ""),
+                "link": getattr(it, "link", None) or it.get("link", ""),
+            })
+        return out
+
+    async def now_playing() -> dict[str, Any] | None:
+        # Frontend audio playback owns this state. The backend keeps it
+        # in admin_settings under "radio_now_playing" — when nothing's
+        # active, the value is empty/None.
+        from cara.services import admin_settings as setting_svc
+        info = await setting_svc.get(session, "radio_now_playing")
+        if not info or not isinstance(info, dict):
+            return None
+        return info
+
+    return _ExtraFetchers(
+        budget_rollup=budget_rollup,
+        kids_homework=kids_homework,
+        habit_next=habit_next,
+        news_brief=news_brief,
+        now_playing=now_playing,
+    )
+
+
 def _register_for_request(session: AsyncSession):
     """Re-register the catalog with request-scoped fetchers and return
-    the registry. Cheap: just rebuilds 7 in-memory closures."""
+    the registry. Cheap: rebuilds 7 + 6 in-memory closures."""
     fetchers = _make_fetchers(session)
     reg = get_default_registry()
     register_all(fetchers, registry=reg)
+    register_extras(_make_extras(session), registry=reg)
     return reg
 
 
