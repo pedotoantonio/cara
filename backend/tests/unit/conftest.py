@@ -39,7 +39,10 @@ def _compile_bigint_sqlite(type_, compiler, **kw):  # noqa: ANN001, ARG001
 
 # Importing models is enough to register them on Base.metadata.
 import cara.models  # noqa: E402, F401 — side-effect import
-from cara.models.event import Event  # noqa: E402, F401 — Event not yet in __init__ (Step 66)
+# These two aren't yet in cara/models/__init__ to avoid a merge conflict
+# with Antonio's Step 66 working tree, so import them explicitly.
+from cara.models.event import Event  # noqa: E402, F401
+from cara.models.tool_metric import ToolCallMetric  # noqa: E402, F401
 from cara.models.user import User  # noqa: E402, F401
 from cara.store.db import Base  # noqa: E402
 

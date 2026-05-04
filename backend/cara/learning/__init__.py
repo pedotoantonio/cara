@@ -23,9 +23,19 @@ from cara.learning.episodic import (
     query as episodic_query,
     record as episodic_record,
 )
+from cara.learning.tool_metrics import (
+    record_attempt as tool_metrics_record,
+    recent_failures as tool_metrics_recent_failures,
+    stats as tool_metrics_stats,
+    top_failure_classes as tool_metrics_top_failures,
+)
 
 __all__ = [
     "episodic_cleanup_old",
     "episodic_query",
     "episodic_record",
+    "tool_metrics_recent_failures",
+    "tool_metrics_record",
+    "tool_metrics_stats",
+    "tool_metrics_top_failures",
 ]
