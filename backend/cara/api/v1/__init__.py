@@ -7,9 +7,11 @@ from cara.api.v1 import (
     admin_learning,
     asr,
     auth,
+    budgets,
     cda,
     chat,
     conversations,
+    device_aliases,
     diagnostics,
     events,
     family,
@@ -32,9 +34,11 @@ router.include_router(admin.router)
 router.include_router(admin_learning.router)
 router.include_router(asr.router)
 router.include_router(auth.router)
+router.include_router(budgets.router)
 router.include_router(cda.router)
 router.include_router(chat.router)
 router.include_router(conversations.router)
+router.include_router(device_aliases.router)
 router.include_router(diagnostics.router)
 router.include_router(events.router)
 router.include_router(family.router)

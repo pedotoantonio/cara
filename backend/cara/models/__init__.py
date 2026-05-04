@@ -2,9 +2,11 @@
 
 from cara.models.admin_settings import AdminSetting
 from cara.models.audit import AuditLog
+from cara.models.budget import Budget, Expense
 from cara.models.cda import CdaContentItem, CdaDomainTrust, CdaQueryLog, CdaUserPreference
 from cara.models.conversation import Conversation, Message
 from cara.models.device import Device
+from cara.models.device_alias import DeviceAlias
 from cara.models.device_permission import DevicePermission
 from cara.models.event import Event
 from cara.models.fact import Fact
@@ -20,14 +22,17 @@ from cara.models.user import User
 __all__ = [
     "AdminSetting",
     "AuditLog",
+    "Budget",
     "CdaContentItem",
     "CdaDomainTrust",
     "CdaQueryLog",
     "CdaUserPreference",
     "Conversation",
     "Device",
+    "DeviceAlias",
     "DevicePermission",
     "Event",
+    "Expense",
     "Fact",
     "HabitCandidate",
     "Message",
