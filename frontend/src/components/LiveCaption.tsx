@@ -120,7 +120,7 @@ export function LiveCaption({ text, role, collapseEmpty = false }: LiveCaptionPr
   if (isUser) {
     return (
       <div
-        className="text-center max-w-3xl mx-auto px-4 text-slate-300"
+        className="text-center max-w-3xl mx-auto px-4 text-fg-soft"
         aria-live="polite"
       >
         <div
@@ -133,7 +133,7 @@ export function LiveCaption({ text, role, collapseEmpty = false }: LiveCaptionPr
           </span>
         </div>
         {text && (
-          <p className="text-[11px] text-slate-500 mt-1 uppercase tracking-wider">tu</p>
+          <p className="text-2xs text-fg-muted mt-1 uppercase tracking-wider">tu</p>
         )}
       </div>
     );
@@ -143,9 +143,9 @@ export function LiveCaption({ text, role, collapseEmpty = false }: LiveCaptionPr
   if (reduced) {
     // Reduced-motion fallback: static multi-line text with cursor highlight.
     return (
-      <div className="text-center max-w-3xl mx-auto px-4 text-slate-100" aria-live="polite">
+      <div className="text-center max-w-3xl mx-auto px-4 text-fg" aria-live="polite">
         {!text ? (
-          <span className="text-slate-600 italic text-base">…</span>
+          <span className="text-fg-muted italic text-base">…</span>
         ) : (
           <p className="text-2xl md:text-3xl leading-snug font-light tracking-tight">
             {words.map((w, i) => (
@@ -153,10 +153,10 @@ export function LiveCaption({ text, role, collapseEmpty = false }: LiveCaptionPr
                 key={`${w}-${i}`}
                 className={
                   i < spokenIdx
-                    ? 'text-slate-500'
+                    ? 'text-fg-muted'
                     : i === spokenIdx
-                      ? 'text-emerald-200'
-                      : 'text-slate-100/40'
+                      ? 'text-accent'
+                      : 'text-fg/40'
                 }
               >
                 {w}
@@ -196,7 +196,7 @@ export function LiveCaption({ text, role, collapseEmpty = false }: LiveCaptionPr
         style={{ willChange: 'transform' }}
       >
         {!text ? (
-          <span className="text-slate-600 italic text-base">…</span>
+          <span className="text-fg-muted italic text-base">…</span>
         ) : (
           words.map((w, i) => (
             <span
@@ -206,10 +206,10 @@ export function LiveCaption({ text, role, collapseEmpty = false }: LiveCaptionPr
               }}
               className={
                 i < spokenIdx - 1
-                  ? 'text-slate-500'
+                  ? 'text-fg-muted'
                   : i === spokenIdx - 1
-                    ? 'text-emerald-200'
-                    : 'text-slate-300/60'
+                    ? 'text-accent'
+                    : 'text-fg-soft/60'
               }
             >
               {w}

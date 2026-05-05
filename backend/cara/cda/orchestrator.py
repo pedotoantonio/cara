@@ -35,6 +35,7 @@ from cara.cda.memory import (
 from cara.cda.memory.content_kb import normalize
 from cara.cda.search import build_default_chain
 from cara.cda.verification import check_audio_stream, check_url
+from cara.core import get_bus
 from cara.models.cda import CdaContentItem
 
 log = structlog.get_logger(__name__)
@@ -97,6 +98,15 @@ async def discover(session: AsyncSession, req: DiscoverRequest) -> CdaResult:
     """
     started = time.perf_counter()
     nq = normalize(req.raw_query)
+    bus = get_bus()
+    bus.emit(
+        "cda.discovery.start",
+        {
+            "user_id": req.user_id,
+            "query": req.raw_query[:80],
+            "content_type": req.content_type,
+        },
+    )
 
     # 2. KB lookup -------------------------------------------------------
     kb_hits = await list_active_for_query(
@@ -132,6 +142,15 @@ async def discover(session: AsyncSession, req: DiscoverRequest) -> CdaResult:
                     duration_ms=int((time.perf_counter() - started) * 1000),
                     cached=True,
                 )
+                bus.emit(
+                    "cda.discovery.cached_hit",
+                    {
+                        "user_id": req.user_id,
+                        "content_type": cand.content_type,
+                        "url": cand.url,
+                        "domain": cand.source_domain,
+                    },
+                )
                 return _result_from_item(cand, started_at=started, cached=True)
             else:
                 await increment_failure(session, cand.id)
@@ -155,6 +174,15 @@ async def discover(session: AsyncSession, req: DiscoverRequest) -> CdaResult:
             outcome="no_results",
             duration_ms=int((time.perf_counter() - started) * 1000),
             cached=False,
+        )
+        bus.emit(
+            "cda.discovery.failed",
+            {
+                "user_id": req.user_id,
+                "query": req.raw_query[:80],
+                "content_type": req.content_type,
+                "outcome": "no_results",
+            },
         )
         raise CdaError("Non ho trovato nulla per questa richiesta.")
 
@@ -224,6 +252,16 @@ async def discover(session: AsyncSession, req: DiscoverRequest) -> CdaResult:
     fallbacks = [d for d in candidates if d.url != chosen.url][:3]
     res = _result_from_item(item, started_at=started, cached=False)
     res.fallbacks = fallbacks
+    bus.emit(
+        "cda.discovery.success",
+        {
+            "user_id": req.user_id,
+            "content_type": chosen.content_type,
+            "url": chosen.url,
+            "domain": chosen.source_domain,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+        },
+    )
     return res
 
 
@@ -233,10 +271,24 @@ async def discover(session: AsyncSession, req: DiscoverRequest) -> CdaResult:
 async def list_user_kb(
     session: AsyncSession, *, user_id: int | None,
     content_type: ContentType | None = None, limit: int = 50,
+    only_active: bool = True,
 ) -> list[CdaContentItem]:
     return await _list_user_kb(
-        session, user_id=user_id, content_type=content_type, limit=limit
+        session, user_id=user_id, content_type=content_type, limit=limit,
+        only_active=only_active,
     )
+
+
+async def set_item_active(
+    session: AsyncSession, item_id: uuid.UUID, *, is_active: bool
+) -> CdaContentItem | None:
+    """Admin: toggle is_active. Returns None if the item doesn't exist."""
+    item = await get_item(session, item_id)
+    if item is None:
+        return None
+    item.is_active = is_active
+    await session.flush()
+    return item
 
 
 async def record_feedback_started(session: AsyncSession, content_id: uuid.UUID) -> None:

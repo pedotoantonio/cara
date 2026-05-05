@@ -69,6 +69,10 @@ async def update_task(
         task.completed_at = datetime.now(UTC) if done else None
     if due_date is not _UNSET:
         task.due_date = due_date  # type: ignore[assignment]
+        # Reset the reminder flag so a rescheduled task gets a fresh push.
+        # If the new due_date is in the past, the scheduler picks it up
+        # on the next tick (we treat overdue as "remind once").
+        task.reminded_at = None
     await session.flush()
     return task
 

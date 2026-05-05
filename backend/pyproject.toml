@@ -30,6 +30,13 @@ dependencies = [
   "piper-tts>=1.2",              # MIT, italian-native TTS (Paola, Riccardo)
   "trafilatura>=1.12",            # Apache 2.0, article extraction for the CDA
   "faster-whisper>=1.0",          # MIT, server-side STT fallback (aarch64 wheels OK)
+  "pyyaml>=6.0",                  # MIT, anglicisms dictionary loader (Step 1.1)
+  "anthropic>=0.39",              # MIT, cloud LLM for the Skill Author (Phase D, opt-in admin)
+  "pywebpush>=2.0",               # MPL-2.0, Web Push (VAPID) for task/appt reminders
+  "rapidfuzz>=3.10",              # MIT, fuzzy match for ReceiptWorkflow shopping reconciliation
+  "google-auth>=2.30",            # Apache 2.0, OAuth 2.0 + token refresh
+  "google-auth-oauthlib>=1.2",    # Apache 2.0, OAuth flow helpers
+  "google-api-python-client>=2.140",  # Apache 2.0, Calendar + Gmail API client
 ]
 
 [project.optional-dependencies]
@@ -66,4 +73,6 @@ plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]

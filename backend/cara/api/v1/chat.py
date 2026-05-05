@@ -36,283 +36,71 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cara.ai import LLMService, get_llm_service
+from cara.ai import kv_cache
 from cara.ai.llm import LLMUnavailableError
+from cara.learning import episodic
 from cara.api.deps import get_current_user
+from cara.api.v1._chat_grounding import (
+    has_discover_tool as _has_discover_tool,
+    infer_kind as _infer_kind,
+    needs_grounding as _needs_grounding,
+)
+from cara.api.v1._chat_prompt import (
+    AGENT_GROUNDING_SUFFIX as _AGENT_GROUNDING_SUFFIX,
+    MONTHS_IT as _MONTHS_IT,
+    TONE_DIRECTIVE as _TONE_DIRECTIVE,
+    WEEKDAYS_IT as _WEEKDAYS_IT,
+    render_qwen_prompt as _render_qwen_prompt,
+    runtime_context_message as _runtime_context_message,
+)
+from cara.api.v1._chat_pipeline import route_chat_request
+from cara.api.v1._chat_sse import sse_frame as _sse
 from cara.cda import CdaError, DiscoverRequest, discover as cda_discover
 from cara.cda.memory import content_kb as cda_kb
+from cara.core import LumoState, get_bus, get_state_machine
 from cara.services import event_log, intent_router
 from cara.config import settings
 from cara.models.user import User
 from cara.schemas.chat import ChatMessage, ChatRequest
 from cara.services import conversations as convo_svc
 from cara.services import files as file_svc
+from cara.services import recipe_chain
+from cara.skills import dispatcher as skill_dispatcher
+from cara.skills.executor import (
+    SkillExecutionError,
+    render_fallback as _skill_render_fallback,
+    render_response as _skill_render_response,
+    run as skill_run,
+)
 from cara.store import get_session
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["chat"])
 
+# `_IM_START` / `_IM_END` were only consumed by `_render_qwen_prompt`,
+# which now lives in `_chat_prompt`. Kept here as module-level aliases
+# in case any other reader (or future tool-call parser) imports them.
 _IM_START = "<|im_start|>"
 _IM_END = "<|im_end|>"
 
 
-async def _resolve_routed_intent(
-    *,
-    session: AsyncSession,
-    user_id: int,
-    routed: "intent_router.RoutedIntent",
-) -> str:
-    """Execute the side-effect implied by a routed intent and return the
-    canned reply text. Stays small: every branch must be O(1) calls and
-    return in well under a second so we keep the latency promise."""
-    kind = routed.kind
-    args = routed.args
-
-    if kind == "answer_datetime":
-        # Use the very same context block we'd inject into the LLM prompt.
-        ctx = _runtime_context_message()
-        # Take the first two informational lines and stitch them into prose.
-        lines = [
-            ln.lstrip("- ").rstrip(".")
-            for ln in ctx.splitlines()
-            if ln.startswith("- Oggi") or ln.startswith("- Ora")
-        ]
-        if lines:
-            return ". ".join(lines) + "."
-        return routed.canned_reply
-
-    if kind == "discover_audio":
-        try:
-            res = await cda_discover(
-                session,
-                DiscoverRequest(
-                    user_id=user_id,
-                    raw_query=args.get("query", ""),
-                    content_type="audio_stream",
-                ),
-            )
-            return f"In onda: {res.title or args.get('query', '')}."
-        except CdaError as exc:
-            return f"Non sono riuscita a trovare la radio: {exc}"
-
-    if kind == "discover_article":
-        try:
-            res = await cda_discover(
-                session,
-                DiscoverRequest(
-                    user_id=user_id,
-                    raw_query=args.get("query", ""),
-                    content_type="article",
-                ),
-            )
-        except CdaError as exc:
-            return f"Non sono riuscita a trovarlo: {exc}"
-        cached = (res.metadata or {}).get("cached_answer")
-        if cached and isinstance(cached, str):
-            attribution = f"\n\n*(fonte: {res.source_domain})*" if res.source_domain else ""
-            return cached + attribution
-        # No cached answer yet — return a brief stub so the user knows we
-        # found something. The agent loop normally fills this in for free,
-        # but routed intents skip the LLM entirely; we accept the trade-off
-        # of a thinner first answer here in exchange for sub-second latency.
-        title = res.title or args.get("query", "")
-        src = f" (fonte: {res.source_domain})" if res.source_domain else ""
-        return f"Ho trovato: {title}{src}. Apri il link nelle scoperte per leggerlo."
-
-    if kind == "list_tasks":
-        from cara.services import tasks as task_svc
-        items = await task_svc.list_tasks(session, user_id=user_id, include_done=False)
-        if not items:
-            return "Niente da fare al momento."
-        body = "\n".join(f"• {t.title}" for t in items[:10])
-        more = f"\n…(+{len(items) - 10} altre)" if len(items) > 10 else ""
-        return f"Ecco le tue cose da fare:\n{body}{more}"
-
-    if kind == "add_task":
-        from cara.services import tasks as task_svc
-        title = args.get("title", "").strip()
-        if not title:
-            return "Cosa devo aggiungere?"
-        t = await task_svc.create_task(session, user_id=user_id, title=title)
-        return f"Aggiunto: \"{t.title}\"."
-
-    if kind == "add_shopping":
-        from cara.services import shopping as shop_svc
-        title = args.get("title", "").strip()
-        if not title:
-            return "Cosa devo aggiungere alla spesa?"
-        s = await shop_svc.create_item(session, user_id=user_id, title=title)
-        return f"Messo nella spesa: \"{s.title}\"."
-
-    if kind == "who_is_home":
-        from cara.services.family import FamilyPresenceUnavailable, people_present
-        try:
-            seen = await people_present(window_minutes=15)
-        except FamilyPresenceUnavailable as exc:
-            return f"Non riesco a controllare le telecamere: {exc}"
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("chat.routed.who_is_home_error", error=str(exc))
-            return "Non riesco a controllare le telecamere in questo momento."
-        if not seen:
-            return "In questo momento non vedo nessuno in casa."
-        names = ", ".join(p.name for p in seen)
-        return f"In casa adesso: {names}."
-
-    if kind == "get_news":
-        from cara.services import news as news_svc
-        cat = args.get("category", "all")
-        items = await news_svc.fetch_category(cat, limit=5)
-        if not items:
-            return "Non ho trovato notizie al momento."
-        digest = news_svc.make_digest(items[:5], category=cat)
-        return digest
-
-    return routed.canned_reply or "Fatto."
-
-
-def _render_qwen_prompt(messages: list[ChatMessage]) -> str:
-    parts: list[str] = []
-    for m in messages:
-        parts.append(f"{_IM_START}{m.role}\n{m.content}{_IM_END}\n")
-    parts.append(f"{_IM_START}assistant\n")
-    return "".join(parts)
-
-
-# Persona tone presets — appended to the system prompt and (in privacy mode)
-# also drop the historical messages from the prompt, mirroring Lumo's three
-# tones (normale / neutro / sarcastico). Reset on every restart of the
-# backend container is fine: this is intentionally non-persistent at the
-# message layer (the key is in admin_settings, but no per-conversation
-# override).
-_TONE_DIRECTIVE = {
-    "default": "",
-    "privacy": (
-        "\n\n## MODALITÀ PRIVACY ATTIVA\n"
-        "Non usare il nome dell'utente. Non fare riferimento alla cronologia. "
-        "Rispondi al turno corrente con il minimo di informazioni necessarie. "
-        "Niente domande personali, niente memorie."
-    ),
-    "playful": (
-        "\n\n## MODALITÀ SCHERZOSA ATTIVA\n"
-        "Aggiungi un tocco di leggerezza e ironia gentile alle risposte, ma "
-        "senza esagerare. Niente sarcasmo cattivo, niente prese in giro. "
-        "Pensa a una zia simpatica che racconta cose. Resta concisa."
-    ),
-}
-
-
-_WEEKDAYS_IT = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
-_MONTHS_IT = [
-    "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
-    "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre",
-]
+# `_resolve_routed_intent` and the per-tier routing handlers (Tier-0.4
+# skill dispatcher, Tier-0.5 recipe chain, Tier-1 intent router) were
+# moved to `cara/api/v1/_chat_routing.py` (Step 0.2 phase C). The
+# orchestrator below walks `ROUTING_TIERS` in order and returns the
+# first non-None `StreamingResponse`.
 
 
 # ---------------------------------------------------------------------------
-# Agent loop — forced grounding for info-need queries.
-#
-# When the user asks something the LLM is likely to hallucinate ("cos'è X",
-# "chi è Y", "che tempo fa", "quanto costa Z"), or when the model itself
-# emitted [TOOL: discover ...] indicating it knows it should look it up, we:
-#  1. Run the CDA discover pipeline server-side.
-#  2. Take the extracted article text.
-#  3. Re-prompt the LLM with that text injected as a system message.
-#  4. Stream the second pass as a `revision` SSE event so the frontend
-#     replaces the (potentially hallucinated) first reply.
+# Helpers extracted to sibling modules (Step 0.2 refactor):
+# - `_render_qwen_prompt`, `_runtime_context_message`,
+#   `_TONE_DIRECTIVE`, `_WEEKDAYS_IT`, `_MONTHS_IT`,
+#   `_AGENT_GROUNDING_SUFFIX` → `_chat_prompt.py`
+# - `_needs_grounding`, `_infer_kind`, `_has_discover_tool` → `_chat_grounding.py`
+# - `_sse` → `_chat_sse.py`
+# Imported above with the same underscore names so the orchestrator
+# below didn't change.
 # ---------------------------------------------------------------------------
-
-_GROUND_PATTERNS = [
-    r"\bcos[a']?\s*[èe']\b",            # cos'è, cosa è
-    r"\bchi\s*[èe]\b",                   # chi è
-    r"\bdove\s+(?:[èe]|si\s+trova)\b",
-    r"\bquando\s+(?:[èe]|sarà|è\s+stato)\b",
-    r"\bspiegami\b",
-    r"\bdefinisci\b",
-    r"\bche\s+(?:vuol\s+dire|significa)\b",
-    r"\bdimmi\s+(?:cosa|chi|dove|quando)\b",
-    r"\bmeteo\b",
-    r"\bprevisioni\b",
-    r"\bvincitore\b",
-    r"\bquanto\s+costa\b",
-    r"\bin\s+che\s+anno\b",
-    r"\bha\s+vinto\b",
-    r"\bè\s+vero\s+che\b",
-]
-_GROUND_RE = re.compile("|".join(_GROUND_PATTERNS), re.IGNORECASE)
-
-
-def _needs_grounding(question: str) -> bool:
-    """True if the user's question likely needs grounded information."""
-    return bool(_GROUND_RE.search(question or ""))
-
-
-def _infer_kind(question: str) -> str:
-    """Cheap classifier: pick the right `kind` for discover from the question."""
-    q = (question or "").lower()
-    if re.search(r"\b(podcast|puntata)\b", q):
-        return "podcast"
-    if re.search(r"\b(ascolta|ascoltare|radio|musica)\b", q):
-        return "audio_stream"
-    if re.search(r"\b(video|trailer|guarda)\b", q):
-        return "video"
-    if re.search(r"\b(foto|immagine|immagini)\b", q):
-        return "image"
-    return "article"
-
-
-def _has_discover_tool(text: str) -> bool:
-    """Best-effort detection of the model emitting any `discover` tool call,
-    tolerant of the 1.5B's typical typos (TOOL/TUPO/TWOOL/TU prefix)."""
-    return bool(re.search(r"\[\s*[A-Z_]*\s*:?\s*discover\b", text, flags=re.IGNORECASE))
-
-
-_AGENT_GROUNDING_SUFFIX = (
-    "Usa SOLO questa informazione per rispondere all'ultima domanda dell'utente. "
-    "Rispondi in italiano, in 2-4 frasi, in modo naturale e conciso. "
-    "Se la fonte non contiene la risposta, dillo onestamente. "
-    "NON emettere [TOOL: ...] in questa risposta."
-)
-
-
-
-def _runtime_context_message() -> str:
-    """Date, time and timezone — injected into the prompt as a system message
-    on every turn so the model knows where/when it is.
-
-    Without this, the 1.5B happily anchors to its training-data cutoff
-    (e.g. "oggi è il 28 settembre 2023") and refuses date queries on the
-    grounds that "non ho accesso alla data corrente".
-
-    We pre-compute common derivations (current month name, days to Christmas,
-    days to next New Year's Eve) because the 1.5B can't do date arithmetic
-    reliably — observed in QA "tra quanto tempo è Natale?" → "tra 19 giorni
-    e 4 giorni" (nonsense), and "in che mese siamo?" → "siamo in marzo"
-    even with the date already shown.
-    """
-    now = datetime.now(ZoneInfo("Europe/Rome"))
-    today_date = now.date()
-    # Next Christmas / New Year (this year if not yet passed, else next year).
-    from datetime import date
-
-    christmas_year = now.year if today_date <= date(now.year, 12, 25) else now.year + 1
-    days_to_xmas = (date(christmas_year, 12, 25) - today_date).days
-    new_year_target = date(now.year + 1, 1, 1) if today_date > date(now.year, 1, 1) else date(now.year, 1, 1)
-    days_to_new_year = (new_year_target - today_date).days
-
-    return (
-        "## CONTESTO RUNTIME (informazioni precise, NON cercare su internet, NON ricalcolare)\n"
-        f"- Oggi è {_WEEKDAYS_IT[now.weekday()]} {now.day} {_MONTHS_IT[now.month - 1]} {now.year}.\n"
-        f"- Mese corrente: {_MONTHS_IT[now.month - 1]}. Anno corrente: {now.year}.\n"
-        f"- Ora attuale: {now.hour:02d}:{now.minute:02d} (fuso Europe/Rome, Italia).\n"
-        f"- Giorni mancanti al prossimo Natale (25 dicembre): {days_to_xmas}.\n"
-        f"- Giorni mancanti al prossimo Capodanno (1 gennaio): {days_to_new_year}.\n"
-        "Per domande su \"che giorno/ora/mese/anno è\", \"tra quanto tempo è Natale\", "
-        "\"tra quanto è Capodanno\" rispondi DIRETTAMENTE con il dato sopra, "
-        "SENZA usare il tool discover e SENZA fare aritmetica tu stesso."
-    )
-
-
-def _sse(event: str, payload: dict) -> bytes:
-    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 
 
 @router.post("/chat", response_class=StreamingResponse)
@@ -456,6 +244,11 @@ async def chat(
             duration_ms=0,
             query=last_user_q[:80],
         )
+        get_bus().emit(
+            "chat.noise_bypass",
+            {"user_id": user.id, "query": last_user_q[:80]},
+        )
+        get_state_machine().mark_activity()
 
         async def _noise_stream() -> AsyncIterator[bytes]:
             yield _sse("meta", {"conversation_id": convo_id_str_n})
@@ -478,58 +271,25 @@ async def chat(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # ---- Tier-1: deterministic intent router ----------------------------
+    # ---- Routing pipeline (Step 0.2 phase D) --------------------------
     #
-    # Catch the canonical commands ("metti rai radio 1", "che giorno è oggi",
-    # "cosa devo fare", "cos'è X", …) BEFORE the LLM is invoked. Saves 6-90 s
-    # of token latency and avoids the 1.5B's tool-emission typos. Anything
-    # ambiguous falls through to the regular flow.
-    routed = intent_router.match(last_user_q) if last_user_q and not attached_files else None
-    if routed is not None:
-        import time as _t
-        _t0 = _t.perf_counter()
-        canned = await _resolve_routed_intent(
-            session=session, user_id=user.id, routed=routed,
-        )
-        _elapsed = int((_t.perf_counter() - _t0) * 1000)
-        await convo_svc.add_message(
-            session, conversation_id=convo.id, role="assistant", content=canned,
-        )
-        await session.commit()
-        convo_id_str_r = str(convo.id)
-        logger.info(
-            "chat.intent_routed",
-            kind=routed.kind, args=routed.args, reply_chars=len(canned),
-        )
-        event_log.record(
-            "intent_router.match",
-            user_id=user.id,
-            duration_ms=_elapsed,
-            intent=routed.kind,
-            query=last_user_q[:80],
-            args=routed.args,
-        )
-
-        async def _routed_stream() -> AsyncIterator[bytes]:
-            yield _sse("meta", {"conversation_id": convo_id_str_r})
-            yield _sse("token", {"text": canned, "token_id": -1})
-            yield _sse(
-                "done",
-                {
-                    "conversation_id": convo_id_str_r,
-                    "tokens": 0,
-                    "first_token_seconds": 0.0,
-                    "total_seconds": 0.0,
-                    "tokens_per_second": 0.0,
-                    "routed": routed.kind,
-                },
-            )
-
-        return StreamingResponse(
-            _routed_stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+    # The 3 deterministic routing tiers (skill / recipe / intent) are
+    # wrapped as Stage objects in `cara.api.v1._chat_pipeline.CHAT_PIPELINE`.
+    # `route_chat_request` builds a RouteContext, walks the pipeline,
+    # records per-stage telemetry as `router.stage` events in episodic
+    # memory, and returns a StreamingResponse if any stage handled the
+    # request — or None if every stage missed (we then fall through to
+    # the LLM).
+    pipeline_resp = await route_chat_request(
+        session=session,
+        user=user,
+        last_user_q=last_user_q,
+        attached_files=attached_files,
+        convo=convo,
+        conversation_id=str(convo.id),
+    )
+    if pipeline_resp is not None:
+        return pipeline_resp
 
     # ---- Early-bypass: did we already answer this question once? ----
     #
@@ -733,20 +493,232 @@ async def chat(
         admin_max = await setting_svc.get(session, "llm_max_new_tokens")
         effective_max = int(admin_max) if admin_max else settings.llm_max_new_tokens
 
+    # If this question is going to trigger the agent loop anyway (the
+    # query matches a knowledge-need pattern), keep the first pass *short*
+    # so the user doesn't watch the 1.5B confidently invent details for
+    # 90+ seconds before the grounded revision overwrites it. 80 tokens
+    # is enough for a [TOOL: discover ...] emission or a short hedge but
+    # not enough to drift into a fabricated explanation.
+    if last_user_q and _needs_grounding(last_user_q):
+        effective_max = min(effective_max, 80)
+
+    # Per-conversation KV-cache path. RKLLM persists the prefill state to
+    # this file at the end of each run and re-uses it on the next call —
+    # turns 2+ skip prefill, dropping TTFT from ~200 ms to ~50 ms.
+    # Invalidated when the admin edits the runtime system prompt
+    # (cara.ai.kv_cache.flush_one is what the admin handler will call).
+    kv_path = kv_cache.path_for_conversation(convo_id_str)
+
+    # Reaching this point means none of the deterministic routing tiers
+    # (skill / recipe_chain / intent_router) matched the user message —
+    # we're falling through to the full LLM generation. Record a
+    # `router.miss` so the reflective batch (Step 8.5) can cluster
+    # frequently-missed phrases and propose new intents to the admin.
+    if last_user_q:
+        await episodic.record_async(
+            kind="router.miss",
+            user_id=user.id,
+            ref_id=convo_id_str,
+            outcome="fallthrough",
+            payload={"message": last_user_q[:300]},
+        )
+
+    # Cloud LLM short-circuit: if the user explicitly opted-in via
+    # `prefer_cloud=true` AND the admin flag is on, skip the local model
+    # entirely for this turn and stream Anthropic Haiku's reply through
+    # the same SSE format. The local conversation history is NOT sent
+    # to the cloud — only the last user turn (privacy by truncation).
+    cloud_enabled = await setting_svc.get(session, "cloud_llm_enabled")
+    use_cloud = bool(req.prefer_cloud and cloud_enabled)
+    if use_cloud:
+        from cara.services import cloud_llm as _cloud
+
+        if not _cloud.is_available():
+            logger.info("chat.cloud_llm.skipped_no_key")
+            use_cloud = False
+
+    if use_cloud:
+        from cara.services import cloud_llm as _cloud
+
+        async def cloud_stream() -> AsyncIterator[bytes]:
+            yield _sse("meta", {"conversation_id": convo_id_str})
+
+            sm = get_state_machine()
+            bus = get_bus()
+            sm.transition(LumoState.THINKING)
+            bus.emit(
+                "chat.cloud_llm.start",
+                {"user_id": user.id, "user_chars": len(last_user_q or "")},
+            )
+
+            t_start_c = time.monotonic()
+            t_first_c: float | None = None
+            buf_c: list[str] = []
+            try:
+                async for delta in _cloud.cloud_chat_stream(last_user_q or ""):
+                    if t_first_c is None:
+                        t_first_c = time.monotonic() - t_start_c
+                        sm.transition(LumoState.SPEAKING)
+                    buf_c.append(delta)
+                    yield _sse("token", {"text": delta, "token_id": -1})
+            except _cloud.CloudLLMUnavailable as exc:
+                logger.warning("chat.cloud_llm.failed", error=str(exc))
+                yield _sse(
+                    "error",
+                    {"detail": f"Cloud non disponibile: {exc}. Riprova senza prefer_cloud."},
+                )
+                yield _sse(
+                    "done",
+                    {
+                        "conversation_id": convo_id_str,
+                        "tokens": 0,
+                        "first_token_seconds": 0.0,
+                        "total_seconds": 0.0,
+                        "tokens_per_second": 0.0,
+                        "routed": "cloud_llm_failed",
+                    },
+                )
+                return
+
+            full_c = "".join(buf_c).strip()
+            if full_c and _sessionmaker is not None:
+                try:
+                    async with _sessionmaker() as s_save:
+                        await convo_svc.add_message(
+                            s_save,
+                            conversation_id=convo.id,
+                            role="assistant",
+                            content=full_c,
+                        )
+                        await s_save.commit()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("chat.cloud_llm.save_failed", error=str(exc))
+
+            t_total = time.monotonic() - t_start_c
+            ttft = t_first_c if t_first_c is not None else 0.0
+            yield _sse(
+                "done",
+                {
+                    "conversation_id": convo_id_str,
+                    "tokens": len(buf_c),
+                    "first_token_seconds": round(ttft, 3),
+                    "total_seconds": round(t_total, 3),
+                    "tokens_per_second": round(len(buf_c) / t_total, 2) if t_total > 0 else 0.0,
+                    "routed": "cloud_llm",
+                },
+            )
+            sm.transition(LumoState.IDLE)
+            bus.emit(
+                "chat.cloud_llm.done",
+                {
+                    "user_id": user.id,
+                    "answer_chars": len(full_c),
+                    "duration_s": round(t_total, 2),
+                },
+            )
+
+        return StreamingResponse(
+            cloud_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # Sentence-streaming TTS: when the admin flag is on, we synthesize
+    # each LLM sentence as it forms and ship a base64-encoded WAV chunk
+    # alongside the token stream. The frontend audio queue plays them
+    # sequentially → user hears the first sentence ~2s after the LLM
+    # starts emitting, instead of waiting for the full response.
+    tts_streaming_on = bool(
+        await setting_svc.get(session, "tts_streaming_enabled")
+    )
+    tts_voice_id: str | None = None
+    if tts_streaming_on:
+        tts_voice_id = (
+            (await setting_svc.get(session, "voice_name"))
+            or settings.tts_default_voice
+        )
+        # Only Piper voices have server-side synth; browser voices stay client-side.
+        if not (tts_voice_id and tts_voice_id.startswith("piper:")):
+            tts_streaming_on = False
+
     async def stream() -> AsyncIterator[bytes]:
         yield _sse("meta", {"conversation_id": convo_id_str})
+
+        sm = get_state_machine()
+        bus = get_bus()
+        sm.transition(LumoState.THINKING)
+        bus.emit(
+            "chat.llm.start",
+            {"user_id": user.id, "prompt_chars": len(prompt)},
+        )
+
+        # Sentence-buffer state local to this request.
+        from cara.api.v1._chat_tts_stream import (
+            SentenceBuffer as _SentBuf,
+            audio_chunk_payload as _audio_chunk_payload,
+            synthesize_sentence as _synthesize_sentence,
+        )
+        sentbuf: _SentBuf | None = _SentBuf() if tts_streaming_on else None
+        audio_seq: int = 0
+
+        async def _emit_audio_for(sentence: str):
+            nonlocal audio_seq
+            if not tts_streaming_on or not sentence.strip():
+                return None
+            try:
+                wav = await _synthesize_sentence(
+                    text=sentence, voice_id=tts_voice_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "chat.tts_stream.synth_failed",
+                    error=str(exc), preview=sentence[:60],
+                )
+                return None
+            if not wav:
+                return None
+            payload = _audio_chunk_payload(
+                seq=audio_seq, text=sentence,
+                audio_bytes=wav, voice_id=tts_voice_id or "",
+            )
+            audio_seq += 1
+            return payload
 
         t_start = time.monotonic()
         t_first: float | None = None
         n = 0
         buf: list[str] = []
         try:
-            async for chunk in llm.generate(prompt, max_new_tokens=effective_max):
+            async for chunk in llm.generate(
+                prompt,
+                max_new_tokens=effective_max,
+                prompt_cache_path=kv_path,
+            ):
                 if t_first is None:
                     t_first = time.monotonic() - t_start
+                    sm.transition(LumoState.SPEAKING)
+                    bus.emit(
+                        "chat.llm.first_token",
+                        {"user_id": user.id, "first_token_seconds": round(t_first, 3)},
+                    )
                 n += 1
                 buf.append(chunk.text)
                 yield _sse("token", {"text": chunk.text, "token_id": chunk.token_id})
+
+                # Detect and synthesize each completed sentence on the fly.
+                if sentbuf is not None and chunk.text:
+                    for sentence in sentbuf.feed(chunk.text):
+                        # Strip any leftover [TOOL: ...] tags from the audio
+                        # so the user doesn't hear them spoken aloud.
+                        clean = re.sub(
+                            r"\[\s*(?:[A-Z_]+\s*:?\s*)?[a-z_]+\b[^\]]*?\]",
+                            "", sentence,
+                        ).strip()
+                        if not clean:
+                            continue
+                        payload = await _emit_audio_for(clean)
+                        if payload is not None:
+                            yield _sse("audio_chunk", payload)
         except LLMUnavailableError as exc:
             logger.warning("chat.llm_unavailable", error=str(exc))
             yield _sse("error", {"detail": str(exc)})
@@ -756,11 +728,42 @@ async def chat(
             yield _sse("error", {"detail": f"internal error: {exc!r}"})
             return
 
+        # Flush the trailing tail (a final sentence without terminator).
+        if sentbuf is not None:
+            for sentence in sentbuf.flush():
+                clean = re.sub(
+                    r"\[\s*(?:[A-Z_]+\s*:?\s*)?[a-z_]+\b[^\]]*?\]",
+                    "", sentence,
+                ).strip()
+                if not clean:
+                    continue
+                payload = await _emit_audio_for(clean)
+                if payload is not None:
+                    yield _sse("audio_chunk", payload)
+
         t_total = time.monotonic() - t_start
         full_text = "".join(buf)
         # The text we eventually persist + return; may be replaced by the
         # self-critique pass below if validation is on and the verdict is RIVEDI.
         final_text = full_text
+
+        # Episodic memory: one row per chat turn. Fire-and-forget — failures
+        # never block the user-visible response. The reflective batch
+        # (Step 8.5) clusters these to surface "what's the model failing at?".
+        await episodic.record_async(
+            kind="chat.turn",
+            user_id=user.id,
+            outcome="ok",
+            duration_ms=t_total * 1000,
+            ref_id=convo_id_str,
+            payload={
+                "tokens": n,
+                "first_token_seconds": round(t_first, 3) if t_first else None,
+                "tokens_per_sec": round(n / max(t_total, 1e-6), 2),
+                "prompt_chars": len(prompt),
+                "kv_cache_path": str(kv_path) if kv_path else None,
+            },
+        )
 
         # Persist the assistant turn. Open a fresh session because the request
         # session is closed by the time the stream yields its last bytes.
@@ -812,43 +815,77 @@ async def chat(
                 if discovered:
                     article_text = (discovered.metadata.get("text") or "").strip()  # type: ignore[union-attr]
 
-                # If we got actual prose (not just a stream URL or empty), do a
-                # second pass with the article in the prompt as a system message.
+                # If we got actual prose (not just a stream URL or empty), pick
+                # the most relevant 1-3 sentences EXTRACTIVELY from the article
+                # and quote them verbatim. This avoids the 1.5B's habit of
+                # inventing Italian words while "summarising" web content.
+                # The LLM second-pass is kept only as a fallback when the
+                # extractive output is too short to be useful (e.g. very short
+                # article or the article shares no vocabulary with the query).
                 if discovered and article_text and len(article_text) > 80 and kind == "article":
-                    grounding = ChatMessage(
-                        role="system",
-                        content=(
-                            "## INFORMAZIONE TROVATA SU INTERNET\n"
-                            f"Fonte: {discovered.source_domain or 'web'}\n"
-                            f"Titolo: {discovered.title or ''}\n\n"
-                            f"{article_text[:1800]}\n\n"
-                            f"{_AGENT_GROUNDING_SUFFIX}"
-                        ),
-                    )
-                    # Insert the grounding right BEFORE the last user message
-                    # so the model sees: persona → runtime → grounding → user.
-                    new_msgs = list(prompt_messages)
-                    insert_at = len(new_msgs)
-                    for i in range(len(new_msgs) - 1, -1, -1):
-                        if new_msgs[i].role == "user":
-                            insert_at = i
-                            break
-                    new_msgs.insert(insert_at, grounding)
-                    new_prompt = _render_qwen_prompt(new_msgs)
-                    logger.info(
-                        "chat.agent_loop.second_pass.start",
-                        prompt_chars=len(new_prompt),
-                        article_chars=len(article_text),
-                        source=discovered.source_domain,
-                    )
-                    second_buf: list[str] = []
-                    try:
-                        async for chunk in llm.generate(new_prompt, max_new_tokens=240):
-                            second_buf.append(chunk.text)
-                    except LLMUnavailableError as exc:
-                        logger.warning("chat.agent_loop.second_pass.llm_unavailable", error=str(exc))
+                    from cara.services.extractive_summary import summarise_article
 
-                    second_text = "".join(second_buf).strip()
+                    extractive = summarise_article(
+                        article_text,
+                        query=last_user,
+                        title=discovered.title,
+                        max_chars=380,
+                    )
+                    second_text = ""
+                    used_extractive = False
+
+                    if extractive and len(extractive) >= 80:
+                        second_text = extractive
+                        used_extractive = True
+                        logger.info(
+                            "chat.agent_loop.extractive.applied",
+                            article_chars=len(article_text),
+                            extract_chars=len(extractive),
+                            source=discovered.source_domain,
+                        )
+                    else:
+                        # Fall back to the LLM second pass only when extraction
+                        # didn't yield enough text. Keeps the safety net for
+                        # short articles where TextRank-lite degenerates.
+                        grounding = ChatMessage(
+                            role="system",
+                            content=(
+                                "## INFORMAZIONE TROVATA SU INTERNET\n"
+                                f"Fonte: {discovered.source_domain or 'web'}\n"
+                                f"Titolo: {discovered.title or ''}\n\n"
+                                f"{article_text[:1800]}\n\n"
+                                f"{_AGENT_GROUNDING_SUFFIX}"
+                            ),
+                        )
+                        new_msgs = list(prompt_messages)
+                        insert_at = len(new_msgs)
+                        for i in range(len(new_msgs) - 1, -1, -1):
+                            if new_msgs[i].role == "user":
+                                insert_at = i
+                                break
+                        new_msgs.insert(insert_at, grounding)
+                        new_prompt = _render_qwen_prompt(new_msgs)
+                        logger.info(
+                            "chat.agent_loop.second_pass.start",
+                            prompt_chars=len(new_prompt),
+                            article_chars=len(article_text),
+                            extract_too_short=len(extractive) if extractive else 0,
+                            source=discovered.source_domain,
+                        )
+                        second_buf: list[str] = []
+                        try:
+                            async for chunk in llm.generate(
+                                new_prompt,
+                                max_new_tokens=140,
+                                prompt_cache_path=kv_path,
+                            ):
+                                second_buf.append(chunk.text)
+                        except LLMUnavailableError as exc:
+                            logger.warning(
+                                "chat.agent_loop.second_pass.llm_unavailable",
+                                error=str(exc),
+                            )
+                        second_text = "".join(second_buf).strip()
                     if second_text:
                         # Append a footer with the source so the user sees attribution
                         # right in the chat bubble.
@@ -948,6 +985,16 @@ async def chat(
                 )
                 await s2.commit()
 
+        bus.emit(
+            "chat.llm.done",
+            {
+                "user_id": user.id,
+                "tokens": n,
+                "total_seconds": round(t_total, 2),
+                "agent_loop_fired": agent_loop_fired,
+            },
+        )
+        sm.transition(LumoState.IDLE)
         yield _sse(
             "done",
             {

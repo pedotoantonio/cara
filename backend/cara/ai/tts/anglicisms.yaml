@@ -1,0 +1,300 @@
+# Italian TTS pronunciation overrides for English / loanword vocabulary.
+#
+# The Piper voice `it_IT-paola-medium` reads "weekend" as "uéendi" because
+# the Italian grapheme-to-phoneme has no concept of English borrowings.
+# Pre-processing the text with these substitutions before TTS gives a
+# pronunciation that sounds natural to an Italian listener, without
+# needing a second voice or code-switching infrastructure.
+#
+# Format: <english_word>: <italian_phonetic_spelling>
+# Match is case-insensitive on word boundaries (\b...\b).
+# The spelling on the right is what Piper IT will read — choose it so
+# the resulting Italian phonemes approximate English pronunciation.
+#
+# Curation principles:
+#   1. Only loanwords genuinely used in Italian everyday speech.
+#   2. The substitution must produce a pronunciation closer to the
+#      original than the default Italian reading. Test by ear.
+#   3. If a word already sounds OK in default Italian (e.g. "bar",
+#      "sport"), leave it out. Less is more.
+#   4. Stress (acute/grave accent) on the syllable Italians naturally
+#      stress when speaking the loanword.
+#
+# Admin can override or add entries via the admin panel (Step 1.2). User
+# overrides win over this base dictionary. Entries here are conservative
+# defaults — feel free to tune by ear once the family hears CARA speak.
+
+# --- Tech & digital ---
+app: èp
+apple: àppol
+backup: bàcap
+banner: bànner
+blog: blòg
+bluetooth: blutùs
+browser: bràuser
+bug: bàg
+cache: chèsc
+chat: ciàt
+click: clìc
+cloud: clàud
+computer: computèr
+cookie: cùki
+crash: cràsc
+default: difòlt
+desktop: dèsctop
+display: displèi
+download: daunlòud
+driver: dràiver
+dropdown: dròpdaun
+email: imèil
+ethernet: itèrnet
+firewall: fàiruol
+firmware: fèrmuer
+flash: flèsc
+gadget: gàget
+google: gùgol
+hacker: hàcker
+hardware: àrdver
+hashtag: hèsctag
+homepage: hòmpeig
+host: òst
+hosting: òsting
+javascript: giàvasprit
+laptop: lèptop
+layout: lèiaut
+link: lìnc
+linux: lìnucs
+livestream: làivstrim
+login: lòghin
+logout: logàut
+mail: mèil
+malware: màlver
+modem: mòdem
+mouse: màus
+network: nètuerc
+notebook: nòtbuc
+offline: oflàin
+online: onlàin
+password: pàsuord
+phishing: fìscing
+plugin: plàghin
+podcast: pòdcast
+post: pòust
+printer: prìnter
+proxy: pròxi
+ram: rèm
+rom: ròm
+router: ràuter
+screen: scrìn
+screenshot: scrìnscot
+script: scrìpt
+selfie: sèlfi
+server: sèrver
+share: scèr
+sharing: scèring
+site: sàit
+smartphone: smàrtfon
+smartwatch: smartuòc
+software: sòftver
+spam: spèm
+spyware: spàiver
+streaming: strìming
+tablet: tàblet
+tag: tèg
+team: tìm
+tech: tèc
+template: tèmpleit
+text: tèxt
+thread: trèd
+toolbar: tùlbar
+touch: tàc
+touchscreen: tàcscrin
+tweet: tuìt
+update: apdèit
+upgrade: apgrèid
+upload: aplòud
+url: ùerel
+username: iusernèim
+video: vìdeo
+videocall: vìdeocol
+videogame: vìdeoghèim
+vpn: vipièn
+wallpaper: uolpèiper
+web: uèb
+webcam: uèbchem
+webinar: uèbinar
+website: uèbsait
+widget: uìget
+wifi: uàifài
+windows: uìndous
+wireless: uàireles
+zoom: zùm
+
+# --- Streaming / media ---
+disney: dìsnei
+hulu: hùlu
+netflix: nèflix
+prime: pràim
+spotify: spotifài
+youtube: iutùb
+podcast: pòdcast
+stream: strìm
+
+# --- Social ---
+facebook: fèisbuc
+instagram: ìnstagram
+linkedin: linkedìn
+messenger: mèsengher
+snapchat: snèpciat
+tiktok: tìctoc
+twitch: tuìc
+twitter: tuìter
+whatsapp: uòtsap
+
+# --- Work & lifestyle ---
+agenda: agènda
+ambient: àmbient
+appointment: apòintment
+bike: bàic
+boss: bòs
+break: brèic
+briefing: brìfing
+business: bìsnes
+ceo: sii-i-òu
+chairman: cèrman
+challenge: ciàlengh
+checkin: ciècchin
+checkout: ciècaut
+checkup: ciècap
+cliccare: cliccàre
+coach: còuc
+coaching: còucing
+coffee: còfi
+contest: còntest
+copy: còpi
+cult: càlt
+deadline: dèdlain
+deal: dìl
+delivery: delìveri
+design: disàin
+designer: disàiner
+direct: dirèct
+download: daunlòud
+event: ivènt
+extra: èxtra
+fashion: fàscion
+feedback: fìdbac
+festival: fèstival
+fitness: fìtnes
+food: fùd
+free: frìi
+freelance: frìilans
+friendzone: frèndzòun
+full: fùl
+gym: gìm
+happy: hèppi
+hashtag: hèsctag
+hipster: hìpster
+hobby: hòbi
+home: hòum
+hot: hòt
+hotel: otèl
+job: giòb
+jogging: gióghing
+junior: gièunior
+key: kì
+killer: chìller
+kit: chìt
+leader: lìder
+leadership: lìderscìp
+location: lochèiscion
+look: lùc
+manager: mànager
+market: màrcheth
+marketing: màrcheting
+master: màster
+meeting: mìting
+mood: mùd
+news: niùs
+office: òffis
+old: òuld
+outdoor: àutdoor
+overbooking: overbùching
+pack: pèc
+party: pàrti
+pause: pòs
+peace: pìis
+performance: perfòrmans
+phone: fòun
+power: pàuer
+press: prèss
+project: pròget
+quality: cuòliti
+quiz: cuìs
+radar: radàr
+ranger: reìnger
+reaction: reèscion
+real: rìal
+rehearsal: riércal
+relax: rilàcs
+report: ripòrt
+research: risèarc
+revival: rivàival
+rider: ràider
+sales: sèils
+school: scùl
+score: scòor
+scout: scàut
+service: sèrvis
+shock: scioc
+shop: scòp
+shopping: sciòping
+short: sciòrt
+show: sciòu
+showroom: sciòurum
+single: sìnghol
+sister: sìster
+size: sàis
+skill: schìl
+slide: slàid
+sound: sàund
+sport: sport
+sponsor: spònsor
+staff: stèf
+star: stàr
+start: stàrt
+startup: stàrtap
+stop: stop
+store: stòr
+stress: strèss
+style: stàil
+super: sùper
+target: tàrghet
+time: tàim
+top: tòp
+training: trèining
+trend: trènd
+tutor: tiùtor
+unique: iunìc
+update: apdèit
+volunteer: volontièr
+wallet: uòlet
+weekend: uìkend
+whatever: uatèver
+work: uòrc
+workshop: uòrcsciop
+world: uòrld
+wow: uàu
+yes: iès
+young: iòng
+
+# --- Brands users speak often ---
+amazon: àmazon
+apple: àppol
+google: gùgol
+ikea: ikèa
+microsoft: màicrosoft
+nike: nàiki
+samsung: sàmsung
+starbucks: stàrbacs
+xbox: ìxbox

@@ -78,6 +78,10 @@ class LLMService:
         max_new_tokens: int,
         *,
         models: dict[str, str] | None = None,
+        temperature: float | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        repeat_penalty: float | None = None,
     ) -> None:
         # Backwards compatibility: if no `models` map is provided, the
         # legacy single-model boot still works (the only mode = "default"
@@ -91,6 +95,15 @@ class LLMService:
         self._lib_path = Path(lib_path)
         self._max_context_len = max_context_len
         self._default_max_new_tokens = max_new_tokens
+        # Sampling defaults baked into the model at init time. RKLLM 1.1.0
+        # uses these for every rkllm_run; per-request overrides through the
+        # public C API are not supported, so the only way to influence
+        # sampling is at load. None → keep the runtime's createDefaultParam
+        # value (RKLLM 1.1.0 defaults: temp=0.8, top_k=40, top_p=0.9, rp=1.1).
+        self._init_temperature = temperature
+        self._init_top_k = top_k
+        self._init_top_p = top_p
+        self._init_repeat_penalty = repeat_penalty
         self._lib: ctypes.CDLL | None = None
         self._handle: ctypes.c_void_p | None = None
         # CFUNCTYPE wrappers must outlive the C library or it crashes; keep a ref.
@@ -131,6 +144,25 @@ class LLMService:
         param.skip_special_token = True
         param.is_async = False
         param.extend_param.base_domain_id = 0
+        # Apply admin/config sampling defaults — without this the runtime's
+        # createDefaultParam values win silently. We keep `None` semantics
+        # so an empty config falls back to the runtime defaults.
+        if self._init_temperature is not None:
+            param.temperature = float(self._init_temperature)
+        if self._init_top_k is not None:
+            param.top_k = int(self._init_top_k)
+        if self._init_top_p is not None:
+            param.top_p = float(self._init_top_p)
+        if self._init_repeat_penalty is not None:
+            param.repeat_penalty = float(self._init_repeat_penalty)
+        logger.info(
+            "llm.load.sampling",
+            temperature=float(param.temperature),
+            top_k=int(param.top_k),
+            top_p=float(param.top_p),
+            repeat_penalty=float(param.repeat_penalty),
+            max_new_tokens=int(param.max_new_tokens),
+        )
 
         self._handle = ctypes.c_void_p()
         rc = self._lib.rkllm_init(
@@ -167,11 +199,20 @@ class LLMService:
         top_k: int | None = None,
         top_p: float | None = None,
         repeat_penalty: float | None = None,
+        prompt_cache_path: str | os.PathLike[str] | None = None,
     ) -> AsyncIterator[TokenChunk]:
         """Stream `TokenChunk`s for `prompt`.
 
         Backpressure: the caller awaits each token; the runtime thread fills
         a thread-safe queue, the asyncio loop drains via `to_thread`.
+
+        `prompt_cache_path`: when set, RKLLM persists the KV cache for this
+        run to the given file (`save_prompt_cache=1`). The next generation
+        that passes the same path skips prefill on the shared prefix —
+        TTFT for follow-up turns drops from ~200 ms to ~50 ms in practice.
+        Caller is responsible for invalidating the file when the prefix
+        changes (system prompt edited, history truncated, …); see
+        `cara.ai.kv_cache.flush_one`.
         """
         if not self._loaded or self._lib is None or self._handle is None:
             raise LLMUnavailableError("LLM not initialised")
@@ -184,6 +225,7 @@ class LLMService:
                 top_k=top_k,
                 top_p=top_p,
                 repeat_penalty=repeat_penalty,
+                prompt_cache_path=prompt_cache_path,
             ):
                 yield chunk
 
@@ -196,6 +238,7 @@ class LLMService:
         top_k: int | None,
         top_p: float | None,
         repeat_penalty: float | None,
+        prompt_cache_path: str | os.PathLike[str] | None = None,
     ) -> AsyncIterator[TokenChunk]:
         assert self._lib is not None and self._handle is not None  # noqa: S101
 
@@ -227,7 +270,18 @@ class LLMService:
         infer = rk.RKLLMInferParam()
         infer.mode = rk.RKLLM_INFER_GENERATE
         infer.lora_params = None
-        infer.prompt_cache_params = None
+
+        # Hold a reference to the cache-param struct so the C side keeps
+        # seeing valid memory for the entire rkllm_run. Without this
+        # local binding the GC could free the struct mid-call.
+        cache_struct: rk.RKLLMPromptCacheParam | None = None
+        if prompt_cache_path is not None:
+            cache_struct = rk.RKLLMPromptCacheParam()
+            cache_struct.save_prompt_cache = 1
+            cache_struct.prompt_cache_path = str(prompt_cache_path).encode("utf-8")
+            infer.prompt_cache_params = ctypes.pointer(cache_struct)
+        else:
+            infer.prompt_cache_params = None
 
         run_rc: dict[str, int | None] = {"value": None}
         finished = threading.Event()
@@ -424,6 +478,10 @@ async def init_llm_service() -> LLMService | None:
         max_context_len=settings.llm_max_context_len,
         max_new_tokens=settings.llm_max_new_tokens,
         models=models,
+        temperature=settings.llm_temperature,
+        top_k=settings.llm_top_k,
+        top_p=settings.llm_top_p,
+        repeat_penalty=settings.llm_repeat_penalty,
     )
     await _service.aload()
     return _service

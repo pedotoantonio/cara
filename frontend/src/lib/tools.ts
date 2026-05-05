@@ -61,10 +61,10 @@ export interface ParsedAssistantMessage {
 }
 
 export function parseToolCalls(content: string): ParsedAssistantMessage {
-  // Collect every match in order, but only keep the FIRST valid tool call.
-  // The 1.5B model occasionally "tool-floods" emitting several at once when
-  // the user asked for a single thing; the system prompt says one per message
-  // and we enforce that here defensively.
+  // Collect every valid tool call in order, deduped by (type + key arg). The
+  // model is allowed to emit multiple tools per turn (e.g. "aggiungi pane e
+  // latte alla spesa" → 2 add_shopping). We cap at 4 to limit blast radius if
+  // it tool-floods. Unknown markers are stripped from text but ignored.
   const allCalls: ToolCall[] = [];
   const cleaned = content.replace(TOOL_LINE_RE, (_match, name: string, argstr: string) => {
     const args = parseArgs(argstr);
@@ -105,9 +105,36 @@ export function parseToolCalls(content: string): ParsedAssistantMessage {
     }
     return ''; // strip the tool line from user-visible content
   });
-  const firstValid = allCalls.find((c) => c.type !== 'unknown');
-  const toolCalls = firstValid ? [firstValid] : [];
-  return { cleaned: cleaned.replace(/\n{3,}/g, '\n\n').trim(), toolCalls };
+  const valid = allCalls.filter((c) => c.type !== 'unknown');
+  if (valid.length === 0) {
+    return { cleaned: cleaned.replace(/\n{3,}/g, '\n\n').trim(), toolCalls: [] };
+  }
+  // Anti-flood: keep only calls whose type matches the FIRST valid one.
+  // Lets "aggiungi pane e latte" → 2 add_shopping work, but rejects mixed
+  // tool flooding (Step 41 regression). Dedup identical content.
+  const firstType = valid[0].type;
+  const seen = new Set<string>();
+  const deduped: ToolCall[] = [];
+  for (const c of valid) {
+    if (c.type !== firstType) continue;
+    const key =
+      c.type === 'add_task' || c.type === 'complete_task' || c.type === 'add_shopping'
+        ? `${c.type}:${c.title.toLowerCase()}`
+        : c.type === 'add_note'
+          ? `add_note:${c.title.toLowerCase()}|${c.body.slice(0, 40).toLowerCase()}`
+          : c.type === 'discover'
+            ? `discover:${c.kind}:${c.query.toLowerCase()}`
+            : c.type === 'play_radio'
+              ? `play_radio:${c.station.toLowerCase()}`
+              : c.type === 'get_news'
+                ? `get_news:${c.category}`
+                : c.type;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(c);
+    if (deduped.length >= 6) break;
+  }
+  return { cleaned: cleaned.replace(/\n{3,}/g, '\n\n').trim(), toolCalls: deduped };
 }
 
 /** Default copy when the model emits only tool lines and no actual prose. */

@@ -23,6 +23,7 @@ from cara.cda.orchestrator import (
     record_feedback_regenerated,
     record_feedback_started,
     record_feedback_stopped,
+    set_item_active,
 )
 
 __all__ = [
@@ -37,4 +38,5 @@ __all__ = [
     "record_feedback_regenerated",
     "record_feedback_started",
     "record_feedback_stopped",
+    "set_item_active",
 ]

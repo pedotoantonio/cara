@@ -54,6 +54,14 @@ async def shutdown_engine() -> None:
         logger.info("db.engine.closed")
 
 
+def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    """Return the sessionmaker for code that runs outside the request scope
+    (e.g. background tasks, the watchdog). Raises if not initialised."""
+    if _sessionmaker is None:
+        raise RuntimeError("DB engine not initialised — call init_engine() first")
+    return _sessionmaker
+
+
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency: yield a session, rollback on error, close after."""
     if _sessionmaker is None:

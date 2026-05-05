@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { whoIsHome, type PersonAtHome } from '../api/family';
 import { useReactions } from '../lib/reactions';
+import { Badge, Icon, cn } from '../design';
 import { CaraFaceFX } from './CaraFaceFX';
 
 interface WelcomeScreenProps {
@@ -10,28 +11,19 @@ interface WelcomeScreenProps {
 }
 
 const SUGGESTIONS = [
-  { label: 'Chi sei?', prompt: 'Ciao CARA, chi sei?' },
-  { label: 'Cosa puoi fare?', prompt: 'Cosa sai fare? Dimmi tutte le tue funzionalità.' },
-  {
-    label: 'Aggiungi una task',
-    prompt: 'Ricordami di comprare il pane domani.',
-  },
-  {
-    label: 'Chi è in casa?',
-    prompt: 'Chi è in casa adesso?',
-  },
-  {
-    label: 'Le news di oggi',
-    prompt: 'Quali sono le notizie principali del mondo oggi?',
-  },
-  {
-    label: 'Memoria',
-    prompt: 'Riesci a ricordare le cose che ti dico durante la conversazione? Fammi un esempio.',
-  },
-  {
-    label: 'Roadmap',
-    prompt: 'Quali funzionalità arriveranno in futuro? Cosa avrai presto?',
-  },
+  { label: 'Chi sei?',          prompt: 'Ciao Cara, chi sei?',                        icon: 'mood'    as const },
+  { label: 'Cosa puoi fare?',   prompt: 'Cosa sai fare? Dimmi tutte le tue funzionalità.', icon: 'sparkle' as const },
+  { label: 'Aggiungi una task', prompt: 'Ricordami di comprare il pane domani.',        icon: 'task'    as const },
+  { label: 'Chi è in casa?',    prompt: 'Chi è in casa adesso?',                        icon: 'family'  as const },
+  { label: 'Le news di oggi',   prompt: 'Quali sono le notizie principali del mondo oggi?', icon: 'news' as const },
+  { label: 'Memoria',           prompt: 'Riesci a ricordare le cose che ti dico durante la conversazione? Fammi un esempio.', icon: 'spark' as const },
+  { label: 'Roadmap',           prompt: 'Quali funzionalità arriveranno in futuro? Cosa avrai presto?', icon: 'calendar' as const },
+];
+
+const HINTS = [
+  { icon: 'chat'   as const, text: 'Chiacchiera in italiano, con memoria della conversazione.' },
+  { icon: 'task'   as const, text: 'Crea task, lista spesa, note rapide con la voce o il testo.' },
+  { icon: 'family' as const, text: 'Sa chi è in casa e si adatta al ruolo di chi le parla.' },
 ];
 
 function PresenceBadge() {
@@ -47,27 +39,29 @@ function PresenceBadge() {
   if (!available || people === null) return null;
   if (people.length === 0) {
     return (
-      <p className="text-xs text-slate-500">In questo momento non vedo nessuno in casa.</p>
+      <Badge tone="muted" dot size="sm">
+        nessuno in casa al momento
+      </Badge>
     );
   }
   const names = people.map((p) => p.name).join(', ');
   return (
-    <p className="text-xs text-slate-400">
-      <span className="text-emerald-400">●</span> In casa adesso: {names}
-    </p>
+    <Badge tone="ok" dot size="sm">
+      in casa: {names}
+    </Badge>
   );
 }
 
 export function WelcomeScreen({ userName, onPick }: WelcomeScreenProps) {
   const reactions = useReactions();
   return (
-    <div className="h-full flex items-center justify-center">
+    <div className="h-full flex items-center justify-center px-4 py-6">
       <div className="max-w-xl w-full space-y-6 text-center">
         <div className="flex justify-center">
           <CaraFaceFX
             energy="idle"
             emotion="joyful"
-            size={140}
+            size={132}
             gestures
             onTap={() =>
               reactions.trigger('wake', { message: `Ciao ${userName}!` })
@@ -78,40 +72,61 @@ export function WelcomeScreen({ userName, onPick }: WelcomeScreenProps) {
             }
           />
         </div>
-        <p className="text-[11px] text-slate-600">Tocca o accarezza CARA</p>
-        <div className="space-y-2">
-          <p className="text-4xl font-light tracking-tight">Ciao {userName} 👋</p>
-          <p className="text-slate-400">
-            Sono <span className="text-emerald-400 font-medium">CARA</span>, l'assistente AI di
-            casa. Posso aiutarti a:
+
+        <p className="text-2xs text-fg-muted">Tocca o accarezza Cara</p>
+
+        <div className="space-y-2.5">
+          <h1 className="font-display text-3xl md:text-4xl text-fg leading-tight">
+            Ciao {userName}
+          </h1>
+          <p className="text-sm text-fg-soft max-w-md mx-auto leading-relaxed">
+            Sono <span className="text-accent font-medium">Cara</span>, l'assistente AI di
+            casa. Posso aiutarti a coordinare la giornata, ricordare quello che conta, e
+            ascoltare quando hai bisogno.
           </p>
-          <PresenceBadge />
+          <div className="flex justify-center pt-1">
+            <PresenceBadge />
+          </div>
         </div>
 
-        <ul className="text-left text-sm text-slate-300 space-y-1.5 inline-block">
-          <li>💬 Chiacchierare e rispondere a domande in italiano</li>
-          <li>🧠 Ricordare nomi e dettagli durante la conversazione</li>
-          <li>📚 Conservare le tue chat e riprenderle quando vuoi</li>
+        <ul className="text-left text-sm text-fg space-y-2 inline-block">
+          {HINTS.map((h) => (
+            <li key={h.text} className="flex items-start gap-2.5">
+              <span className="text-accent mt-0.5 shrink-0">
+                <Icon name={h.icon} size={16} />
+              </span>
+              <span>{h.text}</span>
+            </li>
+          ))}
         </ul>
 
         <div className="pt-2">
-          <p className="text-xs text-slate-500 mb-3">Prova a chiedermi:</p>
+          <p className="text-xs uppercase tracking-wider text-fg-muted mb-3">
+            Prova a chiedermi
+          </p>
           <div className="flex flex-wrap gap-2 justify-center">
             {SUGGESTIONS.map((s) => (
               <button
                 key={s.label}
                 type="button"
                 onClick={() => onPick(s.prompt)}
-                className="rounded-full bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3 py-1.5 text-xs text-slate-200 transition"
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-pill',
+                  'bg-surface1 hover:bg-accent/12 hover:text-accent-dark',
+                  'ring-1 ring-fg/8 hover:ring-accent/30',
+                  'px-3 py-1.5 text-xs font-medium text-fg',
+                  'transition-all duration-180 ease-spring',
+                )}
               >
+                <Icon name={s.icon} size={13} />
                 {s.label}
               </button>
             ))}
           </div>
         </div>
 
-        <p className="text-xs text-slate-600 pt-4">
-          Più funzioni in arrivo: calendario, lista della spesa, integrazione casa…
+        <p className="text-2xs text-fg-muted pt-2">
+          Più funzioni in arrivo: calendario, integrazione casa, scoperta contenuti…
         </p>
       </div>
     </div>

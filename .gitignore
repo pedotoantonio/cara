@@ -60,3 +60,7 @@ data/whisper-cache/CACHEDIR.TAG
 # Piper voices that auto-download at runtime
 data/tts/piper/voices/*.onnx
 data/tts/piper/voices/*.onnx.json
+
+# Local DB backups (regenerable via scripts/backup-postgres.sh)
+backups/*.sql.gz
+backups/*.sql

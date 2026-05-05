@@ -84,16 +84,123 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
             ),
         },
     ),
-    # ---- Tasks list -------------------------------------------------------
+    # ---- Capabilities — "cosa puoi fare", "chi sei", "aiuto" --------------
+    # CARA must NEVER answer "non so", "non posso" to its own capabilities.
+    # This rule fires first so a misroute by the LLM is impossible.
     (
         re.compile(
-            r"^(?:cosa\s+devo\s+fare|mostra(?:mi)?\s+(?:la\s+)?lista|"
-            r"che\s+cose\s+devo\s+fare|le\s+mie\s+task|"
-            r"(?:fammi\s+)?vedere\s+la\s+lista)\s*[?!.]*$",
+            r"^(?:cara,?\s*)?"
+            r"(?:cosa\s+(?:sai|puoi)\s+fare|"
+            r"a\s+cosa\s+servi|"
+            r"come\s+(?:funzioni|posso\s+usarti)|"
+            r"(?:dim[mn]i|spiegami)\s+cosa\s+(?:sai|puoi)\s+fare|"
+            r"aiuto|help|"
+            r"quali\s+sono\s+le\s+tue\s+(?:funzioni|funzionalit[àa])|"
+            r"funzionalit[àa])\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "capabilities",
+        "",  # filled by resolver from a static block
+        lambda m: {},
+    ),
+    # ---- Identity ---------------------------------------------------------
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?"
+            r"(?:chi\s+sei|come\s+ti\s+chiami|presentati|"
+            r"qual\s+[èe]\s+il\s+tuo\s+nome)\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "identity",
+        "",
+        lambda m: {},
+    ),
+    # ---- Appointments — tasks WITH due_date only --------------------------
+    # The user thinks of "appuntamenti" as the subset of tasks that have a
+    # due date. Cheap to satisfy: filter on the way out.
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?"
+            r"(?:elenca(?:mi)?|mostra(?:mi)?|dim[mn]i|fammi\s+vedere|leggi(?:mi)?|quali\s+sono)\s+"
+            r"(?:tutti\s+(?:gli\s+|i\s+)?|i\s+|gli\s+)?(?:miei\s+)?"
+            r"(?:appuntament(?:i|o)|impegni|impegno)"
+            r"(?:\s+di\s+oggi|\s+di\s+domani|\s+di\s+questa\s+settimana)?"
+            r"\s*[?!.]*$|"
+            r"^(?:i\s+miei\s+|gli\s+|tutti\s+gli\s+)?appuntament(?:i|o)\s*[?!.]*$|"
+            r"^(?:cosa\s+ho|che\s+(?:cosa\s+)?ho)\s+"
+            r"(?:in\s+programma|da\s+fare\s+(?:oggi|domani|questa\s+settimana))\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "list_appointments",
+        "Ecco gli appuntamenti.",
+        lambda m: {"scope": _appt_scope(m.group(0).lower())},
+    ),
+    # ---- Tasks list, today only -------------------------------------------
+    # Must come BEFORE the generic list_tasks rule so "oggi" wins.
+    (
+        re.compile(
+            r"^(?:cosa\s+devo\s+fare\s+oggi|"
+            r"(?:mostra(?:mi)?|dim[mn]i|fammi\s+vedere)\s+"
+            r"(?:i\s+|le\s+|la\s+lista\s+(?:de(?:i|lle)\s+)?)?(?:task|attivit[àa]|cose)\s+(?:di\s+)?oggi|"
+            r"(?:i\s+|le\s+)?(?:miei\s+)?(?:task|attivit[àa]|cose)\s+(?:di\s+)?oggi|"
+            r"quali\s+(?:sono\s+(?:i|le)\s+)?(?:miei\s+)?(?:task|attivit[àa])\s+(?:di\s+)?oggi)"
+            r"\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "list_tasks_today",
+        "Ecco le cose di oggi.",
+        lambda m: {},
+    ),
+    # ---- Tasks list (all) -------------------------------------------------
+    (
+        re.compile(
+            r"^(?:cosa\s+devo\s+fare|"
+            r"(?:mostra(?:mi)?|dim[mn]i|fammi\s+vedere|elenca(?:mi)?)\s+"
+            r"(?:tutt[ei]\s+)?"
+            r"(?:la\s+(?:mia\s+)?lista(?:\s+(?:de(?:i|lle))?\s+(?:task|attivit[àa]|cose|cose\s+da\s+fare))?|"
+            r"(?:i\s+|le\s+)?(?:miei\s+|mie\s+)?(?:task|attivit[àa]|cose\s+da\s+fare))|"
+            r"che\s+cose\s+devo\s+fare|"
+            r"(?:i\s+|le\s+)?(?:miei\s+|mie\s+)?(?:task|attivit[àa])\s+totali|"
+            r"(?:fammi\s+)?vedere\s+(?:la\s+)?(?:mia\s+)?lista|"
+            r"(?:i\s+|le\s+)(?:miei\s+|mie\s+)(?:task|attivit[àa]|cose\s+da\s+fare)|"
+            r"quali\s+(?:sono\s+(?:i|le)\s+)?(?:miei\s+|mie\s+)?(?:task|attivit[àa]|cose\s+da\s+fare))"
+            r"\s*[?!.]*$",
             re.IGNORECASE,
         ),
         "list_tasks",
         "Ecco la tua lista.",
+        lambda m: {},
+    ),
+    # ---- Shopping list (read) --------------------------------------------
+    (
+        re.compile(
+            r"^(?:cosa\s+devo\s+comprare|"
+            r"(?:mostra(?:mi)?|dim[mn]i|fammi\s+vedere|elenca(?:mi)?|leggi(?:mi)?)\s+"
+            r"(?:la\s+)?(?:mia\s+)?(?:lista\s+(?:della\s+)?)?spesa|"
+            r"(?:la\s+)?(?:mia\s+)?lista\s+(?:della\s+)?spesa|"
+            r"(?:cosa|che\s+cosa)\s+(?:c['e]?\s*[èe]|ho|abbiamo)\s+"
+            r"(?:nella\s+|sulla\s+)?(?:lista\s+(?:della\s+)?)?spesa|"
+            r"(?:la\s+)?spesa\s+da\s+fare|"
+            r"quali\s+(?:sono\s+)?(?:gli\s+articoli\s+)?(?:nella\s+|della\s+)?(?:lista\s+)?spesa)"
+            r"\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "list_shopping",
+        "Ecco la spesa.",
+        lambda m: {},
+    ),
+    # ---- Notes list ------------------------------------------------------
+    (
+        re.compile(
+            r"^(?:(?:mostra(?:mi)?|dim[mn]i|fammi\s+vedere|elenca(?:mi)?|leggi(?:mi)?)\s+"
+            r"(?:le\s+|tutte\s+le\s+)?(?:mie\s+)?note|"
+            r"(?:le\s+|tutte\s+le\s+)?(?:mie\s+)?note|"
+            r"quali\s+(?:sono\s+(?:le\s+)?)?(?:mie\s+)?note)"
+            r"\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "list_notes",
+        "Ecco le tue note.",
         lambda m: {},
     ),
     # ---- Add task ---------------------------------------------------------
@@ -110,6 +217,80 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
         "Aggiunto.",
         lambda m: {"title": m.group("title").strip()},
     ),
+    # ---- Mark shopping bought (BEFORE delete_task — "ho comprato X" matches first) ----
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?"
+            r"(?:ho\s+(?:gi[àa]\s+)?(?:comprato|preso)|"
+            r"comprato|preso|gi[àa]\s+preso)\s+(?P<title>.+?)\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "mark_shopping_bought",
+        "Segnato come preso.",
+        lambda m: {"title": m.group("title").strip()},
+    ),
+    # ---- Delete shopping (BEFORE delete_task — "X dalla spesa" wins) -----
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?"
+            r"(?:cancella(?:mi)?|elimina(?:mi)?|rimuovi(?:mi)?|togli(?:mi)?)\s+"
+            r"(?P<title>.+?)\s+"
+            r"(?:dalla\s+(?:lista\s+(?:della\s+)?)?spesa)\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "delete_shopping",
+        "Tolto dalla spesa.",
+        lambda m: {"title": m.group("title").strip()},
+    ),
+    # ---- Complete a task by title (mark done) -----------------------------
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?"
+            r"(?:ho\s+(?:fatto|finito|completato)|fatto|completata?)\s+(?P<title>.+?)\s*[?!.]*$|"
+            r"^(?:segna\s+come\s+(?:fatta?|completata?)|completa)\s+(?P<title2>.+?)\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "complete_task",
+        "Fatto.",
+        lambda m: {"title": (m.group("title") or m.group("title2") or "").strip()},
+    ),
+    # ---- Delete note (BEFORE delete_task — "nota X" wins) ---------------
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?"
+            r"(?:cancella(?:mi)?|elimina(?:mi)?|rimuovi(?:mi)?)\s+"
+            r"(?:la\s+)?nota\s+(?P<title>.+?)\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "delete_note",
+        "Nota eliminata.",
+        lambda m: {"title": m.group("title").strip()},
+    ),
+    # ---- Delete task by title --------------------------------------------
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?"
+            r"(?:cancella(?:mi)?|elimina(?:mi)?|rimuovi(?:mi)?|togli(?:mi)?|annulla)\s+"
+            r"(?:la\s+task|l['\s]?attivit[àa])?\s*"
+            r"(?P<title>.+?)\s*"
+            r"(?:dalla\s+(?:mia\s+)?lista(?:\s+(?:dei|delle)\s+(?:task|attivit[àa]|cose))?)?"
+            r"\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "delete_task",
+        "Eliminata.",
+        lambda m: {"title": m.group("title").strip()},
+    ),
+    # ---- Duplicate a task ------------------------------------------------
+    (
+        re.compile(
+            r"^(?:duplica(?:mi)?|copia(?:mi)?)\s+(?:la\s+task\s+|l['\s]?attivit[àa]\s+)?(?P<title>.+?)\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "duplicate_task",
+        "Duplicata.",
+        lambda m: {"title": m.group("title").strip()},
+    ),
     # ---- Add shopping (must be checked BEFORE add_task) -------------------
     # We solve the precedence by re-checking after add_task fires — see
     # match() below.
@@ -122,6 +303,18 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
         "add_shopping",
         "Messo nella spesa.",
         lambda m: {"title": m.group("title").strip()},
+    ),
+    # ---- Notes: add (delete moved up before delete_task) -----------------
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?"
+            r"(?:salva(?:mi)?\s+(?:una\s+)?nota|scrivi(?:mi)?\s+(?:una\s+)?nota|prendi(?:mi)?\s+(?:una\s+)?nota|appunta(?:mi)?)"
+            r"(?:\s+(?:che|di))?\s+(?P<body>.+?)\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "add_note",
+        "Nota salvata.",
+        lambda m: {"body": m.group("body").strip()},
     ),
     # ---- Who is home ------------------------------------------------------
     (
@@ -162,7 +355,44 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
         "Cerco e ti dico.",
         lambda m: {"query": m.group("q").strip(), "kind": "article"},
     ),
+    # ---- Sleep / wake — LUMO-style FSM transitions (no LLM, no hardware) --
+    # Transitions the global StateMachine into sleeping/idle so frontend
+    # bridges (Edo expression, halo color) update without a chat round-trip.
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?(?:buona\s*notte|buonanotte|"
+            r"vai\s+a\s+dormire|dormi|riposa(?:ti)?|"
+            r"a\s+dopo|spegniti)\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "go_sleep",
+        "Buonanotte.",
+        lambda m: {},
+    ),
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?(?:sveglia(?:ti)?|"
+            r"buon\s*giorno|buongiorno|"
+            r"ciao\s+cara|ehi\s+cara|alzati)\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "wake_up",
+        "Eccomi.",
+        lambda m: {},
+    ),
 ]
+
+
+def _appt_scope(q: str) -> str:
+    """Pick "today" / "tomorrow" / "week" / "all" from the user phrasing."""
+    q = q.lower()
+    if "domani" in q:
+        return "tomorrow"
+    if "settimana" in q:
+        return "week"
+    if "oggi" in q or "in programma" in q:
+        return "today"
+    return "all"
 
 
 def _validate_routed(routed: RoutedIntent, query: str) -> RoutedIntent | None:

@@ -5,6 +5,7 @@ import { changePassword, updateMe, type User } from '../api/auth';
 import { loadPrefs, savePrefs, type TTSEngine } from '../lib/userPrefs';
 import { playSound, setSoundsEnabled, setVolume } from '../lib/sounds';
 import { browserTtsAvailable, speak, stopSpeaking } from '../lib/speech';
+import { openInstallPrompt } from '../components/InstallPwaPrompt';
 
 interface OutletCtx {
   user: User;
@@ -350,7 +351,64 @@ export function SettingsPage() {
         <section className="space-y-2 rounded-2xl bg-slate-800/40 border border-slate-700/60 p-5 text-xs text-slate-400">
           <h2 className="text-sm font-medium text-slate-200">Informazioni</h2>
           <p>CARA — Casa AI for Routines &amp; Activities</p>
-          <p>Versione 0.1 · build privato</p>
+          <p>
+            Versione <code className="text-emerald-300">{__APP_VERSION__}</code>
+            {' · build '}
+            <span title={__BUILD_TIME__}>{__BUILD_TIME__.slice(0, 10)}</span>
+          </p>
+          <p>
+            <button
+              type="button"
+              onClick={openInstallPrompt}
+              className="mt-1 rounded-lg bg-emerald-600/90 hover:bg-emerald-500
+                         px-3 py-1.5 text-xs font-medium text-white"
+            >
+              Installa CARA come app
+            </button>
+          </p>
+          <details className="mt-2 rounded-lg bg-slate-900/60 border border-slate-700/50 p-3">
+            <summary className="cursor-pointer text-slate-200 text-xs font-medium">
+              Certificato di sicurezza (richiesto per installare l'app)
+            </summary>
+            <div className="mt-2 space-y-2 text-[11px] leading-snug">
+              <p>
+                Per installare CARA come app devi prima dire al telefono che il certificato della
+                casa è fidato. È un'operazione una tantum.
+              </p>
+              <p>
+                <a
+                  href="/cara-ca.crt"
+                  download="cara-ca.crt"
+                  className="inline-block rounded-lg bg-emerald-600/90 hover:bg-emerald-500
+                             px-3 py-1.5 text-xs font-medium text-white"
+                >
+                  Scarica certificato CARA
+                </a>
+              </p>
+              <p className="text-slate-300">
+                <strong>Android</strong> · Impostazioni → Sicurezza → Cifratura e credenziali →
+                Installa un certificato → "Certificato CA" → seleziona il file scaricato.
+              </p>
+              <p className="text-slate-300">
+                <strong>iPhone / iPad</strong> · apri il file in Safari, accetta di installare il
+                profilo. Poi: Impostazioni → Generali → VPN e gestione dispositivi → installa.
+                Infine: Impostazioni → Generali → Info → Impostazioni di fiducia certificati →
+                attiva "mkcert apedo".
+              </p>
+              <p className="text-slate-300">
+                <strong>Windows</strong> · doppio click sul file → "Installa certificato" →
+                "Computer locale" → "Autorità di certificazione radice attendibili".
+              </p>
+              <p className="text-slate-300">
+                <strong>Mac</strong> · apri in Accesso Portachiavi → portachiavi "Sistema" →
+                doppio click sul certificato → "Considera sempre attendibile".
+              </p>
+              <p className="text-slate-500">
+                Dopo l'installazione, ricarica questa pagina e l'opzione "Installa CARA" comparirà
+                nel menu del browser.
+              </p>
+            </div>
+          </details>
           <p>
             Costruita con software open source. Vedi i file{' '}
             <code className="text-emerald-300">/opt/cara/LICENSE</code> e{' '}

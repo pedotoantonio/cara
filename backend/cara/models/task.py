@@ -32,3 +32,10 @@ class Task(Base):
     due_date: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    # Set when the reminder for this task has been pushed. Stops us from
+    # re-pushing on every scheduler tick once we've already notified.
+    # Cleared if the user re-schedules (PATCH due_date), so the new
+    # window can fire its own reminder.
+    reminded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
