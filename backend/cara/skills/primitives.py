@@ -15,6 +15,10 @@ from cara.services import shopping as shopping_svc
 from cara.services.recipe_chain import extract_ingredients
 from cara.skills.registry import primitive
 
+# Side-effect import: register the 4 generic Phase-B primitives
+# (extract_list, summarize, ask_user, read_url) on the same registry.
+from cara.skills import primitives_generic as _generic  # noqa: F401
+
 log = structlog.get_logger(__name__)
 
 

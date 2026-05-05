@@ -496,19 +496,15 @@ async def budget_drift_warning(ctx: RuleContext) -> Suggestion | None:
         log.debug("budget_drift.rollup_failed", error=str(exc))
         return None
 
-    # rollup is expected to be list[dict] with keys category/target_cents/spent_cents
     drifters = []
-    for row in rollup or []:
-        try:
-            target = int(row.get("target_amount_cents") or 0)
-            spent = int(row.get("spent_cents") or 0)
-        except (TypeError, ValueError):
-            continue
+    for cat_row in (rollup.categories if rollup else []):
+        target = cat_row.target_cents or 0
+        spent = cat_row.spent_cents or 0
         if target <= 0:
             continue
         ratio = spent / target
         if ratio >= 0.80:
-            drifters.append((row.get("category") or "?", ratio))
+            drifters.append((cat_row.category or "?", ratio))
 
     if not drifters:
         return None
