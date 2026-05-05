@@ -318,13 +318,13 @@ export function AdminPage() {
               [
                 {
                   v: 'fast',
-                  label: '⚡ Veloce — Qwen2.5 1.5B',
-                  desc: '~9 tok/s, TTFT 0.3 s. Default, ottimo per chat e comandi rapidi.',
+                  label: 'Veloce — Qwen2.5 1.5B',
+                  desc: '~3.5 tok/s, TTFT 15 s sotto Frigate. Default. Risposte brevi, math/date instradati a quick_calc.',
                 },
                 {
                   v: 'quality',
-                  label: '🎯 Qualità — Qwen2.5 3B',
-                  desc: '~4 tok/s, TTFT 0.7 s. Meno hallucinazione, instruction-following migliore.',
+                  label: 'Qualità — Qwen2.5 3B',
+                  desc: '~1.6 tok/s, TTFT 28 s sotto Frigate. Identità più coerente, riassunti meno inventati. Doppio del tempo di risposta.',
                 },
               ] as const
             ).map((q) => {

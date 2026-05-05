@@ -9,6 +9,7 @@ import { AppShell } from './components/AppShell';
 import { DebugOverlay } from './components/DebugOverlay';
 import { InstallPwaPrompt } from './components/InstallPwaPrompt';
 import { Login } from './components/Login';
+import { ThemeProvider, ToastProvider } from './design';
 import { CdaPlayerProvider } from './lib/cdaPlayer';
 import { RadioPlayerProvider } from './lib/radioPlayer';
 import { ReactionsProvider, useReactions } from './lib/reactions';
@@ -49,18 +50,25 @@ function BirthdayWatcher({ user }: { user: User }) {
   }, [user, reactions]);
   return null;
 }
+import { AdminMemoryPage } from './routes/AdminMemoryPage';
 import { AdminPage } from './routes/AdminPage';
+import { AdminProactivityPage } from './routes/AdminProactivityPage';
+import { AdminSmartHomePage } from './routes/AdminSmartHomePage';
 import { ChatPage } from './routes/ChatPage';
 import { DiagnosticsPage } from './routes/DiagnosticsPage';
 import { DiscoveriesPage } from './routes/DiscoveriesPage';
 import { FaceLabPage } from './routes/FaceLabPage';
 import { HomePage } from './routes/HomePage';
+import { IntegrationsPage } from './routes/IntegrationsPage';
+import { MemoryPage } from './routes/MemoryPage';
 import { NewsPage } from './routes/NewsPage';
 import { NotesPage } from './routes/NotesPage';
+import { ProposalsPage } from './routes/ProposalsPage';
 import { RadioPage } from './routes/RadioPage';
 import { SettingsPage } from './routes/SettingsPage';
 import { ShoppingPage } from './routes/ShoppingPage';
 import { TasksPage } from './routes/TasksPage';
+import { WalletPage } from './routes/WalletPage';
 
 type AuthState = { kind: 'loading' } | { kind: 'anonymous' } | { kind: 'authenticated'; user: User };
 
@@ -87,6 +95,17 @@ export default function App() {
     getVoiceConfig()
       .then((cfg) => setVoiceConfig(cfg))
       .catch(() => undefined);
+    // Re-POST the existing browser push subscription so a backend that
+    // lost its row (or a fresh device login) gets re-bound silently.
+    void import('./lib/push').then(({ reaffirmSubscriptionSilently }) =>
+      reaffirmSubscriptionSilently(),
+    );
+    // Start the WebSocket family sync. Cross-tab reconcile happens via
+    // `onFamilyEvent` listeners in each route that owns mutable lists.
+    void import('./lib/familySync').then(({ startFamilySync }) => startFamilySync());
+    return () => {
+      void import('./lib/familySync').then(({ stopFamilySync }) => stopFamilySync());
+    };
   }, [auth.kind]);
 
   function refreshMe() {
@@ -105,17 +124,27 @@ export default function App() {
 
   if (auth.kind === 'loading') {
     return (
-      <main className="min-h-dvh flex items-center justify-center bg-slate-900 text-slate-500 text-sm">
-        connecting…
-      </main>
+      <ThemeProvider>
+        <main className="min-h-dvh flex items-center justify-center bg-bg text-fg-muted text-sm">
+          <span className="animate-breathe">cara sta arrivando…</span>
+        </main>
+      </ThemeProvider>
     );
   }
 
   if (auth.kind === 'anonymous') {
-    return <Login onSuccess={refreshMe} />;
+    return (
+      <ThemeProvider>
+        <ToastProvider>
+          <Login onSuccess={refreshMe} />
+        </ToastProvider>
+      </ThemeProvider>
+    );
   }
 
   return (
+    <ThemeProvider>
+    <ToastProvider>
     <BrowserRouter>
       <RadioPlayerProvider>
       <CdaPlayerProvider>
@@ -131,6 +160,7 @@ export default function App() {
         >
           <Route index element={<HomePage />} />
           <Route path="home" element={<Navigate to="/" replace />} />
+          <Route path="wallet" element={<WalletPage />} />
           <Route path="chat" element={<ChatPage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="shopping" element={<ShoppingPage />} />
@@ -140,8 +170,14 @@ export default function App() {
           <Route path="discoveries" element={<DiscoveriesPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="admin/diagnostics" element={<DiagnosticsPage />} />
+          <Route path="admin/memory" element={<AdminMemoryPage />} />
+          <Route path="admin/smart-home" element={<AdminSmartHomePage />} />
+          <Route path="admin/proactivity" element={<AdminProactivityPage />} />
           <Route path="face-lab" element={<FaceLabPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="me/memory" element={<MemoryPage />} />
+          <Route path="me/integrazioni" element={<IntegrationsPage />} />
+          <Route path="me/proposte" element={<ProposalsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
@@ -149,5 +185,7 @@ export default function App() {
       </CdaPlayerProvider>
       </RadioPlayerProvider>
     </BrowserRouter>
+    </ToastProvider>
+    </ThemeProvider>
   );
 }
