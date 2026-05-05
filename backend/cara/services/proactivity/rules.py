@@ -366,6 +366,235 @@ async def birthday_today(ctx: RuleContext) -> list[Suggestion]:
 
 
 # ---------------------------------------------------------------------------
+# 7) Saturday shopping review — before going out
+# ---------------------------------------------------------------------------
+
+
+@rule(
+    "shopping_review_saturday",
+    cooldown_hours=144.0,  # at most once a week
+    description=(
+        "Sabato mattina (9-12) suggerisce di rivedere la lista della spesa "
+        "prima di uscire."
+    ),
+)
+async def shopping_review_saturday(ctx: RuleContext) -> Suggestion | None:
+    if ctx.now.weekday() != 5:  # 0=Mon..5=Sat
+        return None
+    if ctx.now.hour < 9 or ctx.now.hour >= 12:
+        return None
+    if ctx.db_session is None:
+        return None
+
+    from sqlalchemy import select
+
+    from cara.models.shopping import ShoppingItem
+
+    rows = (
+        await ctx.db_session.execute(
+            select(ShoppingItem).where(ShoppingItem.bought.is_(False))
+        )
+    ).scalars().all()
+
+    n = len(rows)
+    if n == 0:
+        return None  # don't nag if list is already empty
+
+    if n == 1:
+        text = "Sabato spesa: hai 1 articolo nella lista."
+    else:
+        text = f"Sabato spesa: hai {n} articoli nella lista."
+
+    return Suggestion(
+        rule_id="shopping_review_saturday",
+        text=text,
+        priority=Priority.MEDIUM,
+        action={"deep_link": "/shopping"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# 8) Task overdue — gentle nudge after 24h+ overdue
+# ---------------------------------------------------------------------------
+
+
+@rule(
+    "task_overdue_24h",
+    cooldown_hours=24.0,
+    description=(
+        "Una volta al giorno avvisa delle task ancora aperte che erano "
+        "scadute da almeno 24 ore."
+    ),
+)
+async def task_overdue_24h(ctx: RuleContext) -> Suggestion | None:
+    if ctx.db_session is None:
+        return None
+    # Only fire during waking hours so we don't push at 3am.
+    if ctx.now.hour < 9 or ctx.now.hour >= 21:
+        return None
+
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from cara.models.task import Task
+
+    cutoff = ctx.now - timedelta(hours=24)
+    rows = (
+        await ctx.db_session.execute(
+            select(Task)
+            .where(Task.done.is_(False))
+            .where(Task.due_date.is_not(None))
+            .where(Task.due_date < cutoff)
+        )
+    ).scalars().all()
+
+    if not rows:
+        return None
+
+    if len(rows) == 1:
+        text = f"\"{rows[0].title}\" era da fare ieri — ti aiuto a riprogrammarla?"
+    else:
+        text = f"Hai {len(rows)} task in ritardo da almeno un giorno."
+
+    return Suggestion(
+        rule_id="task_overdue_24h",
+        text=text,
+        priority=Priority.MEDIUM,
+        action={"deep_link": "/tasks"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9) Budget drift — category spent > 80% of monthly target
+# ---------------------------------------------------------------------------
+
+
+@rule(
+    "budget_drift_warning",
+    cooldown_hours=72.0,  # max once every 3 days per category
+    description=(
+        "Se in una categoria di spesa hai superato l'80% del budget "
+        "mensile, suggerisce di rivedere il rollup."
+    ),
+)
+async def budget_drift_warning(ctx: RuleContext) -> Suggestion | None:
+    if ctx.db_session is None:
+        return None
+
+    try:
+        from cara.services.budgets import month_rollup
+    except Exception as exc:  # noqa: BLE001
+        log.debug("budget_drift.import_failed", error=str(exc))
+        return None
+
+    try:
+        rollup = await month_rollup(
+            ctx.db_session, year=ctx.now.year, month=ctx.now.month,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("budget_drift.rollup_failed", error=str(exc))
+        return None
+
+    # rollup is expected to be list[dict] with keys category/target_cents/spent_cents
+    drifters = []
+    for row in rollup or []:
+        try:
+            target = int(row.get("target_amount_cents") or 0)
+            spent = int(row.get("spent_cents") or 0)
+        except (TypeError, ValueError):
+            continue
+        if target <= 0:
+            continue
+        ratio = spent / target
+        if ratio >= 0.80:
+            drifters.append((row.get("category") or "?", ratio))
+
+    if not drifters:
+        return None
+
+    drifters.sort(key=lambda r: r[1], reverse=True)
+    cat, ratio = drifters[0]
+    pct = int(ratio * 100)
+    return Suggestion(
+        rule_id="budget_drift_warning",
+        text=f"Budget {cat}: hai usato il {pct}% del mese. Vuoi vedere il dettaglio?",
+        priority=Priority.LOW,
+        action={"deep_link": "/wallet"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# 10) Lights on while no one is home — saving energy
+# ---------------------------------------------------------------------------
+
+
+@rule(
+    "lights_on_nobody_home",
+    cooldown_hours=2.0,
+    description=(
+        "Se la presenza famiglia indica casa vuota e ci sono luci accese, "
+        "propone di spegnerle."
+    ),
+)
+async def lights_on_nobody_home(ctx: RuleContext) -> Suggestion | None:
+    if ctx.smarthome is None or ctx.family is None:
+        return None
+    # Don't fire at night when "nobody home" is normal (people sleeping).
+    if ctx.now.hour < 8 or ctx.now.hour >= 22:
+        return None
+
+    # Family presence: expect a list of present user names / count
+    try:
+        present = await ctx.family.who_is_home() if callable(getattr(ctx.family, "who_is_home", None)) else None
+    except Exception as exc:  # noqa: BLE001
+        log.debug("lights_on.presence_failed", error=str(exc))
+        return None
+
+    if present is None:
+        return None
+    # Treat empty list / dict.count==0 / int 0 as "nobody"
+    if isinstance(present, (list, tuple, set)):
+        nobody = len(present) == 0
+    elif isinstance(present, dict):
+        nobody = (present.get("count", 0) or 0) == 0
+    else:
+        try:
+            nobody = int(present) == 0
+        except (TypeError, ValueError):
+            return None
+    if not nobody:
+        return None
+
+    # Smart-home: count entities domain=light state=on
+    try:
+        entities = await ctx.smarthome.list_entities()
+    except Exception as exc:  # noqa: BLE001
+        log.debug("lights_on.smarthome_failed", error=str(exc))
+        return None
+
+    on_lights = [
+        e for e in (entities or [])
+        if getattr(e, "domain", "") == "light"
+        and (getattr(e, "state", "") or "").lower() == "on"
+    ]
+    if not on_lights:
+        return None
+
+    if len(on_lights) == 1:
+        nice = getattr(on_lights[0], "friendly_name", None) or on_lights[0].id
+        text = f"Casa vuota e \"{nice}\" è ancora accesa. Vuoi che la spenga?"
+    else:
+        text = f"Casa vuota e ci sono {len(on_lights)} luci accese. Vuoi che le spenga?"
+    return Suggestion(
+        rule_id="lights_on_nobody_home",
+        text=text,
+        priority=Priority.HIGH,
+        action={"deep_link": "/casa", "tool": "lights_off_all"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Convenience: register count + diagnostic
 # ---------------------------------------------------------------------------
 
@@ -379,4 +608,8 @@ def registered_rule_ids() -> tuple[str, ...]:
         "door_open_long",
         "bedtime_routine",
         "birthday_today",
+        "shopping_review_saturday",
+        "task_overdue_24h",
+        "budget_drift_warning",
+        "lights_on_nobody_home",
     )

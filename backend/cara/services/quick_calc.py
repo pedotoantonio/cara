@@ -77,11 +77,9 @@ def _safe_eval(expr: str) -> float:
         if isinstance(node, ast.Expression):
             return _walk(node.body)
         if isinstance(node, ast.Constant):
-            if isinstance(node.value, int | float):
+            if isinstance(node.value, int | float) and not isinstance(node.value, bool):
                 return float(node.value)
             raise ValueError(f"non-numeric constant: {node.value!r}")
-        if isinstance(node, ast.Num):  # Python <3.12 compat
-            return float(node.n)  # type: ignore[attr-defined]
         if isinstance(node, ast.UnaryOp):
             op = _OPS_UNARY.get(type(node.op))
             if op is None:
