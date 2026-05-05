@@ -86,7 +86,15 @@ async def _resolve_adapter(session: AsyncSession) -> SmartHomeAdapter | None:
             await _adapter.aclose()  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             pass
-    _adapter = HomeAssistantAdapter(HAConfig(base_url=str(url), token=str(token)))
+    # Production WS factory wires the HA WebSocket to the adapter so
+    # `subscribe_events()` actually connects (instead of returning empty).
+    from cara.smarthome.ws_client import ha_ws_factory
+    cfg = HAConfig(base_url=str(url), token=str(token))
+    cfg.ws_url = cfg.ws()
+    _adapter = HomeAssistantAdapter(
+        cfg,
+        ws_factory=ha_ws_factory,  # type: ignore[arg-type]
+    )
     _adapter_signature = sig
     return _adapter
 
