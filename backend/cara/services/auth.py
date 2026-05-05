@@ -48,6 +48,27 @@ def create_refresh_token(sub: str | int) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+def create_device_token(
+    device_id: str | int, *, extra: dict[str, Any] | None = None,
+) -> str:
+    """Long-lived token a paired device uses to talk to /api/v1/family/ws,
+    /api/v1/devices/heartbeat etc. Carries `type=device` so the auth gate
+    can distinguish from a user's bearer token. TTL = 365 days; the row
+    in `devices` is the source of truth — revocation goes through there
+    (DELETE /admin/devices/{id} clears device_token to lock the device
+    out at the next heartbeat)."""
+    now = datetime.now(UTC)
+    payload: dict[str, Any] = {
+        "sub": str(device_id),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(days=365)).timestamp()),
+        "type": "device",
+    }
+    if extra:
+        payload.update(extra)
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
 def decode_token(token: str) -> dict[str, Any]:
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])

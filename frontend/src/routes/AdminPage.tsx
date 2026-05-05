@@ -270,6 +270,7 @@ export function AdminPage() {
             { to: '/admin/memory',      label: 'Memoria' },
             { to: '/admin/smart-home',  label: 'Smart Home' },
             { to: '/admin/proactivity', label: 'Proattività' },
+            { to: '/admin/devices',     label: 'Dispositivi' },
             { to: '/admin/diagnostics', label: 'Diagnostica' },
           ].map((l) => (
             <button

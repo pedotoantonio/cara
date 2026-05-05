@@ -129,3 +129,38 @@ async def auth_client(test_user: TestUser) -> AsyncIterator[httpx.AsyncClient]:
         headers=test_user.auth_headers,
     ) as client:
         yield client
+
+
+@pytest.fixture(scope="session")
+async def admin_client(http: httpx.AsyncClient) -> AsyncIterator[httpx.AsyncClient | None]:
+    """HTTP client pre-authenticated as the persistent CARA admin (Antonio).
+
+    Reads the admin email/password from the env (`CARA_TEST_ADMIN_EMAIL`,
+    `CARA_TEST_ADMIN_PASSWORD`) defaulting to the values in CLAUDE.md. If
+    the login fails, yields None so admin-gated tests skip cleanly rather
+    than hard-failing on environments without a configured admin.
+    """
+    email = os.environ.get("CARA_TEST_ADMIN_EMAIL", "pedotoa@gmail.com")
+    password = os.environ.get("CARA_TEST_ADMIN_PASSWORD", "caracasa2026")
+    try:
+        login = await http.post(
+            "/api/v1/auth/login",
+            json={"email": email, "password": password},
+        )
+    except Exception:
+        yield None
+        return
+    if login.status_code != 200:
+        yield None
+        return
+    token = login.json().get("access_token")
+    if not token:
+        yield None
+        return
+    async with httpx.AsyncClient(
+        base_url=_base_url(),
+        verify=False,
+        timeout=httpx.Timeout(10.0, connect=5.0),
+        headers={"Authorization": f"Bearer {token}"},
+    ) as client:
+        yield client
