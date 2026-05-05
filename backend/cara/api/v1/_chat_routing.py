@@ -45,6 +45,7 @@ from cara.cda import CdaError, DiscoverRequest, discover as cda_discover
 from cara.core import LumoState, get_bus, get_state_machine
 from cara.learning import episodic
 from cara.models.user import User
+from cara.services import admin_settings
 from cara.services import conversations as convo_svc
 from cara.services import event_log, intent_router
 from cara.services import quick_calc
@@ -339,11 +340,49 @@ async def try_skill_dispatcher(
     if not last_user_q or attached_files:
         return None
 
-    skill_match = await skill_dispatcher.match(session, last_user_q)
-    if skill_match is None:
+    # Tier configuration is read from admin_settings live so the admin
+    # can flip cosine/LLM matching on or off without redeploying.
+    settings = await admin_settings.get_all(session)
+    tier2_on = bool(settings.get("skill_dispatcher_tier2_enabled", True))
+    tier3_on = bool(settings.get("skill_dispatcher_tier3_enabled", False))
+    tier2_threshold = float(settings.get("skill_dispatcher_tier2_threshold", 0.65))
+
+    embedder = None
+    if tier2_on:
+        try:
+            from cara.ai.embeddings import EmbeddingService
+            embedder = EmbeddingService()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("chat.skill_dispatcher.embedder_unavailable", error=str(exc))
+
+    llm_call = None
+    if tier3_on:
+        try:
+            from cara.ai.llm import get_llm_service
+            svc = get_llm_service()
+
+            async def _llm_call(prompt: str, max_new_tokens: int) -> str:
+                # Wrap the streaming generate as a single-shot collector.
+                chunks: list[str] = []
+                async for tok in svc.generate(
+                    prompt, max_new_tokens=max_new_tokens, temperature=0.1,
+                ):
+                    chunks.append(tok.text)
+                return "".join(chunks)
+            llm_call = _llm_call
+        except Exception as exc:  # noqa: BLE001
+            log.debug("chat.skill_dispatcher.llm_unavailable", error=str(exc))
+
+    matched = await skill_dispatcher.match_with_tier(
+        session, last_user_q,
+        embedder=embedder, llm_call=llm_call,
+        tier2_enabled=bool(embedder), tier3_enabled=bool(llm_call),
+        tier2_threshold=tier2_threshold,
+    )
+    if matched is None:
         return None
 
-    sk, slots = skill_match
+    sk, slots, tier_name, confidence = matched
     try:
         ctx = await skill_run(session, skill=sk, user_id=user.id, slots=slots)
         summary = _skill_render_response(sk, ctx)
@@ -373,6 +412,8 @@ async def try_skill_dispatcher(
             "skill": sk.name, "slots": dict(slots),
             "summary_len": len(summary),
             "label": routed_label,
+            "tier": tier_name,
+            "confidence": round(confidence, 3),
         },
     )
 

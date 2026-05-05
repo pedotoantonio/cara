@@ -85,6 +85,18 @@ DEFAULTS: dict[str, Any] = {
     # at runtime without redeploy.
     "skill_author_provider": None,
     "skill_author_model": None,
+    # Skill Factory dispatcher tiers (Phase C).
+    #   tier-1 = regex (always on, free)
+    #   tier-2 = cosine over intent_examples embeddings (~50ms, on by default
+    #            once the embedder is loaded)
+    #   tier-3 = local 1.5B LLM classifier ("which skill, if any, fits?")
+    #            ~500ms-2s on the NPU. Off by default — flip on when you want
+    #            CARA to learn aggressively from chat misses.
+    "skill_dispatcher_tier2_enabled": True,
+    "skill_dispatcher_tier3_enabled": False,
+    # Confidence threshold for tier-2 cosine. Below this, the message is
+    # considered NOT a match and we fall through to tier-3 / LLM.
+    "skill_dispatcher_tier2_threshold": 0.65,
 }
 
 
