@@ -263,6 +263,26 @@ export function AdminPage() {
           </p>
         </header>
 
+        {/* Quick nav to deep admin pages */}
+        <nav className="flex flex-wrap gap-2 text-xs">
+          {[
+            { to: '/admin/skills',      label: 'Skill Factory' },
+            { to: '/admin/memory',      label: 'Memoria' },
+            { to: '/admin/smart-home',  label: 'Smart Home' },
+            { to: '/admin/proactivity', label: 'Proattività' },
+            { to: '/admin/diagnostics', label: 'Diagnostica' },
+          ].map((l) => (
+            <button
+              key={l.to}
+              type="button"
+              onClick={() => navigate(l.to)}
+              className="rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3 py-1.5"
+            >
+              {l.label} →
+            </button>
+          ))}
+        </nav>
+
         {msg && (
           <div
             className={`rounded-xl px-3 py-2 text-xs border ${

@@ -33,6 +33,8 @@ from cara.services import admin_settings as setting_svc
 from cara.services import audit as audit_svc
 from cara.skills import author as skill_author
 from cara.skills import dispatcher as skill_dispatcher
+from cara.skills import primitives as _skill_primitives  # noqa: F401 — register on import
+from cara.skills.registry import list_primitives as _list_primitives
 from cara.store import get_session
 
 log = structlog.get_logger(__name__)
@@ -598,3 +600,121 @@ async def delete_skill(
         detail={"name": name},
         ip=request.client.host if request.client else None,
     )
+
+
+# --- Skill manual edit + primitive catalog (Phase E) -------------------
+
+
+class SkillPatch(BaseModel):
+    """Whole-document edit. Any field omitted is left untouched.
+
+    `intent_examples`, `slot_extraction`, `plan`, `response_template`,
+    `fallback_response`, `description` can be hand-edited from the
+    admin UI. `name` is intentionally not patchable (used as cache
+    key by the dispatcher); rename = create a new skill instead.
+    """
+
+    description: str | None = None
+    intent_examples: list[str] | None = None
+    slot_extraction: dict[str, Any] | None = None
+    plan: dict[str, Any] | None = None
+    response_template: str | None = None
+    fallback_response: str | None = None
+
+
+@router.patch("/skills/{skill_id}", response_model=SkillOut)
+async def patch_skill(
+    skill_id: uuid.UUID,
+    body: SkillPatch,
+    request: Request,
+    admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> SkillOut:
+    sk = await session.get(Skill, skill_id)
+    if sk is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "skill non trovata")
+
+    changes: dict[str, Any] = {}
+    if body.description is not None:
+        sk.description = body.description.strip()
+        changes["description"] = True
+    if body.intent_examples is not None:
+        # cap to 32 examples to keep prompt budget under control
+        sk.intent_examples = list(body.intent_examples)[:32]
+        changes["intent_examples"] = len(sk.intent_examples)
+    if body.slot_extraction is not None:
+        sk.slot_extraction = dict(body.slot_extraction)
+        changes["slot_extraction"] = True
+    if body.plan is not None:
+        # minimal validation: must have steps:list
+        steps = body.plan.get("steps") if isinstance(body.plan, dict) else None
+        if not isinstance(steps, list) or not steps:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "plan.steps deve essere una lista non vuota",
+            )
+        # validate each step references a known primitive
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict) or not step.get("tool"):
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"step[{i}] manca del campo 'tool'",
+                )
+            from cara.skills.registry import get_primitive
+            if get_primitive(step["tool"]) is None:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"step[{i}].tool {step['tool']!r} non è una primitive registrata",
+                )
+        sk.plan = dict(body.plan)
+        changes["plan"] = True
+    if body.response_template is not None:
+        sk.response_template = body.response_template
+        changes["response_template"] = True
+    if body.fallback_response is not None:
+        sk.fallback_response = body.fallback_response
+        changes["fallback_response"] = True
+
+    if not changes:
+        return _to_out(sk)
+
+    sk.version = (sk.version or 1) + 1
+    await session.flush()
+    await session.refresh(sk)
+    skill_dispatcher.invalidate_cache()
+
+    await audit_svc.record(
+        session, actor=admin, action="skill.patched",
+        target_kind="skill", target_id=str(sk.id),
+        detail={"name": sk.name, "changes": changes, "version": sk.version},
+        ip=request.client.host if request.client else None,
+    )
+    return _to_out(sk)
+
+
+class PrimitiveOut(BaseModel):
+    name: str
+    description: str
+    args_schema: dict[str, str]
+    returns_schema: dict[str, str]
+    needs_session: bool
+    needs_user_id: bool
+
+
+@router.get("/skills/primitives/catalog", response_model=list[PrimitiveOut])
+async def primitive_catalog(
+    _admin: User = Depends(require_admin),  # noqa: B008
+) -> list[PrimitiveOut]:
+    """Catalog of primitives the JSON editor can reference. Useful as
+    an inline help panel when editing a skill plan."""
+    return [
+        PrimitiveOut(
+            name=p.name,
+            description=p.description,
+            args_schema=p.args_schema,
+            returns_schema=p.returns_schema,
+            needs_session=p.needs_session,
+            needs_user_id=p.needs_user_id,
+        )
+        for p in _list_primitives()
+    ]
