@@ -16,10 +16,16 @@ from cara.api.v1 import (
     diagnostics,
     events,
     family,
+    family_ws,
     files,
+    integrations,
     memory,
     news,
     notes,
+    oauth,
+    proactivity,
+    proposals,
+    push,
     radio,
     shopping,
     smarthome,
@@ -46,10 +52,16 @@ router.include_router(device_aliases.router)
 router.include_router(diagnostics.router)
 router.include_router(events.router)
 router.include_router(family.router)
+router.include_router(family_ws.router)
 router.include_router(files.router)
+router.include_router(integrations.router)
 router.include_router(memory.router)
 router.include_router(news.router)
 router.include_router(notes.router)
+router.include_router(oauth.router)
+router.include_router(proactivity.router)
+router.include_router(proposals.router)
+router.include_router(push.router)
 router.include_router(radio.router)
 router.include_router(shopping.router)
 router.include_router(smarthome.router)
