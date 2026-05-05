@@ -29,8 +29,10 @@ import structlog
 
 from cara.api.v1._chat_routing import (
     try_intent_router,
+    try_quick_calc,
     try_recipe_chain,
     try_skill_dispatcher,
+    try_smarthome,
 )
 from cara.learning import episodic
 from cara.router import Hit, Miss, Pipeline, RouteContext, StageResult
@@ -86,6 +88,16 @@ class _RoutingStage:
         if resp is None:
             return Miss(stage_name=self.name, reason="no_match")
         return Hit(stage_name=self.name, response=resp)
+
+
+class QuickCalcStage(_RoutingStage):
+    name = "quick_calc"
+    _handler = staticmethod(try_quick_calc)
+
+
+class SmartHomeStage(_RoutingStage):
+    name = "smarthome"
+    _handler = staticmethod(try_smarthome)
 
 
 class SkillDispatcherStage(_RoutingStage):
@@ -164,6 +176,8 @@ def build_chat_pipeline() -> Pipeline:
     hold no state, they're pure adapters."""
     return Pipeline(
         stages=[
+            QuickCalcStage(),
+            SmartHomeStage(),
             SkillDispatcherStage(),
             RecipeChainStage(),
             IntentRouterStage(),

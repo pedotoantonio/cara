@@ -78,6 +78,10 @@ class LLMService:
         max_new_tokens: int,
         *,
         models: dict[str, str] | None = None,
+        temperature: float | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        repeat_penalty: float | None = None,
     ) -> None:
         # Backwards compatibility: if no `models` map is provided, the
         # legacy single-model boot still works (the only mode = "default"
@@ -91,6 +95,15 @@ class LLMService:
         self._lib_path = Path(lib_path)
         self._max_context_len = max_context_len
         self._default_max_new_tokens = max_new_tokens
+        # Sampling defaults baked into the model at init time. RKLLM 1.1.0
+        # uses these for every rkllm_run; per-request overrides through the
+        # public C API are not supported, so the only way to influence
+        # sampling is at load. None → keep the runtime's createDefaultParam
+        # value (RKLLM 1.1.0 defaults: temp=0.8, top_k=40, top_p=0.9, rp=1.1).
+        self._init_temperature = temperature
+        self._init_top_k = top_k
+        self._init_top_p = top_p
+        self._init_repeat_penalty = repeat_penalty
         self._lib: ctypes.CDLL | None = None
         self._handle: ctypes.c_void_p | None = None
         # CFUNCTYPE wrappers must outlive the C library or it crashes; keep a ref.
@@ -131,6 +144,25 @@ class LLMService:
         param.skip_special_token = True
         param.is_async = False
         param.extend_param.base_domain_id = 0
+        # Apply admin/config sampling defaults — without this the runtime's
+        # createDefaultParam values win silently. We keep `None` semantics
+        # so an empty config falls back to the runtime defaults.
+        if self._init_temperature is not None:
+            param.temperature = float(self._init_temperature)
+        if self._init_top_k is not None:
+            param.top_k = int(self._init_top_k)
+        if self._init_top_p is not None:
+            param.top_p = float(self._init_top_p)
+        if self._init_repeat_penalty is not None:
+            param.repeat_penalty = float(self._init_repeat_penalty)
+        logger.info(
+            "llm.load.sampling",
+            temperature=float(param.temperature),
+            top_k=int(param.top_k),
+            top_p=float(param.top_p),
+            repeat_penalty=float(param.repeat_penalty),
+            max_new_tokens=int(param.max_new_tokens),
+        )
 
         self._handle = ctypes.c_void_p()
         rc = self._lib.rkllm_init(
@@ -446,6 +478,10 @@ async def init_llm_service() -> LLMService | None:
         max_context_len=settings.llm_max_context_len,
         max_new_tokens=settings.llm_max_new_tokens,
         models=models,
+        temperature=settings.llm_temperature,
+        top_k=settings.llm_top_k,
+        top_p=settings.llm_top_p,
+        repeat_penalty=settings.llm_repeat_penalty,
     )
     await _service.aload()
     return _service

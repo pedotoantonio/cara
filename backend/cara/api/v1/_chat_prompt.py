@@ -70,10 +70,18 @@ MONTHS_IT: list[str] = [
 # Used after CDA grounding to constrain the second-pass output. See the
 # `_GROUNDING` agent-loop block in chat.py.
 AGENT_GROUNDING_SUFFIX = (
-    "Usa SOLO questa informazione per rispondere all'ultima domanda dell'utente. "
-    "Rispondi in italiano, in 2-4 frasi, in modo naturale e conciso. "
-    "Se la fonte non contiene la risposta, dillo onestamente. "
-    "NON emettere [TOOL: ...] in questa risposta."
+    "## REGOLE PER LA RISPOSTA — RISPETTA TUTTE\n"
+    "1. Usa SOLO le informazioni dell'articolo qui sopra. Non aggiungere fatti, "
+    "termini o dettagli che non sono testualmente nell'articolo.\n"
+    "2. Rispondi in italiano corretto, in 2 frasi MASSIME (max 60 parole).\n"
+    "3. NON inventare parole nuove, NON italianizzare termini stranieri, "
+    "NON tradurre se non serve.\n"
+    "4. Se l'articolo NON contiene la risposta, dì esattamente: "
+    "\"Non ho trovato la risposta nell'articolo.\" e fermati.\n"
+    "5. NON emettere [TOOL: ...] in questa risposta.\n"
+    "6. NON citare la fonte con frasi tipo \"(fonte: ...)\" — viene aggiunta "
+    "automaticamente.\n"
+    "7. Inizia direttamente con la risposta, senza preamboli."
 )
 
 

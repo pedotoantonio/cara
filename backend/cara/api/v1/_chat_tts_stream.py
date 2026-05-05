@@ -208,9 +208,11 @@ async def synthesize_sentence(
     if not text.strip():
         return b""
 
-    from cara.ai.tts import service as tts_svc
+    from cara.ai.tts.service import get_tts_service
 
-    return await tts_svc.synthesize_to_wav(text=text, voice_id=voice_id)
+    svc = get_tts_service()
+    wav, _sample_rate = await svc.synthesize_wav(text=text, voice_id=voice_id)
+    return wav
 
 
 # ---------------------------------------------------------------------------

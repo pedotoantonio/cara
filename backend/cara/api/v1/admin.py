@@ -139,6 +139,142 @@ async def get_audit(
     ]
 
 
+# --- memory admin (per-user fact governance) --------------------------
+#
+# The plain `/api/v1/memory/*` routes are scoped to the current user.
+# Admins also need a way to inspect (and, in extreme cases, purge) the
+# memory of another family member — typically to debug a hallucinated
+# fact or honour a delete request from a household member who can't
+# operate their own account (kid, elder).
+#
+# All endpoints under /admin/memory are gated by `require_admin` and
+# log to audit so the action is traceable.
+
+
+@router.get("/memory/users")
+async def list_users_with_facts(
+    _admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> list[dict]:
+    """Roster of users with their fact counts (active vs total)."""
+    from sqlalchemy import case, func, select as _select
+
+    from cara.models.fact import Fact
+    from cara.models.user import User as _U
+
+    rows = (
+        await session.execute(
+            _select(
+                _U.id, _U.email, _U.full_name, _U.role,
+                func.count(Fact.id).label("total"),
+                func.sum(case((Fact.active.is_(True), 1), else_=0)).label("active"),
+            )
+            .join(Fact, Fact.user_id == _U.id, isouter=True)
+            .group_by(_U.id, _U.email, _U.full_name, _U.role)
+            .order_by(_U.email)
+        )
+    ).all()
+    out: list[dict] = []
+    for r in rows:
+        out.append({
+            "user_id": r.id,
+            "email": r.email,
+            "full_name": r.full_name,
+            "role": r.role,
+            "facts_total": int(r.total or 0),
+            "facts_active": int(r.active or 0),
+        })
+    return out
+
+
+@router.get("/memory/{target_user_id}/facts")
+async def list_user_facts_admin(
+    target_user_id: int,
+    active_only: bool = False,
+    _admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> list[dict]:
+    """Admin view of facts owned by `target_user_id`."""
+    from cara.learning import semantic
+    rows = await semantic.list_facts(
+        session, user_id=target_user_id,
+        active_only=active_only, limit=500,
+    )
+    return [
+        {
+            "id": f.id,
+            "user_id": f.user_id,
+            "type": f.type,
+            "text": f.text,
+            "source": f.source,
+            "confidence": f.confidence,
+            "first_seen": f.first_seen.isoformat(),
+            "last_confirmed": f.last_confirmed.isoformat(),
+            "expiry": f.expiry.isoformat() if f.expiry else None,
+            "active": f.active,
+        }
+        for f in rows
+    ]
+
+
+@router.delete("/memory/{target_user_id}/facts/{fact_id}", status_code=204)
+async def deactivate_user_fact_admin(
+    target_user_id: int,
+    fact_id: int,
+    request: Request,
+    admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> None:
+    """Admin soft-delete (active=False) of a single fact for any user."""
+    from sqlalchemy import select as _select
+
+    from cara.models.fact import Fact
+
+    fact = (
+        await session.execute(
+            _select(Fact).where(
+                Fact.id == fact_id, Fact.user_id == target_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if fact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "fact not found")
+    fact.active = False
+    await audit_svc.record(
+        session, actor=admin, action="memory.fact.deactivated",
+        target_kind="fact", target_id=str(fact.id),
+        detail={"target_user_id": target_user_id, "text": fact.text[:120]},
+        ip=request.client.host if request.client else None,
+    )
+    await session.commit()
+
+
+@router.post("/memory/{target_user_id}/purge")
+async def purge_user_memory_admin(
+    target_user_id: int,
+    request: Request,
+    admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, int]:
+    """Hard-delete every fact owned by `target_user_id`. Audit-logged."""
+    from sqlalchemy import delete as _delete
+
+    from cara.models.fact import Fact
+
+    res = await session.execute(
+        _delete(Fact).where(Fact.user_id == target_user_id)
+    )
+    deleted = res.rowcount or 0
+    await audit_svc.record(
+        session, actor=admin, action="memory.purge",
+        target_kind="user", target_id=str(target_user_id),
+        detail={"deleted": deleted},
+        ip=request.client.host if request.client else None,
+    )
+    await session.commit()
+    return {"deleted": deleted}
+
+
 # --- skills (Skill Factory v0.7 — Phase D) -----------------------------
 
 

@@ -24,6 +24,10 @@ class ChatRequest(BaseModel):
     # Files attached to the most recent user message. Backend resolves IDs
     # against the user's owned files and prepends extracted text to the prompt.
     file_ids: list[uuid.UUID] = Field(default_factory=list, max_length=10)
+    # Opt-in cloud LLM (Anthropic Haiku) for this single turn. Effective
+    # only if the admin flag `cloud_llm_enabled` is True. The caller
+    # provides this when the user clicks a "Risposta migliore" button.
+    prefer_cloud: bool = Field(default=False)
 
 
 class ChatStats(BaseModel):
