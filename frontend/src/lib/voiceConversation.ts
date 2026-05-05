@@ -129,12 +129,22 @@ export function useVoiceConversation(opts: {
     abortStreamRef.current?.();
     wakeRef.current?.stop();
     stopSpeaking();
+    void import('./streamingAudio').then(({ clear }) => clear());
   }, []);
 
   const submitToBackend = useCallback((finalUserText: string) => {
     setPhase('thinking');
     setAssistantText('');
     let assistantBuf = '';
+    // Track sentence-streamed audio chunks; if any arrive, skip the
+    // legacy speak(final) on done — playback is already happening.
+    let streamedAudioChunks = 0;
+
+    // Lazy-import the streaming queue so non-voice routes don't pull
+    // the WebAudio code into their initial bundle.
+    void import('./streamingAudio').then(({ startTurn }) => {
+      startTurn(() => setPhase('idle'));
+    });
 
     abortStreamRef.current = streamChat(
       {
@@ -148,22 +158,40 @@ export function useVoiceConversation(opts: {
         },
         onToken: (text) => {
           assistantBuf += text;
-          // Strip live tool tags to keep the caption clean.
           const visible = assistantBuf
             .replace(/\[\s*(?:[A-Z_]+\s*:?\s*)?[a-z_]+\b[^\]]*?\]/gi, '')
             .replace(/\n{3,}/g, '\n\n')
             .trim();
           setAssistantText(visible);
         },
+        onAudioChunk: (chunk) => {
+          streamedAudioChunks += 1;
+          // First chunk → flip phase to speaking so the avatar lip-sync
+          // and caption switch over to the assistant text.
+          if (streamedAudioChunks === 1) setPhase('speaking');
+          void import('./streamingAudio').then(({ enqueueAudioChunk }) => {
+            enqueueAudioChunk(chunk.audio_b64, {
+              seq: chunk.seq, text: chunk.text, voiceId: chunk.voice_id,
+            });
+          });
+        },
         onRevision: (text) => setAssistantText(text),
         onDone: () => {
-          // Final clean-up + speak
           const final = assistantBuf
             .replace(/\[\s*(?:[A-Z_]+\s*:?\s*)?[a-z_]+\b[^\]]*?\]/gi, '')
             .replace(/\n{3,}/g, '\n\n')
             .trim();
           setAssistantText(final);
-          if (opts.autoSpeak && ttsOk && final) {
+
+          if (streamedAudioChunks > 0) {
+            // Audio is already playing. Tell the queue this is the last
+            // chunk so it can call onAllDone (→ phase='idle') when the
+            // last buffer finishes.
+            void import('./streamingAudio').then(({ endTurn }) => endTurn());
+            setLastAssistantSpeak(final);
+          } else if (opts.autoSpeak && ttsOk && final) {
+            // Backend didn't stream audio (admin flag off or browser
+            // voice mode) — fall back to single-shot speak().
             setLastAssistantSpeak(final);
             setPhase('speaking');
             speak(final, {
@@ -189,6 +217,7 @@ export function useVoiceConversation(opts: {
     if (phase === 'speaking') {
       // Tap during TTS = stop talking, return to idle (interrupt CARA).
       stopSpeaking();
+      void import('./streamingAudio').then(({ clear }) => clear());
       setPhase('idle');
       return;
     }

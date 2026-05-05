@@ -20,11 +20,24 @@ export async function deleteConversation(id: string): Promise<void> {
   if (!r.ok) throw new Error(`delete failed: ${r.status}`);
 }
 
+export interface ChatAudioChunk {
+  seq: number;
+  text: string;
+  voice_id: string;
+  format: string;
+  audio_b64: string;
+  bytes: number;
+}
+
 export interface ChatStreamHandlers {
   onMeta: (conversationId: string) => void;
   onToken: (text: string) => void;
   /** Server replaced the previous reply with a validated rewrite. */
   onRevision?: (text: string) => void;
+  /** Sentence-streamed TTS chunk (base64 WAV). Optional handler — when
+   *  absent the audio_chunk events are simply ignored and the caller
+   *  is expected to call `speak()` on done as before. */
+  onAudioChunk?: (chunk: ChatAudioChunk) => void;
   onDone: (stats: { tokens: number; tokensPerSecond: number; firstTokenSeconds: number }) => void;
   onError: (detail: string) => void;
 }
@@ -39,6 +52,10 @@ export function streamChat(
     conversationId?: string;
     maxNewTokens?: number;
     fileIds?: string[];
+    /** When true AND the admin flag `cloud_llm_enabled` is on, this
+     *  single turn is routed to Anthropic Haiku instead of the local
+     *  1.5B. Privacy: only the last user message is sent. */
+    preferCloud?: boolean;
   },
   h: ChatStreamHandlers,
 ): () => void {
@@ -51,6 +68,7 @@ export function streamChat(
     messages: args.messages.map((m) => ({ role: m.role, content: m.content })),
     max_new_tokens: args.maxNewTokens ?? 512,
     file_ids: args.fileIds ?? [],
+    prefer_cloud: args.preferCloud ?? false,
   });
 
   const doPost = (): Promise<Response> =>
@@ -132,6 +150,7 @@ export function streamChat(
           if (event === 'meta') h.onMeta(payload.conversation_id);
           else if (event === 'token') h.onToken(payload.text ?? '');
           else if (event === 'revision') h.onRevision?.(payload.text ?? '');
+          else if (event === 'audio_chunk') h.onAudioChunk?.(payload as ChatAudioChunk);
           else if (event === 'done')
             h.onDone({
               tokens: payload.tokens ?? 0,
