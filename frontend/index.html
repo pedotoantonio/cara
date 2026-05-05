@@ -3,15 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#FAF7F2" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0F1B2D" media="(prefers-color-scheme: dark)" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <meta name="apple-mobile-web-app-title" content="CARA" />
-    <title>cara</title>
+    <meta name="apple-mobile-web-app-title" content="Cara" />
+    <title>Cara — la casa che ti parla</title>
+    <style>
+      /* Pre-React paint: avoid the slate flash. Mirror tokens.ts day defaults. */
+      :root { color-scheme: light; }
+      html, body { background-color: #FAF7F2; color: #2A2A2A; }
+      @media (prefers-color-scheme: dark) {
+        :root { color-scheme: dark; }
+        html, body { background-color: #0F1B2D; color: #F1E9D8; }
+      }
+    </style>
   </head>
-  <body class="bg-slate-900 text-slate-50 antialiased">
+  <body class="antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
