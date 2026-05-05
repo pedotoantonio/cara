@@ -11,6 +11,7 @@ from cara.api.deps import get_current_user
 from cara.models.user import User
 from cara.schemas.note import NoteCreate, NoteOut, NoteUpdate
 from cara.services import notes as svc
+from cara.services.family_bus import publish as fb_publish
 from cara.store import get_session
 
 router = APIRouter(prefix="/notes", tags=["notes"])
@@ -34,7 +35,9 @@ async def create_note(
     note = await svc.create_note(
         session, user_id=user.id, title=body.title or "", body=body.body
     )
-    return NoteOut.model_validate(note)
+    out = NoteOut.model_validate(note)
+    await fb_publish("note.created", user_id=user.id, payload=out.model_dump(mode="json"))
+    return out
 
 
 @router.get("/{note_id}", response_model=NoteOut)
@@ -61,7 +64,9 @@ async def update_note(
     )
     if note is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "note not found")
-    return NoteOut.model_validate(note)
+    out = NoteOut.model_validate(note)
+    await fb_publish("note.updated", user_id=user.id, payload=out.model_dump(mode="json"))
+    return out
 
 
 @router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -73,3 +78,4 @@ async def delete_note(
     ok = await svc.delete_note(session, note_id, user_id=user.id)
     if not ok:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "note not found")
+    await fb_publish("note.deleted", user_id=user.id, payload={"id": str(note_id)})

@@ -15,6 +15,7 @@ from cara.schemas.shopping import (
     ShoppingItemUpdate,
 )
 from cara.services import shopping as svc
+from cara.services.family_bus import publish as fb_publish
 from cara.store import get_session
 
 router = APIRouter(prefix="/shopping", tags=["shopping"])
@@ -37,7 +38,9 @@ async def create_shopping(
     session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> ShoppingItemOut:
     item = await svc.create_item(session, user_id=user.id, title=body.title, qty=body.qty)
-    return ShoppingItemOut.model_validate(item)
+    out = ShoppingItemOut.model_validate(item)
+    await fb_publish("shopping.created", user_id=user.id, payload=out.model_dump(mode="json"))
+    return out
 
 
 @router.patch("/{item_id}", response_model=ShoppingItemOut)
@@ -58,7 +61,9 @@ async def update_shopping(
     item = await svc.update_item(session, item_id, user_id=user.id, **kwargs)
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
-    return ShoppingItemOut.model_validate(item)
+    out = ShoppingItemOut.model_validate(item)
+    await fb_publish("shopping.updated", user_id=user.id, payload=out.model_dump(mode="json"))
+    return out
 
 
 @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -70,6 +75,7 @@ async def delete_shopping(
     ok = await svc.delete_item(session, item_id, user_id=user.id)
     if not ok:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
+    await fb_publish("shopping.deleted", user_id=user.id, payload={"id": str(item_id)})
 
 
 @router.post("/clear-bought")
