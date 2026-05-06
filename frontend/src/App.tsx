@@ -57,6 +57,7 @@ import { AdminProactivityPage } from './routes/AdminProactivityPage';
 import { AdminSkillsPage } from './routes/AdminSkillsPage';
 import { AdminSmartHomePage } from './routes/AdminSmartHomePage';
 import { PairPage } from './routes/PairPage';
+import { SetupPage } from './routes/SetupPage';
 import { ChatPage } from './routes/ChatPage';
 import { DiagnosticsPage } from './routes/DiagnosticsPage';
 import { DiscoveriesPage } from './routes/DiscoveriesPage';
@@ -148,6 +149,19 @@ export default function App() {
         </ThemeProvider>
       );
     }
+    // /setup is the first-run wizard; reachable without login because
+    // step 1 mints the admin's JWT itself.
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/setup')) {
+      return (
+        <ThemeProvider>
+          <ToastProvider>
+            <BrowserRouter>
+              <SetupPage />
+            </BrowserRouter>
+          </ToastProvider>
+        </ThemeProvider>
+      );
+    }
     return (
       <ThemeProvider>
         <ToastProvider>
@@ -190,6 +204,8 @@ export default function App() {
           <Route path="admin/proactivity" element={<AdminProactivityPage />} />
           <Route path="admin/skills" element={<AdminSkillsPage />} />
           <Route path="admin/devices" element={<AdminDevicesPage />} />
+          <Route path="admin/setup" element={<SetupPage />} />
+          <Route path="setup" element={<SetupPage />} />
           <Route path="pair" element={<PairPage />} />
           <Route path="face-lab" element={<FaceLabPage />} />
           <Route path="settings" element={<SettingsPage />} />

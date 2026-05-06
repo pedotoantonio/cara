@@ -97,6 +97,23 @@ DEFAULTS: dict[str, Any] = {
     # Confidence threshold for tier-2 cosine. Below this, the message is
     # considered NOT a match and we fall through to tier-3 / LLM.
     "skill_dispatcher_tier2_threshold": 0.65,
+    # First-run setup wizard — opaque dict the wizard backend uses to
+    # persist its progress (current_step, completed_steps, env_dirty,
+    # cert_fingerprint, ...). The frontend reads this from /setup/status.
+    "setup_state": None,
+    # Identity / locale.
+    "timezone": "Europe/Rome",
+    "language": "it",
+    # Family identity (NER glossary + display name).
+    "family_name": None,
+    "family_glossary": None,
+    "family_size": None,
+    # HomeAssistant adapter (used when smart_home_enabled=True).
+    "ha_url": None,
+    "ha_token": None,
+    # Frigate / faces (referenced by widgets + presence).
+    "frigate_url": None,
+    "frigate_faces_url": None,
 }
 
 

@@ -28,6 +28,7 @@ from cara.api.v1 import (
     proposals,
     push,
     radio,
+    setup,
     shopping,
     smarthome,
     tasks,
@@ -65,6 +66,7 @@ router.include_router(proactivity.router)
 router.include_router(proposals.router)
 router.include_router(push.router)
 router.include_router(radio.router)
+router.include_router(setup.router)
 router.include_router(shopping.router)
 router.include_router(smarthome.router)
 router.include_router(tasks.router)
