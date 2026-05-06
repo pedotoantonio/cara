@@ -804,3 +804,122 @@ async def update_camera_endpoint(
     )
     await session.commit()
     return {"camera_id": camera_id, "override": merged}
+
+
+# ─── Agents (Celery worker observability) ────────────────────────────
+
+
+class AgentRunOut(BaseModel):
+    id: int
+    agent_name: str
+    task_name: str
+    idempotency_key: str | None = None
+    status: str
+    started_at: datetime
+    finished_at: datetime | None = None
+    duration_ms: int | None = None
+    payload: dict | None = None
+    error_class: str | None = None
+    error_message: str | None = None
+
+
+class AgentSummaryOut(BaseModel):
+    agent_name: str
+    last_run_at: datetime | None
+    last_status: str | None
+    runs_24h: int
+    failures_24h: int
+
+
+@router.get("/agents", response_model=list[AgentSummaryOut])
+async def list_agents_summary(
+    _admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> list[AgentSummaryOut]:
+    """Per-agent rollup: last run, last status, 24h volume + failures."""
+    from datetime import timedelta, timezone as _tz
+    from sqlalchemy import func as _f
+    from cara.models import AgentRun
+
+    cutoff = datetime.now(_tz.utc) - timedelta(hours=24)
+    rows = (
+        await session.execute(
+            select(
+                AgentRun.agent_name,
+                _f.max(AgentRun.started_at).label("last_run_at"),
+                _f.count().label("runs_24h"),
+                _f.sum(
+                    sa_case_when_status_failed()
+                ).label("failures_24h"),
+            )
+            .where(AgentRun.started_at >= cutoff)
+            .group_by(AgentRun.agent_name)
+        )
+    ).all()
+    out: list[AgentSummaryOut] = []
+    for r in rows:
+        # Last status of that agent (most recent row, not just within 24h).
+        last = (
+            await session.execute(
+                select(AgentRun.status)
+                .where(AgentRun.agent_name == r.agent_name)
+                .order_by(AgentRun.started_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        out.append(
+            AgentSummaryOut(
+                agent_name=r.agent_name,
+                last_run_at=r.last_run_at,
+                last_status=last,
+                runs_24h=int(r.runs_24h or 0),
+                failures_24h=int(r.failures_24h or 0),
+            )
+        )
+    return out
+
+
+@router.get("/agents/{agent_name}/runs", response_model=list[AgentRunOut])
+async def list_agent_runs(
+    agent_name: str,
+    limit: int = 50,
+    _admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> list[AgentRunOut]:
+    """Recent runs of one agent group (newest first)."""
+    from cara.models import AgentRun
+
+    limit = max(1, min(limit, 200))
+    rows = (
+        await session.execute(
+            select(AgentRun)
+            .where(AgentRun.agent_name == agent_name)
+            .order_by(AgentRun.started_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return [
+        AgentRunOut(
+            id=r.id,
+            agent_name=r.agent_name,
+            task_name=r.task_name,
+            idempotency_key=r.idempotency_key,
+            status=r.status,
+            started_at=r.started_at,
+            finished_at=r.finished_at,
+            duration_ms=r.duration_ms,
+            payload=r.payload,
+            error_class=r.error_class,
+            error_message=r.error_message,
+        )
+        for r in rows
+    ]
+
+
+def sa_case_when_status_failed():
+    """Helper: 1 when status is 'failed', else 0 — for SUM in the
+    24h failure count above. Imported lazily so it doesn't pollute
+    the module top-level."""
+    from sqlalchemy import case
+    from cara.models import AgentRun
+    return case((AgentRun.status == "failed", 1), else_=0)

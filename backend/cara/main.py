@@ -16,10 +16,7 @@ from cara.cda.rate_limit import attach_redis_url as cda_attach_redis_url
 from cara.skills import primitives as _skill_primitives  # noqa: F401 — register @primitive
 from cara.config import settings
 from cara.core import get_state_machine
-from cara.integrations import google_oauth as _google_oauth
 from cara.integrations.telegram import start_telegram_bot, stop_telegram_bot
-from cara.services.integrations.calendar_sync import run_loop as calendar_sync_loop
-from cara.services.integrations.gmail_scanner import run_loop as gmail_scanner_loop
 from cara.services.proactivity_scheduler import run_loop as proactivity_scheduler_loop
 from cara.services.push import is_configured as push_is_configured
 from cara.services.push_scheduler import run_loop as push_scheduler_loop
@@ -91,27 +88,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     logger.info("cara.ha_events_started")
 
-    # Google Calendar pull scheduler — only when integrations are
-    # configured (client_id/secret + encryption key in .env).
-    calendar_task: asyncio.Task | None = None
-    gmail_task: asyncio.Task | None = None
-    if _google_oauth.is_available():
-        calendar_task = asyncio.create_task(
-            calendar_sync_loop(get_sessionmaker()),
-            name="calendar_sync",
-        )
-        gmail_task = asyncio.create_task(
-            gmail_scanner_loop(get_sessionmaker()),
-            name="gmail_scanner",
-        )
-        logger.info("cara.integrations_started")
-    else:
-        logger.info("cara.integrations_skipped", reason="oauth_not_configured")
+    # Google Calendar / Gmail scheduling moved to Celery beat:
+    #   cara-celery-beat → schedules `cara.agents.mail.scan_gmail`
+    #     every 15 min and `cara.agents.mail.sync_calendar` every 5 min.
+    # The chat backend never blocks on an inbox sync any more.
+    logger.info("cara.integrations_via_celery_beat")
 
     try:
         yield
     finally:
-        for t in (push_task, proactivity_task, ha_events_task, calendar_task, gmail_task):
+        for t in (push_task, proactivity_task, ha_events_task):
             if t is None:
                 continue
             t.cancel()

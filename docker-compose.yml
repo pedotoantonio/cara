@@ -148,22 +148,76 @@ services:
       retries: 3
       start_period: 90s            # 2 worker × ~10s di model load
 
-  celery:
+  # ─── Celery agents ──────────────────────────────────────────────
+  # Replaced the single legacy `celery` worker with three queue-bound
+  # workers + one beat scheduler. Each worker is concurrency=1 to stay
+  # within the NanoPC RAM budget; combined extra footprint ≈ 1 GB.
+  # Workers share the same image as `backend` — no LLM init (`LLM_ENABLED=false`).
+
+  celery-beat:
     <<: *app-env
     image: cara-backend:0.1.0
-    container_name: cara-celery
+    container_name: cara-celery-beat
     restart: unless-stopped
     profiles: ["app"]
-    command: ["celery", "-A", "cara.tasks.celery_app", "worker", "--loglevel=info"]
+    command: ["celery", "-A", "cara.tasks.celery_app", "beat",
+              "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
     depends_on:
-      backend:  {condition: service_started}
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+    environment:
+      LLM_ENABLED: "false"
+    networks:
+      - proxy-net
+
+  celery-mail:
+    <<: *app-env
+    image: cara-backend:0.1.0
+    container_name: cara-celery-mail
+    restart: unless-stopped
+    profiles: ["app"]
+    command: ["celery", "-A", "cara.tasks.celery_app", "worker",
+              "--loglevel=info", "--queues=mail", "--concurrency=1",
+              "--hostname=mail@%h"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+    environment:
+      LLM_ENABLED: "false"
+    networks:
+      - proxy-net
+
+  celery-files:
+    <<: *app-env
+    image: cara-backend:0.1.0
+    container_name: cara-celery-files
+    restart: unless-stopped
+    profiles: ["app"]
+    command: ["celery", "-A", "cara.tasks.celery_app", "worker",
+              "--loglevel=info", "--queues=files", "--concurrency=1",
+              "--hostname=files@%h"]
+    depends_on:
       postgres: {condition: service_healthy}
       redis:    {condition: service_healthy}
     volumes:
       - ./data/uploads:/app/uploads
-      - ./data/models:/app/models:ro
-    # Celery does NOT use the LLM (NPU is single-tenant per process). If a
-    # task needs inference, it should call the backend HTTP API.
+    environment:
+      LLM_ENABLED: "false"
+    networks:
+      - proxy-net
+
+  celery-learn:
+    <<: *app-env
+    image: cara-backend:0.1.0
+    container_name: cara-celery-learn
+    restart: unless-stopped
+    profiles: ["app"]
+    command: ["celery", "-A", "cara.tasks.celery_app", "worker",
+              "--loglevel=info", "--queues=learn,default", "--concurrency=1",
+              "--hostname=learn@%h"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
     environment:
       LLM_ENABLED: "false"
     networks:

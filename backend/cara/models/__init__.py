@@ -1,6 +1,7 @@
 """ORM models. Every model must be imported here so Alembic autogenerate sees it."""
 
 from cara.models.admin_settings import AdminSetting
+from cara.models.agent_run import AgentRun
 from cara.models.audit import AuditLog
 from cara.models.budget import Budget, Expense
 from cara.models.calendar_event import CalendarEvent
@@ -27,6 +28,7 @@ from cara.models.workflow_trust import WorkflowTrust
 
 __all__ = [
     "AdminSetting",
+    "AgentRun",
     "AuditLog",
     "Budget",
     "CalendarEvent",
