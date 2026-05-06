@@ -36,6 +36,35 @@ import {
   ttsAvailable,
   type ListenHandle,
 } from './speech';
+
+/**
+ * Pick the STT path. On mobile (iOS, Android) and inside an installed PWA
+ * the browser's `SpeechRecognition` is unreliable: iOS Safari often
+ * silently refuses to fire `onresult` from a standalone PWA, Android
+ * Chrome installed-PWA loses the recognizer when the SW takes over the
+ * mic. Server-side Whisper via MediaRecorder is far more reliable on
+ * those platforms (and works offline-from-Google because it's local).
+ *
+ * Returns true when we should use Whisper FIRST, falling back to native
+ * SR only when MediaRecorder isn't available.
+ */
+function preferWhisperStt(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (!whisperRecorderAvailable()) return false;
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPad|iPhone|iPod/.test(ua);
+  if (isIOS) return true;
+  const isAndroid = /Android/.test(ua);
+  // PWA standalone — both display-mode media query and the iOS-specific
+  // `navigator.standalone` flag.
+  const isStandalone =
+    window.matchMedia?.('(display-mode: standalone)').matches ||
+    Boolean((window.navigator as { standalone?: boolean }).standalone);
+  if (isAndroid && isStandalone) return true;
+  // Touch device with no native SR → only path is whisper.
+  if (!sttAvailable()) return true;
+  return false;
+}
 import { startWakeWord, type WakeWordHandle } from './wakeWord';
 
 export type VoicePhase = 'idle' | 'listening' | 'thinking' | 'speaking';
@@ -238,6 +267,8 @@ export function useVoiceConversation(opts: {
               setUserText(captured);
               submitToBackend(captured);
             } else {
+              // Empty transcript — never silent. Tell the user.
+              setErrorMessage('Non ho sentito niente. Tocca il microfono e parla più vicino al dispositivo.');
               setPhase('idle');
             }
           })
@@ -271,18 +302,14 @@ export function useVoiceConversation(opts: {
       setPhase('idle');
       return;
     }
-    // idle → start listening. Two paths:
-    //   (a) browser SR is available → use it (fast, low-latency interim)
-    //   (b) no SR but MediaRecorder available → record + upload to whisper
-    if (!sttOk) {
-      if (!whisperRecorderAvailable()) {
-        setErrorMessage(
-          'Riconoscimento vocale non supportato in questo browser. Apri /chat per scrivere.',
-        );
-        return;
-      }
-      // Whisper fallback path — record until next tap.
-      logVoice('starting whisper fallback recording');
+    // idle → start listening. Three branches in priority:
+    //   (1) preferWhisperStt() → record + upload to whisper (mobile, iOS,
+    //       Android PWA standalone, or browsers without native SR)
+    //   (2) sttAvailable() → use the browser SR (low-latency interim,
+    //       desktop Chrome / Edge)
+    //   (3) no path available → show actionable error
+    if (preferWhisperStt()) {
+      logVoice('starting whisper recording (preferred for this platform)');
       setErrorMessage(null);
       setUserText('');
       setAssistantText('');
@@ -295,9 +322,26 @@ export function useVoiceConversation(opts: {
         })
         .catch((e: Error) => {
           logVoice('whisper recording failed to start', e);
-          setErrorMessage(`Microfono non avviato: ${e.message}`);
+          // Map common getUserMedia errors to user-friendly Italian.
+          let msg = `Microfono non avviato: ${e.message}`;
+          const m = (e.message || '').toLowerCase();
+          if (m.includes('notallowederror') || m.includes('permission')) {
+            msg = 'Permesso microfono negato. Vai nelle impostazioni del browser e abilita il microfono per CARA, poi riprova.';
+          } else if (m.includes('notfounderror') || m.includes('devicenot')) {
+            msg = 'Nessun microfono rilevato sul dispositivo.';
+          } else if (m.includes('notreadable') || m.includes('aborterror')) {
+            msg = 'Il microfono è già usato da un\'altra app. Chiudi quella e riprova.';
+          }
+          setErrorMessage(msg);
           setPhase('idle');
         });
+      return;
+    }
+    if (!sttAvailable()) {
+      // No native SR and whisper unavailable too (no MediaRecorder).
+      setErrorMessage(
+        'Riconoscimento vocale non disponibile in questo browser. Apri /chat per scrivere a CARA.',
+      );
       return;
     }
     // Pause the wake-word listener SYNCHRONOUSLY before we ask for the mic
