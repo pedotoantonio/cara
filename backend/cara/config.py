@@ -190,7 +190,11 @@ class Settings(BaseSettings):
         default="", validation_alias="GOOGLE_OAUTH_CLIENT_SECRET"
     )
     google_oauth_redirect_uri: str = Field(
-        default="https://192.168.1.23:8455/api/v1/oauth/google/callback",
+        # Google rejects IP addresses for OAuth redirect_uri — must be a
+        # hostname. We ship a default LAN hostname; family devices need
+        # the matching `192.168.1.23 cara.home.lan` line in /etc/hosts
+        # (the mkcert cert already includes this DNS SAN).
+        default="https://cara.home.lan:8455/api/v1/oauth/google/callback",
         validation_alias="GOOGLE_OAUTH_REDIRECT_URI",
     )
     # AES-256-GCM key (urlsafe-base64) for token encryption at rest.
