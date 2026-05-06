@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
-import { clearTokens, fetchMe, getToken } from './api/auth';
+import { AuthNetworkError, clearTokens, fetchMe, getToken } from './api/auth';
 import type { User } from './api/auth';
 import { getVoiceConfig } from './api/voice';
 import { AmbientStateBanner } from './components/AmbientStateBanner';
@@ -86,7 +86,19 @@ export default function App() {
     }
     fetchMe()
       .then((user) => setAuth({ kind: 'authenticated', user }))
-      .catch(() => {
+      .catch((err: Error) => {
+        // CRITICAL: only kick the user back to /login on an actual
+        // 401 from the server. Network errors (CORS, cert, DNS, server
+        // restart) leave the token alone — the user is still
+        // authenticated, the connection is just blip. Clearing the
+        // token here on a transient error was the source of the
+        // "auth loop" Antonio reported on Chrome / mobile.
+        if (err instanceof AuthNetworkError) {
+          // Stay authenticated-as-best-known, but show login as a
+          // last resort so the user has SOMETHING to interact with.
+          setAuth({ kind: 'anonymous' });
+          return;
+        }
         clearTokens();
         setAuth({ kind: 'anonymous' });
       });
@@ -115,7 +127,11 @@ export default function App() {
   function refreshMe() {
     fetchMe()
       .then((user) => setAuth({ kind: 'authenticated', user }))
-      .catch(() => {
+      .catch((err: Error) => {
+        if (err instanceof AuthNetworkError) {
+          // Same rule as boot-time: don't kick out on transient errors.
+          return;
+        }
         clearTokens();
         setAuth({ kind: 'anonymous' });
       });

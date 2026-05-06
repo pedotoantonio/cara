@@ -1,3 +1,5 @@
+import { getItem, setItem, removeItem } from '../lib/authStorage';
+
 const API = '/api/v1';
 const TOKEN_KEY = 'cara.access_token';
 const REFRESH_KEY = 'cara.refresh_token';
@@ -14,21 +16,34 @@ export interface User {
 }
 
 export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+  return getItem(TOKEN_KEY);
 }
 
 export function getRefreshToken(): string | null {
-  return localStorage.getItem(REFRESH_KEY);
+  return getItem(REFRESH_KEY);
 }
 
 export function setTokens(access: string, refresh: string) {
-  localStorage.setItem(TOKEN_KEY, access);
-  localStorage.setItem(REFRESH_KEY, refresh);
+  setItem(TOKEN_KEY, access);
+  setItem(REFRESH_KEY, refresh);
 }
 
 export function clearTokens() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(REFRESH_KEY);
+  removeItem(TOKEN_KEY);
+  removeItem(REFRESH_KEY);
+}
+
+/**
+ * Custom error raised by `fetchMe` when the network/CORS/cert layer
+ * fails BEFORE we get a real HTTP response. The App layer should NOT
+ * clear tokens in this case — the user is probably still logged in,
+ * the connection is just blip.
+ */
+export class AuthNetworkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuthNetworkError';
+  }
 }
 
 export async function login(email: string, password: string): Promise<void> {
@@ -46,11 +61,37 @@ export async function login(email: string, password: string): Promise<void> {
   }
   const data = (await r.json()) as { access_token: string; refresh_token: string };
   setTokens(data.access_token, data.refresh_token);
+  // Verify the write actually persisted (private mode / Safari ITP /
+  // standalone PWA can silently no-op). Without this check the user
+  // would think login succeeded, then loop back to the login screen
+  // on every page load.
+  if (getToken() !== data.access_token) {
+    throw new Error(
+      'Storage del browser non disponibile. Disattiva la modalità in incognito o '
+      + 'concedi a CARA il permesso di salvare i dati del sito.',
+    );
+  }
 }
 
 export async function fetchMe(): Promise<User> {
-  const r = await authFetch(`${API}/auth/me`);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  let r: Response;
+  try {
+    r = await authFetch(`${API}/auth/me`);
+  } catch (err) {
+    // Network / CORS / cert / DNS — the request never produced an
+    // HTTP response. We must NOT clear tokens for this: the user is
+    // likely still authenticated, just temporarily disconnected.
+    throw new AuthNetworkError((err as Error).message || 'network error');
+  }
+  if (r.status === 401) {
+    // True auth failure — caller should clear tokens.
+    throw new Error(`HTTP 401`);
+  }
+  if (!r.ok) {
+    // 5xx etc. — backend issue, not auth. Treat as network so we
+    // don't kick the user out on a transient server error.
+    throw new AuthNetworkError(`HTTP ${r.status}`);
+  }
   return r.json();
 }
 
