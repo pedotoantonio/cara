@@ -718,3 +718,89 @@ async def primitive_catalog(
         )
         for p in _list_primitives()
     ]
+
+
+# ─── Cameras (Frigate metadata + CARA overrides) ────────────────────────
+
+
+class CameraOut(BaseModel):
+    id: str
+    label: str
+    area: str | None = None
+    presence_relevant: bool
+    notify_motion: bool
+    online: bool
+    last_seen: datetime | None = None
+    snapshot_url: str | None = None
+    objects: list[str] = []
+
+
+class CameraPatch(BaseModel):
+    label: str | None = None
+    area: str | None = None
+    presence_relevant: bool | None = None
+    notify_motion: bool | None = None
+
+
+@router.get("/cameras", response_model=list[CameraOut])
+async def list_cameras_endpoint(
+    admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> list[CameraOut]:
+    """List house cameras as seen by Frigate, merged with CARA overrides
+    (display label, area binding, presence relevance, motion notify).
+
+    Returns an empty list if Frigate is unreachable — the admin UI then
+    shows a "configura URL Frigate" hint.
+    """
+    from cara.services import cameras as cam_svc
+
+    cams = await cam_svc.list_cameras(session)
+    return [
+        CameraOut(
+            id=c.id,
+            label=c.label,
+            area=c.area,
+            presence_relevant=c.presence_relevant,
+            notify_motion=c.notify_motion,
+            online=c.online,
+            last_seen=c.last_seen,
+            snapshot_url=c.snapshot_url,
+            objects=c.objects,
+        )
+        for c in cams
+    ]
+
+
+@router.patch("/cameras/{camera_id}", response_model=dict)
+async def update_camera_endpoint(
+    camera_id: str,
+    body: CameraPatch,
+    request: Request,
+    admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict:
+    """Update CARA-specific metadata for a camera. Frigate is the source
+    of truth for the camera list; CARA only stores label / area /
+    presence-relevance overrides.
+    """
+    from cara.services import cameras as cam_svc
+
+    merged = await cam_svc.update_camera_override(
+        session,
+        camera_id,
+        actor_user_id=admin.id,
+        label=body.label,
+        area=body.area,
+        presence_relevant=body.presence_relevant,
+        notify_motion=body.notify_motion,
+    )
+    await audit_svc.record(
+        session,
+        actor=admin,
+        action=f"cameras.update[{camera_id}]",
+        ip=request.client.host if request.client else None,
+        detail=body.model_dump(exclude_none=True),
+    )
+    await session.commit()
+    return {"camera_id": camera_id, "override": merged}

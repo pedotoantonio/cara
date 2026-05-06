@@ -69,9 +69,14 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
     # ---- News -------------------------------------------------------------
     (
         re.compile(
-            r"^(?:dimmi(?:le)?|leggimi|che\s+sono)?\s*"
-            r"(?:le\s+)?(?:ultime\s+)?notiz(?:ie|ia)"
-            r"(?:\s+(?:di|del|sul|in)\s+(?P<cat>italia|mondo|economia|tech|tecnologia|sport))?"
+            r"^(?:cara,?\s*)?"
+            r"(?:dim[mn]i(?:le)?|dam[mn]i|leggi(?:mi|ci|tele)?|"
+            r"mostra(?:mi|ci)?|fammi\s+vedere|elenca(?:mi)?|"
+            r"che\s+(?:cosa\s+)?(?:c['’]?\s*[èe]|sono|ci\s+sono)|"
+            r"quali\s+sono|che\s+novit[àa])?\s*"
+            r"(?:le\s+|alcune\s+|qualche\s+)?(?:ultime\s+)?notiz(?:ie|ia)"
+            r"(?:\s+(?:di|del|sul|in|sulla|sull['’]|su|riguard[oa])\s+"
+            r"(?P<cat>italia|mondo|economia|tech|tecnologia|sport|cronaca|esteri))?"
             r"\s*[?!.]*$",
             re.IGNORECASE,
         ),
@@ -82,6 +87,36 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
                 "tech" if (m.group("cat") or "").lower() == "tecnologia"
                 else (m.group("cat") or "all").lower()
             ),
+        },
+    ),
+    # ---- Weather ----------------------------------------------------------
+    # Forecast intent backed by `cara.services.weather.WeatherService`
+    # (Open-Meteo). Scope = today / tomorrow / week.
+    (
+        re.compile(
+            r"^(?:cara,?\s*)?"
+            r"(?:che\s+tempo\s+(?:fa|farà|c['’]?\s*[èe])|"
+            r"come\s+(?:è\s+il\s+|sarà\s+il\s+)?tempo|"
+            r"come\s+(?:sarà|è)\s+il\s+meteo|"
+            r"(?:dim[mn]i(?:mi)?|dam[mn]i|fammi\s+vedere|mostra(?:mi)?|leggi(?:mi)?)\s+"
+            r"(?:il\s+|le\s+)?(?:meteo|previsioni|tempo)|"
+            r"(?:il\s+)?meteo|(?:le\s+)?previsioni(?:\s+meteo)?|"
+            r"(?:fa|farà)\s+(?:caldo|freddo|brutto|bello))"
+            r"(?:\s+(?:di|per|a)\s+(?:oggi|domani|questa\s+settimana|"
+            r"(?:la\s+)?(?:prossima\s+settimana|settimana\s+prossima)|stasera))?"
+            r"(?:\s+(?:a|in|su)\s+(?P<city>[\w\s'à-úÀ-Ú-]{2,40}))?"
+            r"\s*[?!.]*$",
+            re.IGNORECASE,
+        ),
+        "answer_weather",
+        "Controllo il meteo.",
+        lambda m: {
+            "scope": (
+                "tomorrow" if "domani" in m.group(0).lower()
+                else "week" if "settimana" in m.group(0).lower()
+                else "today"
+            ),
+            "city": (m.group("city") or "").strip() or None,
         },
     ),
     # ---- Capabilities — "cosa puoi fare", "chi sei", "aiuto" --------------
@@ -118,17 +153,65 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
     # ---- Appointments — tasks WITH due_date only --------------------------
     # The user thinks of "appuntamenti" as the subset of tasks that have a
     # due date. Cheap to satisfy: filter on the way out.
+    #
+    # The pattern is union-based: each `_APPT_*` alternative is a separate
+    # natural phrasing the family uses. Keep it permissive — false positives
+    # here just produce "Non hai appuntamenti", false negatives produce
+    # LLM hallucinations or get swallowed by the skill dispatcher.
     (
         re.compile(
+            # 1. Imperative list verb: "elencami / dammi / dimmi / mostrami /
+            #    leggimi / fammi vedere / quali sono [i miei] [appuntamenti]
+            #    [di oggi / di domani / di questa settimana / della prossima
+            #    settimana / della settimana prossima]?"
             r"^(?:cara,?\s*)?"
-            r"(?:elenca(?:mi)?|mostra(?:mi)?|dim[mn]i|fammi\s+vedere|leggi(?:mi)?|quali\s+sono)\s+"
-            r"(?:tutti\s+(?:gli\s+|i\s+)?|i\s+|gli\s+)?(?:miei\s+)?"
-            r"(?:appuntament(?:i|o)|impegni|impegno)"
-            r"(?:\s+di\s+oggi|\s+di\s+domani|\s+di\s+questa\s+settimana)?"
+            r"(?:elenca(?:mi)?|mostra(?:mi)?|dim[mn]i|dam[mn]i|"
+            r"fammi\s+vedere|leggi(?:mi)?|quali\s+sono|"
+            r"vediamo|hai)\s+"
+            r"(?:tutti\s+(?:gli\s+|i\s+)?|i\s+|gli\s+|qualche\s+|gli\s+eventuali\s+)?"
+            r"(?:miei\s+|tuoi\s+)?"
+            r"(?:appuntament(?:i|o)|impegni|impegno|event(?:i|o))"
+            r"(?:\s+(?:di|per|della|nella|in)\s+(?:oggi|domani|questa\s+settimana|"
+            r"(?:la\s+)?(?:prossima\s+settimana|settimana\s+prossima)|"
+            r"questo\s+weekend|il\s+weekend|stasera))?"
             r"\s*[?!.]*$|"
-            r"^(?:i\s+miei\s+|gli\s+|tutti\s+gli\s+)?appuntament(?:i|o)\s*[?!.]*$|"
+
+            # 2. Bare noun: "appuntamenti?" "i miei impegni" "appuntamenti
+            #    della settimana prossima" "impegni di oggi"
+            r"^(?:i\s+miei\s+|gli\s+|tutti\s+gli\s+|miei\s+)?"
+            r"(?:appuntament(?:i|o)|impegni|impegno)"
+            r"(?:\s+(?:di|della|del|dell['’]|in|per)\s+"
+            r"(?:oggi|domani|questa\s+settimana|"
+            r"(?:la\s+)?(?:prossima\s+settimana|settimana\s+prossima)|"
+            r"questo\s+weekend|il\s+weekend|stasera))?"
+            r"\s*[?!.]*$|"
+
+            # 3. Question form with "che/quali/quanti": "che appuntamenti
+            #    ho oggi?" "quali impegni ho domani?" "quanti appuntamenti
+            #    ho questa settimana?"
+            r"^(?:cara,?\s*)?"
+            r"(?:che|quali|quanti)\s+"
+            r"(?:appuntament(?:i|o)|impegni|impegno|event(?:i|o))\s+"
+            r"(?:ho|abbiamo|c['’]\s*sono)"
+            r"(?:\s+(?:oggi|domani|questa\s+settimana|"
+            r"(?:la\s+)?(?:prossima\s+settimana|settimana\s+prossima)|"
+            r"in\s+programma|stasera|questo\s+weekend))?"
+            r"\s*[?!.]*$|"
+
+            # 4. Plain "ho appuntamenti?" / "ho impegni oggi?"
+            r"^(?:ho|abbiamo)\s+"
+            r"(?:appuntament(?:i|o)|impegni|impegno)"
+            r"(?:\s+(?:oggi|domani|questa\s+settimana|"
+            r"(?:la\s+)?(?:prossima\s+settimana|settimana\s+prossima)|"
+            r"in\s+programma|stasera|questo\s+weekend))?"
+            r"\s*[?!.]*$|"
+
+            # 5. "cosa ho / che ho / che cosa ho" + scope token (kept for
+            #    backward compat with previous regex shape)
             r"^(?:cosa\s+ho|che\s+(?:cosa\s+)?ho)\s+"
-            r"(?:in\s+programma|da\s+fare\s+(?:oggi|domani|questa\s+settimana))\s*[?!.]*$",
+            r"(?:in\s+programma|da\s+fare\s+(?:oggi|domani|questa\s+settimana|"
+            r"(?:la\s+)?(?:prossima\s+settimana|settimana\s+prossima)))"
+            r"\s*[?!.]*$",
             re.IGNORECASE,
         ),
         "list_appointments",
@@ -154,11 +237,15 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
     # ---- Tasks list (all) -------------------------------------------------
     (
         re.compile(
-            r"^(?:cosa\s+devo\s+fare|"
-            r"(?:mostra(?:mi)?|dim[mn]i|fammi\s+vedere|elenca(?:mi)?)\s+"
+            r"^(?:cara,?\s*)?"
+            r"(?:cosa\s+devo\s+fare|"
+            r"(?:mostra(?:mi)?|dim[mn]i|dam[mn]i|fammi\s+vedere|elenca(?:mi)?|leggi(?:mi)?)\s+"
             r"(?:tutt[ei]\s+)?"
-            r"(?:la\s+(?:mia\s+)?lista(?:\s+(?:de(?:i|lle))?\s+(?:task|attivit[àa]|cose|cose\s+da\s+fare))?|"
+            r"(?:la\s+(?:mia\s+)?lista(?:\s+(?:de(?:i|lle|gli)\s+)?(?:task|attivit[àa]|cose|cose\s+da\s+fare))?|"
             r"(?:i\s+|le\s+)?(?:miei\s+|mie\s+)?(?:task|attivit[àa]|cose\s+da\s+fare))|"
+            # Bare nouns: "lista delle cose da fare", "le cose da fare", "le mie task"
+            r"(?:la\s+)?(?:mia\s+)?lista(?:\s+(?:de(?:i|lle|gli)\s+)?(?:task|attivit[àa]|cose(?:\s+da\s+fare)?))?|"
+            r"(?:le\s+|i\s+)?(?:mie\s+|miei\s+)?cose\s+da\s+fare|"
             r"che\s+cose\s+devo\s+fare|"
             r"(?:i\s+|le\s+)?(?:miei\s+|mie\s+)?(?:task|attivit[àa])\s+totali|"
             r"(?:fammi\s+)?vedere\s+(?:la\s+)?(?:mia\s+)?lista|"
@@ -192,7 +279,8 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
     # ---- Notes list ------------------------------------------------------
     (
         re.compile(
-            r"^(?:(?:mostra(?:mi)?|dim[mn]i|fammi\s+vedere|elenca(?:mi)?|leggi(?:mi)?)\s+"
+            r"^(?:cara,?\s*)?"
+            r"(?:(?:mostra(?:mi)?|dim[mn]i|dam[mn]i|fammi\s+vedere|elenca(?:mi)?|leggi(?:mi)?)\s+"
             r"(?:le\s+|tutte\s+le\s+)?(?:mie\s+)?note|"
             r"(?:le\s+|tutte\s+le\s+)?(?:mie\s+)?note|"
             r"quali\s+(?:sono\s+(?:le\s+)?)?(?:mie\s+)?note)"
@@ -384,12 +472,19 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
 
 
 def _appt_scope(q: str) -> str:
-    """Pick "today" / "tomorrow" / "week" / "all" from the user phrasing."""
+    """Pick "today" / "tomorrow" / "week" / "next_week" / "weekend" / "all"
+    from the user phrasing. Order matters: more specific tokens win."""
     q = q.lower()
     if "domani" in q:
         return "tomorrow"
+    if "prossima settimana" in q or "settimana prossima" in q:
+        return "next_week"
+    if "weekend" in q or "fine settimana" in q:
+        return "weekend"
     if "settimana" in q:
         return "week"
+    if "stasera" in q:
+        return "tonight"
     if "oggi" in q or "in programma" in q:
         return "today"
     return "all"

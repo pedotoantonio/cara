@@ -152,6 +152,11 @@ class Settings(BaseSettings):
     frigate_faces_url: str = Field(
         default="http://frigate-faces:5051", validation_alias="FRIGATE_FACES_URL"
     )
+    # Frigate NVR — used for camera discovery and recent-motion fallback when
+    # no face match is available. Same proxy-net DNS, default port 5000.
+    frigate_url: str = Field(
+        default="http://frigate:5000", validation_alias="FRIGATE_URL"
+    )
     family_presence_window_minutes: int = Field(
         default=15, validation_alias="FAMILY_PRESENCE_WINDOW_MINUTES"
     )

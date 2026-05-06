@@ -28,9 +28,11 @@ import {
   runWorkflow,
 } from '../api/workflows';
 import { CaraFaceFX } from './CaraFaceFX';
+import type { Emotion, EnergyState } from './CaraFace';
 import { MessageBubble } from './MessageBubble';
 import { WelcomeScreen } from './WelcomeScreen';
 import { WorkflowPreview } from './WorkflowPreview';
+import { inferEmotion } from '../lib/expressionFromText';
 
 interface ChatProps {
   user: User;
@@ -39,13 +41,19 @@ interface ChatProps {
 function chatFaceFXState(
   streaming: boolean,
   messages: Message[],
-): { energy: 'idle' | 'thinking' | 'speaking'; emotion: 'neutral' | 'thoughtful' } {
-  if (!streaming) return { energy: 'idle', emotion: 'neutral' };
+): { energy: EnergyState; emotion: Emotion } {
   const last = messages[messages.length - 1];
-  if (last?.role === 'assistant' && last.content.length > 0) {
-    return { energy: 'speaking', emotion: 'neutral' };
+  const lastAssistantText =
+    last?.role === 'assistant' ? last.content ?? '' : '';
+  if (streaming) {
+    if (lastAssistantText.length > 0) {
+      return { energy: 'speaking', emotion: inferEmotion(lastAssistantText) };
+    }
+    return { energy: 'thinking', emotion: 'thoughtful' };
   }
-  return { energy: 'thinking', emotion: 'thoughtful' };
+  // At rest: hold the closing mood of the last assistant reply so the
+  // mini avatar mirrors what CARA just said.
+  return { energy: 'idle', emotion: inferEmotion(lastAssistantText) };
 }
 
 export function Chat({ user }: ChatProps) {

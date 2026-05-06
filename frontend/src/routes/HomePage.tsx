@@ -21,6 +21,7 @@ import { type Emotion, type EnergyState } from '../components/CaraFace';
 import { Badge, Card, Icon, IconButton } from '../design';
 import { useVoiceConversation } from '../lib/voiceConversation';
 import { loadPrefs } from '../lib/userPrefs';
+import { inferEmotion } from '../lib/expressionFromText';
 
 export function HomePage() {
   useOutletContext<{ user: User }>(); // ensures we're inside the shell
@@ -55,12 +56,22 @@ export function HomePage() {
 
   const { energy, emotion } = useMemo<{ energy: EnergyState; emotion: Emotion }>(() => {
     switch (conv.phase) {
-      case 'listening': return { energy: 'listening', emotion: 'neutral' };
-      case 'thinking':  return { energy: 'thinking',  emotion: 'thoughtful' };
-      case 'speaking':  return { energy: 'speaking',  emotion: 'happy' };
-      default:          return { energy: 'idle',      emotion: 'happy' };
+      case 'listening':
+        return { energy: 'listening', emotion: 'neutral' };
+      case 'thinking':
+        return { energy: 'thinking', emotion: 'thoughtful' };
+      case 'speaking':
+        // Drive the face from what CARA is actually saying.
+        return { energy: 'speaking', emotion: inferEmotion(conv.assistantText) };
+      default:
+        // After a turn ends, hold the closing mood briefly so the face
+        // doesn't snap to neutral the instant audio stops.
+        return {
+          energy: 'idle',
+          emotion: conv.assistantText ? inferEmotion(conv.assistantText) : 'happy',
+        };
     }
-  }, [conv.phase]);
+  }, [conv.phase, conv.assistantText]);
 
   const micState: MicState = !conv.sttOk
     ? 'disabled'

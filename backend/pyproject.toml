@@ -37,6 +37,9 @@ dependencies = [
   "google-auth>=2.30",            # Apache 2.0, OAuth 2.0 + token refresh
   "google-auth-oauthlib>=1.2",    # Apache 2.0, OAuth flow helpers
   "google-api-python-client>=2.140",  # Apache 2.0, Calendar + Gmail API client
+  "sentence-transformers>=3.0",   # Apache 2.0, MiniLM-L12-v2 for Tier-2 cosine
+                                   # + smarthome NLU + semantic memory + reflective batch
+  "torch>=2.0",                    # BSD-3, CPU inference for sentence-transformers
 ]
 
 [project.optional-dependencies]

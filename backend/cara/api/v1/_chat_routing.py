@@ -746,13 +746,42 @@ async def _resolve_routed_intent(
         elif scope == "tomorrow":
             appts = [t for t in appts if t.due_date and _local_date(t.due_date) == tomorrow]
             head = "Appuntamenti di domani"
+        elif scope == "tonight":
+            appts = [
+                t for t in appts
+                if t.due_date and _local_date(t.due_date) == today
+                and t.due_date.astimezone(tz).hour >= 18
+            ]
+            head = "Appuntamenti di stasera"
+        elif scope == "weekend":
+            # Saturday=5, Sunday=6 in Python's weekday().
+            days_to_sat = (5 - today.weekday()) % 7
+            sat = today + timedelta(days=days_to_sat)
+            sun = sat + timedelta(days=1)
+            appts = [
+                t for t in appts
+                if t.due_date and _local_date(t.due_date) in (sat, sun)
+            ]
+            head = "Appuntamenti del weekend"
         elif scope == "week":
-            week_end = today + timedelta(days=7)
+            # "this week" = today through next Sunday (inclusive).
+            days_to_sun = (6 - today.weekday()) % 7
+            week_end = today + timedelta(days=days_to_sun)
             appts = [
                 t for t in appts
                 if t.due_date and today <= _local_date(t.due_date) <= week_end
             ]
             head = "Appuntamenti di questa settimana"
+        elif scope == "next_week":
+            # "next week" = next Monday through the Sunday after.
+            days_to_mon = (7 - today.weekday()) % 7 or 7
+            nw_start = today + timedelta(days=days_to_mon)
+            nw_end = nw_start + timedelta(days=6)
+            appts = [
+                t for t in appts
+                if t.due_date and nw_start <= _local_date(t.due_date) <= nw_end
+            ]
+            head = "Appuntamenti della prossima settimana"
         else:
             head = "I tuoi appuntamenti"
         if not appts:
@@ -775,6 +804,95 @@ async def _resolve_routed_intent(
             rows.append(f"• {t.title} — {when}")
         more = f"\n…(+{len(appts) - 10} altri)" if len(appts) > 10 else ""
         return f"{head}:\n" + "\n".join(rows) + more
+
+    if kind == "answer_weather":
+        # Resolve family location from admin_settings. If unset, return
+        # an actionable message instead of guessing a city.
+        from cara.services import admin_settings as admin_svc
+        from cara.services.weather import WeatherService
+
+        scope = (args.get("scope") or "today").lower()
+        override_city = (args.get("city") or "").strip() or None
+
+        lat: float | None = None
+        lon: float | None = None
+        place_label = ""
+        ws = WeatherService()
+
+        if override_city:
+            # User said "che tempo fa a Roma" — geocode on the fly.
+            try:
+                hits = await ws.geocode(override_city, count=1)
+            except Exception:
+                hits = []
+            if not hits:
+                return (
+                    f"Non riesco a trovare \"{override_city}\". "
+                    "Riprova con un nome di città più preciso."
+                )
+            lat, lon = hits[0].latitude, hits[0].longitude
+            place_label = hits[0].name
+        else:
+            try:
+                lat_v = await admin_svc.get(session, "family_lat")
+                lon_v = await admin_svc.get(session, "family_lon")
+                city_v = await admin_svc.get(session, "family_city")
+            except Exception:
+                lat_v = lon_v = city_v = None
+            if lat_v is not None and lon_v is not None:
+                lat = float(lat_v)
+                lon = float(lon_v)
+                place_label = str(city_v or "casa")
+            else:
+                return (
+                    "Non ho ancora la città di casa. "
+                    "Vai su /admin (Impostazioni → Residenza) e impostala, "
+                    "poi richiedimi il meteo."
+                )
+
+        if scope == "today":
+            cur = await ws.current(lat, lon)
+            if cur is None:
+                return f"Non riesco a leggere il meteo di {place_label} adesso."
+            temp = round(cur.temperature_c)
+            apparent = (
+                f" (percepiti {round(cur.apparent_temperature_c)}°)"
+                if cur.apparent_temperature_c is not None
+                else ""
+            )
+            return (
+                f"A {place_label}: {cur.label.lower()}, {temp}°{apparent}."
+            )
+
+        days = 7 if scope == "week" else 2  # tomorrow → fetch 2 to have day 1
+        forecast = await ws.forecast(lat, lon, days=days)
+        if not forecast:
+            return f"Non riesco a leggere il meteo di {place_label}."
+
+        if scope == "tomorrow":
+            if len(forecast) < 2:
+                return f"Previsione di domani per {place_label} non disponibile."
+            d = forecast[1]
+            return (
+                f"Domani a {place_label}: {d.label.lower()}, "
+                f"min {round(d.temp_min_c)}° / max {round(d.temp_max_c)}°."
+            )
+
+        # Week scope. DailyForecast.date is an ISO "YYYY-MM-DD" string.
+        from datetime import date as _date
+        days_it = ["lun", "mar", "mer", "gio", "ven", "sab", "dom"]
+        rows = []
+        for d in forecast[:7]:
+            try:
+                dt = _date.fromisoformat(d.date)
+                day_label = f"{days_it[dt.weekday()]} {dt.strftime('%d/%m')}"
+            except (ValueError, TypeError):
+                day_label = d.date
+            rows.append(
+                f"• {day_label}: {d.label.lower()}, "
+                f"{round(d.temp_min_c)}°/{round(d.temp_max_c)}°"
+            )
+        return f"Meteo a {place_label}:\n" + "\n".join(rows)
 
     if kind == "complete_task":
         from cara.services import tasks as task_svc
@@ -918,6 +1036,9 @@ async def _resolve_routed_intent(
 
     if kind == "who_is_home":
         from cara.services.family import FamilyPresenceUnavailable, people_present
+        from cara.services import admin_settings as admin_svc
+        from cara.services import cameras as cam_svc
+
         try:
             seen = await people_present(window_minutes=15)
         except FamilyPresenceUnavailable as exc:
@@ -925,10 +1046,34 @@ async def _resolve_routed_intent(
         except Exception as exc:  # noqa: BLE001
             log.warning("chat.routed.who_is_home_error", error=str(exc))
             return "Non riesco a controllare le telecamere in questo momento."
-        if not seen:
-            return "In questo momento non vedo nessuno in casa."
-        names = ", ".join(p.name for p in seen)
-        return f"In casa adesso: {names}."
+
+        if seen:
+            names = ", ".join(p.name for p in seen)
+            return f"In casa adesso: {names}."
+
+        # No face match — fall back to Frigate motion events: maybe
+        # someone IS in the house but the face wasn't recognised
+        # (back to the camera, hat on, low light, ...).
+        try:
+            motion_window = int(
+                await admin_svc.get(session, "presence_motion_window_minutes")
+                or 30
+            )
+            events = await cam_svc.recent_person_events(
+                session, window_minutes=motion_window
+            )
+        except Exception:  # noqa: BLE001
+            events = []
+        if events:
+            cams = sorted({e.camera for e in events})
+            n = len(events)
+            where = ", ".join(cams[:3])
+            return (
+                f"Vedo movimento ma nessun volto noto "
+                f"({n} avvistament{'i' if n != 1 else 'o'} su {where} "
+                f"negli ultimi {motion_window} minuti)."
+            )
+        return "In questo momento non vedo nessuno in casa."
 
     if kind == "get_news":
         from cara.services import news as news_svc

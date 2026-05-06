@@ -108,12 +108,37 @@ DEFAULTS: dict[str, Any] = {
     "family_name": None,
     "family_glossary": None,
     "family_size": None,
+    # Family residence — used by the weather intent + future location-aware
+    # widgets (sunrise/sunset, daylight, push reminders timed to commute).
+    # `family_city` is a free-text label shown in the UI; the lat/lon are
+    # resolved via `WeatherService.geocode()` when the admin saves the city
+    # and stored alongside it. Empty / None → no weather replies, the chat
+    # layer says "imposta la città in /admin/impostazioni".
+    "family_city": None,            # e.g. "Torino"
+    "family_country": "IT",         # ISO 3166-1 alpha-2
+    "family_lat": None,             # float, geocoded from family_city
+    "family_lon": None,             # float, geocoded from family_city
     # HomeAssistant adapter (used when smart_home_enabled=True).
     "ha_url": None,
     "ha_token": None,
-    # Frigate / faces (referenced by widgets + presence).
+    # Frigate NVR + frigate-faces (referenced by widgets + presence).
+    # When None, the runtime falls back to `cara.config.settings`
+    # (`http://frigate:5000`, `http://frigate-faces:5051`).
     "frigate_url": None,
     "frigate_faces_url": None,
+    # Per-camera overrides, keyed by Frigate camera id (e.g. "cam_194").
+    # Each entry: {"label": "Ingresso", "area": "ingresso",
+    #              "presence_relevant": True, "notify_motion": False}.
+    # The actual camera list is read live from Frigate's /api/config; this
+    # dict only stores CARA-specific metadata (display label, area binding
+    # for smart-home presence triggers, whether the camera should count
+    # toward "chi è in casa", whether to push Telegram on motion).
+    # Discoverable / editable via `/api/v1/admin/cameras` (admin-only).
+    "cameras": {},
+    # Window (minutes) used by the motion-fallback path: when no recognised
+    # face was seen recently we still tell the user "vedo movimento" if
+    # Frigate had a `person` event within this window.
+    "presence_motion_window_minutes": 30,
 }
 
 
