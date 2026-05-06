@@ -102,7 +102,7 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
             r"(?:il\s+|le\s+)?(?:meteo|previsioni|tempo)|"
             r"(?:il\s+)?meteo|(?:le\s+)?previsioni(?:\s+meteo)?|"
             r"(?:fa|farà)\s+(?:caldo|freddo|brutto|bello))"
-            r"(?:\s+(?:di|per|a)\s+(?:oggi|domani|questa\s+settimana|"
+            r"(?:\s+(?:(?:di|per|a)\s+)?(?:oggi|domani|questa\s+settimana|"
             r"(?:la\s+)?(?:prossima\s+settimana|settimana\s+prossima)|stasera))?"
             r"(?:\s+(?:a|in|su)\s+(?P<city>[\w\s'à-úÀ-Ú-]{2,40}))?"
             r"\s*[?!.]*$",
