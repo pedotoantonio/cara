@@ -928,17 +928,35 @@ async def setup_reset(
     session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> dict[str, Any]:
     """Re-open the wizard for an existing admin (does NOT delete data
-    or revoke users)."""
+    or revoke users).
+
+    Since an admin already exists, Step 1 (admin creation) is implicitly
+    done — `completed_steps` stays as it was (minus a manual full
+    reset), and `current_step` advances to the first un-completed step
+    AFTER 'admin'. Net effect: the existing admin lands directly on
+    Step 2 (TLS) and walks through the remaining steps to update them.
+    """
     state = await _get_setup_state(session)
     state["completed"] = False
-    state["current_step"] = "admin"
-    state["completed_steps"] = list(set(state.get("completed_steps", [])) - {"admin"})
+    completed = list(state.get("completed_steps", []))
+    if "admin" not in completed:
+        completed.append("admin")
+    state["completed_steps"] = completed
+    # Find the first un-completed step that ISN'T admin.
+    next_step = "complete"
+    for s in DEFAULT_STEPS:
+        if s == "admin":
+            continue
+        if s not in completed:
+            next_step = s
+            break
+    state["current_step"] = next_step
     await _save_setup_state(session, state, actor_user_id=admin.id)
     await audit_svc.record(
         session, actor=admin, action="setup.reset",
         target_kind="setup", target_id="v1",
-        detail={},
+        detail={"current_step": next_step},
         ip=request.client.host if request.client else None,
     )
     await session.commit()
-    return {"ok": True}
+    return {"ok": True, "current_step": next_step}
