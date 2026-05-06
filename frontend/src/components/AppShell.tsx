@@ -21,7 +21,14 @@ import {
   onQueueChange,
   queueLength,
 } from '../lib/offlineQueue';
+import { openInstallPrompt } from './InstallPwaPrompt';
 import { RadioMiniBar } from './RadioMiniBar';
+
+function isStandalone(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (window.matchMedia?.('(display-mode: standalone)').matches) return true;
+  return Boolean((window.navigator as { standalone?: boolean }).standalone);
+}
 
 interface AppShellProps {
   user: User;
@@ -261,8 +268,28 @@ export function AppShell({ user, onLogout, refreshMe: _refreshMe }: AppShellProp
           </button>
         </div>
 
-        <div className="mt-2 text-center text-2xs text-fg-muted">
+        {!isStandalone() && (
+          <div className="mt-3 pt-3 border-t border-fg/8">
+            <button
+              type="button"
+              onClick={() => { setMoreOpen(false); openInstallPrompt(); }}
+              className={cn(
+                'w-full flex items-center justify-center gap-2',
+                'rounded-xl bg-accent/10 hover:bg-accent/15',
+                'text-accent text-sm font-medium py-2.5 transition',
+              )}
+            >
+              <Icon name="spark" size={18} />
+              Installa CARA come app
+            </button>
+          </div>
+        )}
+
+        <div className="mt-3 text-center text-2xs text-fg-muted">
           collegata come {user.email}
+        </div>
+        <div className="mt-1 text-center text-2xs text-fg-muted/70">
+          CARA v{__APP_VERSION__}
         </div>
       </BottomSheet>
 
