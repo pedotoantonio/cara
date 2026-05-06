@@ -21,7 +21,7 @@ import {
   onQueueChange,
   queueLength,
 } from '../lib/offlineQueue';
-import { openInstallPrompt } from './InstallPwaPrompt';
+import { triggerInstall } from './InstallPwaPrompt';
 import { RadioMiniBar } from './RadioMiniBar';
 
 function isStandalone(): boolean {
@@ -272,7 +272,7 @@ export function AppShell({ user, onLogout, refreshMe: _refreshMe }: AppShellProp
           <div className="mt-3 pt-3 border-t border-fg/8">
             <button
               type="button"
-              onClick={() => { setMoreOpen(false); openInstallPrompt(); }}
+              onClick={() => { setMoreOpen(false); void triggerInstall(); }}
               className={cn(
                 'w-full flex items-center justify-center gap-2',
                 'rounded-xl bg-accent/10 hover:bg-accent/15',

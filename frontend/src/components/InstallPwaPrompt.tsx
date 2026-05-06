@@ -1,19 +1,23 @@
 /**
- * Floating banner that proposes installing CARA as a PWA.
+ * PWA install plumbing.
  *
- * Path 1 — native (Chromium / Android Chrome / Edge / Brave): captures
- *   `beforeinstallprompt`, waits 3 s, shows banner with "Installa" that
- *   triggers the browser dialog.
- * Path 2 — iOS Safari: shows manual "Condividi → Aggiungi a Home"
- *   instructions (no programmatic install API on iOS).
- * Path 3 — fallback (any other browser, OR Chromium when the event
- *   never fires — e.g. self-signed cert, engagement heuristics not met):
- *   after 8 s shows browser-specific manual instructions so the user
- *   isn't left guessing how to install.
+ * Two surfaces:
  *
- * Never shows when already running standalone. Dismissals persisted in
- * localStorage. The banner can also be re-opened on demand via the
- * `cara:open-install-prompt` window event (used by the Settings page).
+ * 1. **Floating banner** (`<InstallPwaPrompt />`) — appears once, after a
+ *    delay, the first time CARA loads in a browser that supports install.
+ *    The user can dismiss it permanently.
+ *
+ * 2. **Direct trigger** (`triggerInstall()` / `openInstallPrompt()`) —
+ *    called by the "Installa CARA come app" entry in the bottom sheet.
+ *    On Chromium it fires `beforeinstallprompt.prompt()` directly — no
+ *    intermediate banner, the system dialog opens straight away. On iOS
+ *    Safari (no programmatic API) we fall back to the share-sheet
+ *    instructional banner. Everywhere else (Firefox, etc.) we show
+ *    a one-shot manual-steps banner.
+ *
+ * The captured `beforeinstallprompt` event is held in module scope so a
+ * click anywhere in the app can replay it without going through React
+ * state.
  */
 
 import { useEffect, useState } from 'react';
@@ -23,13 +27,14 @@ const NATIVE_DELAY_MS = 3000;
 const FALLBACK_DELAY_MS = 8000;
 
 export const OPEN_INSTALL_PROMPT_EVENT = 'cara:open-install-prompt';
+const SHOW_FALLBACK_EVENT = 'cara:install-show-fallback';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
 
-type Mode = 'native' | 'ios' | 'fallback' | null;
+type Mode = 'ios' | 'fallback' | 'auto-banner' | null;
 
 interface BrowserHint {
   steps: string;
@@ -80,7 +85,6 @@ function detectBrowser(): { ios: boolean; hint: BrowserHint } {
       },
     };
   }
-  // Chrome desktop / Brave / Vivaldi / Opera (Chromium-based).
   return {
     ios: false,
     hint: {
@@ -97,15 +101,84 @@ function clearDismiss() {
   }
 }
 
+// ── Module-scope event capture ─────────────────────────────────────
+//
+// Captures `beforeinstallprompt` on app load so any later click can
+// trigger the install dialog without going through React state.
+
+let _capturedEvent: BeforeInstallPromptEvent | null = null;
+let _captureInstalled = false;
+
+function ensureCapture() {
+  if (_captureInstalled || typeof window === 'undefined') return;
+  _captureInstalled = true;
+  window.addEventListener('beforeinstallprompt', (e: Event) => {
+    e.preventDefault();
+    _capturedEvent = e as BeforeInstallPromptEvent;
+  });
+  window.addEventListener('appinstalled', () => {
+    _capturedEvent = null;
+    try {
+      localStorage.setItem(DISMISSED_KEY, '1');
+    } catch {
+      // ignore
+    }
+  });
+}
+
+if (typeof window !== 'undefined') ensureCapture();
+
+/**
+ * Trigger the install flow. Chromium → fires the system dialog directly.
+ * iOS Safari → opens the share-sheet instructional banner. Everywhere
+ * else → opens a one-shot manual-steps banner. Returns a promise that
+ * resolves to the outcome when known, `null` when fallback was shown.
+ */
+export async function triggerInstall(): Promise<'accepted' | 'dismissed' | null> {
+  if (typeof window === 'undefined') return null;
+  if (isStandalone()) return null;
+  ensureCapture();
+
+  if (_capturedEvent) {
+    const ev = _capturedEvent;
+    _capturedEvent = null;
+    try {
+      await ev.prompt();
+      const choice = await ev.userChoice;
+      if (choice.outcome === 'accepted') {
+        try { localStorage.setItem(DISMISSED_KEY, '1'); } catch { /* ignore */ }
+      }
+      return choice.outcome;
+    } catch {
+      return null;
+    }
+  }
+
+  // No captured event — fall back to the instructional banner so the
+  // user still has a path forward (iOS, Firefox, hardened Chrome
+  // without engagement heuristics, etc.).
+  clearDismiss();
+  window.dispatchEvent(new CustomEvent(SHOW_FALLBACK_EVENT));
+  return null;
+}
+
+/** Backward-compat alias used by older callers. */
+export function openInstallPrompt() {
+  void triggerInstall();
+}
+
+// ── Auto-banner component ──────────────────────────────────────────
+//
+// Shows a passive prompt the first time CARA loads. The bottom-sheet
+// "Installa" button is the proactive path; this is the discovery path
+// for users who don't know they CAN install.
+
 export function InstallPwaPrompt() {
-  const [event, setEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [mode, setMode] = useState<Mode>(null);
-  // When the user invoked it manually (Settings button), we ignore the
-  // dismissed flag and the appearance delays.
-  const [forced, setForced] = useState(false);
 
   useEffect(() => {
     if (isStandalone()) return;
+    ensureCapture();
 
     const dismissed = (() => {
       try {
@@ -116,76 +189,52 @@ export function InstallPwaPrompt() {
     })();
 
     const browser = detectBrowser();
-
-    let nativeTimer: ReturnType<typeof setTimeout> | null = null;
+    let autoTimer: ReturnType<typeof setTimeout> | null = null;
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const onBeforeInstall = (e: Event) => {
-      e.preventDefault();
-      const ev = e as BeforeInstallPromptEvent;
-      setEvent(ev);
-      // Native available — cancel the manual fallback timer.
-      if (fallbackTimer) {
-        clearTimeout(fallbackTimer);
-        fallbackTimer = null;
-      }
-      if (!dismissed && !forced) {
-        nativeTimer = setTimeout(() => setMode('native'), NATIVE_DELAY_MS);
-      }
-    };
-    window.addEventListener('beforeinstallprompt', onBeforeInstall);
+    if (!dismissed) {
+      // Wait for the captured event before deciding which banner to show.
+      autoTimer = setTimeout(() => {
+        if (_capturedEvent) {
+          setMode('auto-banner');
+        } else if (browser.ios) {
+          setMode('ios');
+        }
+      }, NATIVE_DELAY_MS);
 
-    if (!dismissed && !forced) {
-      if (browser.ios) {
-        // iOS has no event — show the manual instructions after a delay.
-        fallbackTimer = setTimeout(() => setMode('ios'), NATIVE_DELAY_MS);
-      } else {
-        // Desktop/Android non-iOS: if the event hasn't fired by FALLBACK_DELAY_MS,
-        // we still surface the install path with manual instructions.
+      // Last-resort manual instructions for non-Chromium that never got
+      // a `beforeinstallprompt` event.
+      if (!browser.ios) {
         fallbackTimer = setTimeout(() => {
-          setMode((current) => (current === null ? 'fallback' : current));
+          setMode((current) => {
+            if (current !== null) return current;
+            if (_capturedEvent) return 'auto-banner';
+            return 'fallback';
+          });
         }, FALLBACK_DELAY_MS);
       }
     }
 
-    const onInstalled = () => {
-      try {
-        localStorage.setItem(DISMISSED_KEY, '1');
-      } catch {
-        // ignore
-      }
-      setMode(null);
-      setEvent(null);
-      setForced(false);
-    };
-    window.addEventListener('appinstalled', onInstalled);
-
-    const onForceOpen = () => {
-      // Allow the Settings button to re-open the prompt regardless of
-      // dismissal state, picking the best path available.
-      clearDismiss();
-      setForced(true);
+    // The bottom-sheet button can request the fallback banner when no
+    // captured event is available (iOS / Firefox).
+    const onForceFallback = () => {
       const browser2 = detectBrowser();
-      if (event) {
-        setMode('native');
-      } else if (browser2.ios) {
-        setMode('ios');
-      } else {
-        setMode('fallback');
-      }
+      setMode(browser2.ios ? 'ios' : 'fallback');
     };
+    window.addEventListener(SHOW_FALLBACK_EVENT, onForceFallback);
+
+    // Old API kept for backward compat (Settings button etc.) — same as
+    // calling triggerInstall() directly.
+    const onForceOpen = () => { void triggerInstall(); };
     window.addEventListener(OPEN_INSTALL_PROMPT_EVENT, onForceOpen);
 
     return () => {
-      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
-      window.removeEventListener('appinstalled', onInstalled);
+      window.removeEventListener(SHOW_FALLBACK_EVENT, onForceFallback);
       window.removeEventListener(OPEN_INSTALL_PROMPT_EVENT, onForceOpen);
-      if (nativeTimer) clearTimeout(nativeTimer);
+      if (autoTimer) clearTimeout(autoTimer);
       if (fallbackTimer) clearTimeout(fallbackTimer);
     };
-    // We intentionally re-bind when the captured event changes so the
-    // forced-open handler can read the freshest event.
-  }, [event, forced]);
+  }, []);
 
   function dismissPermanent() {
     try {
@@ -194,37 +243,17 @@ export function InstallPwaPrompt() {
       // ignore
     }
     setMode(null);
-    setForced(false);
   }
 
   function dismissOnce() {
     setMode(null);
-    setForced(false);
-  }
-
-  async function triggerInstall() {
-    if (!event) return;
-    setMode(null);
-    try {
-      await event.prompt();
-      const choice = await event.userChoice;
-      if (choice.outcome === 'accepted') {
-        dismissPermanent();
-      }
-    } catch {
-      // user closed the system dialog quickly — treat as dismissed-for-now
-    } finally {
-      setEvent(null);
-      setForced(false);
-    }
   }
 
   if (mode === null) return null;
 
   const browser = detectBrowser();
 
-  // Native install path — Chromium with `beforeinstallprompt` captured.
-  if (mode === 'native' && event) {
+  if (mode === 'auto-banner' && _capturedEvent) {
     return (
       <Banner ariaLabel="Installa CARA come app" onClose={dismissPermanent}>
         <p className="text-sm font-medium">Installa CARA come app</p>
@@ -235,7 +264,10 @@ export function InstallPwaPrompt() {
         <div className="flex gap-2 mt-2">
           <button
             type="button"
-            onClick={triggerInstall}
+            onClick={async () => {
+              setMode(null);
+              await triggerInstall();
+            }}
             className="rounded-lg bg-emerald-600 hover:bg-emerald-500
                        px-3 py-1.5 text-xs font-medium"
           >
@@ -254,7 +286,6 @@ export function InstallPwaPrompt() {
     );
   }
 
-  // iOS Safari — manual "Add to Home Screen" instructions.
   if (mode === 'ios') {
     return (
       <Banner
@@ -283,8 +314,6 @@ export function InstallPwaPrompt() {
     );
   }
 
-  // Fallback — browser supports install but the event didn't fire (or
-  // user clicked "Installa CARA" from Settings). Show manual steps.
   return (
     <Banner ariaLabel="Installa CARA come app" onClose={dismissOnce}>
       <p className="text-sm font-medium">Installa CARA come app</p>
@@ -333,9 +362,4 @@ function Banner({ children, ariaLabel, onClose }: BannerProps) {
       </button>
     </div>
   );
-}
-
-/** Open the install prompt on demand (Settings page). */
-export function openInstallPrompt() {
-  window.dispatchEvent(new CustomEvent(OPEN_INSTALL_PROMPT_EVENT));
 }
