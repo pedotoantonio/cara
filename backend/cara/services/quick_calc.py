@@ -161,6 +161,13 @@ _RE_DATE_TODAY = re.compile(
     re.IGNORECASE,
 )
 
+_RE_DATE_TOMORROW = re.compile(
+    r"\b(?:che\s+giorno\s+(?:è|e|sarà)\s+domani|"
+    r"che\s+data\s+(?:è|e|sarà)\s+domani|"
+    r"domani\s+che\s+(?:giorno|data))\b",
+    re.IGNORECASE,
+)
+
 _RE_DATE_MONTH = re.compile(
     r"\bin\s+che\s+mese\s+siamo\b|\bche\s+mese\s+(?:è|e)\b",
     re.IGNORECASE,
@@ -215,6 +222,14 @@ def try_calc(text: str) -> str | None:
         wd = _WEEKDAYS_IT[now.weekday()]
         m = _MONTHS_IT[now.month - 1]
         return f"Oggi è {wd} {now.day} {m} {now.year}."
+
+    # ----- date / tomorrow -----
+    if _RE_DATE_TOMORROW.search(q):
+        from datetime import timedelta
+        tomorrow = datetime.now(ZoneInfo("Europe/Rome")).date() + timedelta(days=1)
+        wd = _WEEKDAYS_IT[tomorrow.weekday()]
+        m = _MONTHS_IT[tomorrow.month - 1]
+        return f"Domani è {wd} {tomorrow.day} {m} {tomorrow.year}."
 
     if _RE_DATE_MONTH.search(q):
         now = datetime.now(ZoneInfo("Europe/Rome"))

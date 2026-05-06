@@ -177,13 +177,15 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
             r"\s*[?!.]*$|"
 
             # 2. Bare noun: "appuntamenti?" "i miei impegni" "appuntamenti
-            #    della settimana prossima" "impegni di oggi"
+            #    della settimana prossima" "impegni di oggi" "appuntamenti
+            #    del weekend"
             r"^(?:i\s+miei\s+|gli\s+|tutti\s+gli\s+|miei\s+)?"
             r"(?:appuntament(?:i|o)|impegni|impegno)"
             r"(?:\s+(?:di|della|del|dell['’]|in|per)\s+"
             r"(?:oggi|domani|questa\s+settimana|"
             r"(?:la\s+)?(?:prossima\s+settimana|settimana\s+prossima)|"
-            r"questo\s+weekend|il\s+weekend|stasera))?"
+            r"weekend|questo\s+weekend|il\s+weekend|fine\s+settimana|"
+            r"stasera))?"
             r"\s*[?!.]*$|"
 
             # 3. Question form with "che/quali/quanti": "che appuntamenti
@@ -261,10 +263,13 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
     # ---- Shopping list (read) --------------------------------------------
     (
         re.compile(
-            r"^(?:cosa\s+devo\s+comprare|"
-            r"(?:mostra(?:mi)?|dim[mn]i|fammi\s+vedere|elenca(?:mi)?|leggi(?:mi)?)\s+"
+            r"^(?:cara,?\s*)?"
+            r"(?:cosa\s+devo\s+comprare|"
+            r"(?:mostra(?:mi)?|dim[mn]i|dam[mn]i|fammi\s+vedere|elenca(?:mi)?|leggi(?:mi)?)\s+"
             r"(?:la\s+)?(?:mia\s+)?(?:lista\s+(?:della\s+)?)?spesa|"
             r"(?:la\s+)?(?:mia\s+)?lista\s+(?:della\s+)?spesa|"
+            # Bare "la spesa" / "spesa" — most common phrasing.
+            r"(?:la\s+)?spesa|"
             r"(?:cosa|che\s+cosa)\s+(?:c['e]?\s*[èe]|ho|abbiamo)\s+"
             r"(?:nella\s+|sulla\s+)?(?:lista\s+(?:della\s+)?)?spesa|"
             r"(?:la\s+)?spesa\s+da\s+fare|"
@@ -393,11 +398,14 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
         lambda m: {"title": m.group("title").strip()},
     ),
     # ---- Notes: add (delete moved up before delete_task) -----------------
+    # Body separator can be whitespace, ":", or "," — typical typed input
+    # uses "salvami una nota: chiamare lo zio" with the colon.
     (
         re.compile(
             r"^(?:cara,?\s*)?"
-            r"(?:salva(?:mi)?\s+(?:una\s+)?nota|scrivi(?:mi)?\s+(?:una\s+)?nota|prendi(?:mi)?\s+(?:una\s+)?nota|appunta(?:mi)?)"
-            r"(?:\s+(?:che|di))?\s+(?P<body>.+?)\s*[?!.]*$",
+            r"(?:salva(?:mi)?\s+(?:una\s+)?nota|scrivi(?:mi)?\s+(?:una\s+)?nota|"
+            r"prendi(?:mi)?\s+(?:una\s+)?nota|appunta(?:mi)?|nota:?)"
+            r"(?:\s*[:,]\s*|\s+(?:che|di)\s+|\s+)(?P<body>.+?)\s*[?!.]*$",
             re.IGNORECASE,
         ),
         "add_note",
@@ -407,10 +415,14 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
     # ---- Who is home ------------------------------------------------------
     (
         re.compile(
-            r"^chi\s+(?:c'?\s*è|sta|è)\s+"
+            r"^(?:cara,?\s*)?"
+            r"(?:chi\s+(?:c'?\s*è|sta|è)\s+"
             r"(?:in\s+casa(?:\s+(?:adesso|ora|in\s+questo\s+momento))?"
-            r"|adesso\s+in\s+casa"
-            r"|a\s+casa)"
+            r"|adesso\s+in\s+casa|a\s+casa)|"
+            r"c['’]?\s*[èe]\s+qualcuno\s+(?:in\s+casa|a\s+casa)|"
+            r"chi\s+vedi\s+(?:in\s+casa|a\s+casa)|"
+            r"chi\s+è\s+presente|"
+            r"famiglia\s+in\s+casa)"
             r"\s*[?!.]*$",
             re.IGNORECASE,
         ),
