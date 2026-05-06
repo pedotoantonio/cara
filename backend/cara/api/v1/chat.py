@@ -985,6 +985,91 @@ async def chat(
                 )
                 await s2.commit()
 
+        # ── Fail-loud policy ─────────────────────────────────────────────
+        # CARA must NEVER end a turn silently. Voice users have no other
+        # cue: an empty stream looks like a hang. Detect three failure
+        # modes and synthesise a helpful fallback before `done`:
+        #   (a) zero tokens emitted (RKLLM aborted, prompt edge case)
+        #   (b) only `[TOOL: ...]` tags emitted, parser strips to nothing
+        #   (c) the 1.5B regurgitated a fragment of the system prompt
+        #       (telltale words: "DIRETTAMENTE", "SENZA usare", "tu stesso")
+        visible = re.sub(
+            r"\[\s*(?:[A-Z_]+\s*:?\s*)?[a-z_]+\b[^\]]*?\]",
+            "",
+            final_text,
+        ).strip()
+        garbage_markers = (
+            "DIRETTAMENTE", "SENZA usare", "tu stesso", "tu stessa",
+            "rispondi con UNA", "[TOOL:", "## TOOL", "## QUANDO",
+        )
+        is_garbage = any(m in visible for m in garbage_markers)
+        # Identity-leak: the LLM defaults to "Sono Cara, l'assistente..."
+        # whenever it doesn't know what else to say. That's only a
+        # legitimate answer when the user asked "chi sei". For anything
+        # else, swap it for the fallback so the user gets actionable help.
+        ql_low = (last_user or "").strip().lower()
+        is_identity_leak = (
+            visible.lower().startswith(("sono cara", "ciao, sono cara"))
+            and not any(k in ql_low for k in ("chi sei", "presentati", "come ti chiami", "il tuo nome"))
+        )
+        if not visible or len(visible) < 4 or is_garbage or is_identity_leak:
+            ql = (last_user or "").lower()
+            # Tailor the suggestion to the user's apparent intent.
+            if any(w in ql for w in (
+                "evento", "appuntament", "impegno", "ricordami", "metti", "aggiungi",
+            )):
+                fallback = (
+                    "Scusa, non ho capito esattamente. "
+                    "Se vuoi aggiungere un appuntamento prova ad esempio: "
+                    "«aggiungi appuntamento dal medico sabato alle 16» "
+                    "oppure «ricordami compleanno di Ilaria il 12 maggio»."
+                )
+            elif any(w in ql for w in (
+                "spesa", "compra", "lista",
+            )):
+                fallback = (
+                    "Scusa, non ho capito. "
+                    "Per la spesa prova ad esempio: «aggiungi pane alla spesa» "
+                    "oppure «mostra la spesa»."
+                )
+            elif any(w in ql for w in (
+                "tempo", "meteo", "previsioni", "pioggia",
+            )):
+                fallback = (
+                    "Scusa, non ho capito. "
+                    "Per il meteo prova: «che tempo fa», «meteo domani», "
+                    "oppure «meteo a Bologna»."
+                )
+            else:
+                fallback = (
+                    "Scusa, non ho capito. "
+                    "Puoi ripetere con altre parole? Ad esempio: "
+                    "«che ore sono», «aggiungi appuntamento sabato alle 16», "
+                    "«lista delle cose da fare», oppure «che tempo fa»."
+                )
+            logger.warning(
+                "chat.silent_response_recovered",
+                tokens=n,
+                visible_len=len(visible),
+                garbage=is_garbage,
+                identity_leak=is_identity_leak,
+                last_user=(last_user or "")[:120],
+            )
+            if n == 0:
+                # No tokens emitted at all — push the fallback as a fresh
+                # token so the frontend has something to render.
+                yield _sse("token", {"text": fallback, "token_id": -1})
+            else:
+                # Some tokens were already streamed (identity-leak,
+                # garbage, or tool-only). Use `revision` so the frontend
+                # REPLACES the displayed text instead of concatenating.
+                yield _sse("revision", {"text": fallback})
+            payload = await _emit_audio_for(fallback)
+            if payload is not None:
+                yield _sse("audio_chunk", payload)
+            final_text = fallback
+            n = max(n, 1)
+
         bus.emit(
             "chat.llm.done",
             {

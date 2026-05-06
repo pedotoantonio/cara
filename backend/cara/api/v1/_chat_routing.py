@@ -152,11 +152,11 @@ async def try_smarthome(
         SmartHomeNLU,
         aliases_from_entities,
     )
-    from cara.smarthome.permissions import (
+    from cara.models.device_permission import (
         ACTION_CONTROL, ACTION_LOCK,
         PERM_DENY, PERM_ASK,
-        check_permission,
     )
+    from cara.services.smarthome_permissions import check_permission
 
     try:
         adapter = await _resolve_adapter(session)
