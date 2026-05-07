@@ -45,7 +45,7 @@ from cara.schemas.chat import ChatMessage
 from cara.services import conversations as convo_svc
 from cara.services import shopping as shop_svc
 from cara.services import tasks as task_svc
-from cara.store.db import _sessionmaker
+from cara.store.db import get_sessionmaker
 
 logger = structlog.get_logger(__name__)
 
@@ -94,11 +94,13 @@ async def _resolve_user_for_chat(chat_id: int) -> User | None:
 
     DB mappings imply allowlist (presence of a row = authorised).
     """
-    if _sessionmaker is None:
+    try:
+        get_sessionmaker()
+    except RuntimeError:
         return None
     from cara.services import telegram_mappings as tg_map  # noqa: PLC0415
 
-    async with _sessionmaker() as session:
+    async with get_sessionmaker()() as session:
         # 1. DB mapping wins.
         row = await tg_map.get_by_chat_id(session, chat_id)
         if row is not None:
@@ -142,10 +144,10 @@ async def _ensure_conversation(chat_id: int, user: User) -> uuid.UUID:
     if chat_id in _chat_to_convo:
         return _chat_to_convo[chat_id]
 
-    assert _sessionmaker is not None  # noqa: S101
+    _ = get_sessionmaker()  # ensure DB engine is up
     from cara.services import telegram_mappings as tg_map  # noqa: PLC0415
 
-    async with _sessionmaker() as session:
+    async with get_sessionmaker()() as session:
         # Try the persisted pointer first.
         row = await tg_map.get_by_chat_id(session, chat_id)
         if row is not None and row.conversation_id is not None:
@@ -178,8 +180,8 @@ async def _ensure_conversation(chat_id: int, user: User) -> uuid.UUID:
 
 async def _generate_reply(user: User, conversation_id: uuid.UUID, user_text: str) -> str:
     """Persist the user turn, run the LLM, persist the assistant turn, return text."""
-    assert _sessionmaker is not None  # noqa: S101
-    async with _sessionmaker() as session:
+    _ = get_sessionmaker()  # ensure DB engine is up
+    async with get_sessionmaker()() as session:
         await convo_svc.add_message(
             session, conversation_id=conversation_id, role="user", content=user_text
         )
@@ -200,7 +202,7 @@ async def _generate_reply(user: User, conversation_id: uuid.UUID, user_text: str
     full = "".join(buf).strip()
 
     if full:
-        async with _sessionmaker() as s2:
+        async with get_sessionmaker()() as s2:
             await convo_svc.add_message(
                 s2, conversation_id=conversation_id, role="assistant", content=full
             )
@@ -303,8 +305,8 @@ async def _on_reset(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # Conversation UUID (with a system-prompt seed message).
     try:
         from cara.services import telegram_mappings as tg_map  # noqa: PLC0415
-        assert _sessionmaker is not None  # noqa: S101
-        async with _sessionmaker() as session:
+        _ = get_sessionmaker()  # ensure DB engine is up
+        async with get_sessionmaker()() as session:
             await tg_map.clear_conversation(session, chat_id)
             await session.commit()
     except Exception as exc:  # noqa: BLE001
@@ -316,8 +318,8 @@ async def _on_lista(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _gate(update)
     if user is None:
         return
-    assert _sessionmaker is not None  # noqa: S101
-    async with _sessionmaker() as session:
+    _ = get_sessionmaker()  # ensure DB engine is up
+    async with get_sessionmaker()() as session:
         tasks = await task_svc.list_tasks(session, user_id=user.id, include_done=False)
     if not tasks:
         await update.effective_chat.send_message("Tutto fatto, niente in lista 🎉")
@@ -333,8 +335,8 @@ async def _on_spesa(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _gate(update)
     if user is None:
         return
-    assert _sessionmaker is not None  # noqa: S101
-    async with _sessionmaker() as session:
+    _ = get_sessionmaker()  # ensure DB engine is up
+    async with get_sessionmaker()() as session:
         items = await shop_svc.list_items(session, user_id=user.id, include_bought=False)
     if not items:
         await update.effective_chat.send_message("Lista spesa vuota.")
@@ -407,8 +409,8 @@ async def _on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     if reply:
         try:
-            assert _sessionmaker is not None  # noqa: S101
-            async with _sessionmaker() as s:
+            _ = get_sessionmaker()  # ensure DB engine is up
+            async with get_sessionmaker()() as s:
                 await convo_svc.add_message(
                     s, conversation_id=convo_id, role="user",
                     content=transcription,
@@ -442,8 +444,8 @@ async def _setting_bool(key: str, *, default: bool) -> bool:
     DB is fully initialised)."""
     try:
         from cara.services import admin_settings as _admin  # noqa: PLC0415
-        assert _sessionmaker is not None  # noqa: S101
-        async with _sessionmaker() as s:
+        _ = get_sessionmaker()  # ensure DB engine is up
+        async with get_sessionmaker()() as s:
             v = await _admin.get(s, key)
         if v is None:
             return default
@@ -491,8 +493,8 @@ async def _on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # does that on the web side), so we do it here.
     if reply:
         try:
-            assert _sessionmaker is not None  # noqa: S101
-            async with _sessionmaker() as s:
+            _ = get_sessionmaker()  # ensure DB engine is up
+            async with get_sessionmaker()() as s:
                 await convo_svc.add_message(
                     s, conversation_id=convo_id, role="user", content=text
                 )
@@ -516,8 +518,8 @@ async def _pipeline_collect(
     from cara.api.v1._chat_pipeline import execute_pipeline_collect  # noqa: PLC0415
     from cara.services.conversations import get_conversation  # noqa: PLC0415
 
-    assert _sessionmaker is not None  # noqa: S101
-    async with _sessionmaker() as session:
+    _ = get_sessionmaker()  # ensure DB engine is up
+    async with get_sessionmaker()() as session:
         try:
             convo = await get_conversation(session, convo_id, user_id=user.id)
         except Exception:  # noqa: BLE001
@@ -814,8 +816,8 @@ async def _cb_task_done(query, args: list[str]) -> None:  # type: ignore[no-unty
     task_id = int(args[0])
     try:
         from cara.services import tasks as task_svc  # noqa: PLC0415
-        assert _sessionmaker is not None  # noqa: S101
-        async with _sessionmaker() as s:
+        _ = get_sessionmaker()  # ensure DB engine is up
+        async with get_sessionmaker()() as s:
             # The chat owner is the task owner — assigned via _USER_MAP.
             owner = await _resolve_user_for_chat(query.message.chat.id)
             if owner is None:
@@ -839,8 +841,8 @@ async def _cb_shopping_bought(query, args: list[str]) -> None:  # type: ignore[n
     item_id = int(args[0])
     try:
         from cara.services import shopping as shop_svc  # noqa: PLC0415
-        assert _sessionmaker is not None  # noqa: S101
-        async with _sessionmaker() as s:
+        _ = get_sessionmaker()  # ensure DB engine is up
+        async with get_sessionmaker()() as s:
             owner = await _resolve_user_for_chat(query.message.chat.id)
             if owner is None:
                 await _edit_resolved(query, "⚠ Utente non riconosciuto")
