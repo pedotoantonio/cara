@@ -32,10 +32,13 @@ FEEDS: dict[str, tuple[str, str, list[str]]] = {
     "ansa_sport":        ("ANSA — Sport",        "https://www.ansa.it/sito/notizie/sport/sport_rss.xml", ["sport", "all"]),
     "repubblica_home":   ("Repubblica",          "https://www.repubblica.it/rss/homepage/rss2.0.xml", ["italia", "all"]),
     "corriere_home":     ("Corriere della Sera", "https://xml2.corriereobjects.it/rss/homepage.xml", ["italia", "all"]),
-    "ilsole24_home":     ("Il Sole 24 Ore",      "https://www.ilsole24ore.com/rss/notizie.xml", ["italia", "economia", "all"]),
-    "rainews_home":      ("RAI News",            "https://www.rainews.it/rss/home", ["italia", "all"]),
+    "ilsole24_home":     ("Il Sole 24 Ore",      "https://www.ilsole24ore.com/rss/italia.xml", ["italia", "economia", "all"]),
+    # Replaced rainews_home (404) with Google News IT — most reliable
+    # public-facing IT aggregator. Replaced reuters_world (404) with
+    # Repubblica Esteri, which is a valid IT-language world feed.
+    "google_news_it":    ("Google News (IT)",    "https://news.google.com/rss?hl=it&gl=IT&ceid=IT:it", ["italia", "all"]),
     "bbc_world":         ("BBC — World",         "http://feeds.bbci.co.uk/news/world/rss.xml", ["mondo", "all"]),
-    "reuters_world":     ("Reuters — World",     "https://www.reutersagency.com/feed/?best-topics=international&post_type=best", ["mondo", "all"]),
+    "repubblica_esteri": ("Repubblica — Esteri", "https://www.repubblica.it/rss/esteri/rss2.0.xml", ["mondo", "all"]),
 }
 
 CATEGORIES = ["all", "italia", "mondo", "economia", "tech", "sport"]

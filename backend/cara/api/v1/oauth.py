@@ -35,7 +35,7 @@ async def google_status() -> dict:
 
 @router.post("/google/authorize")
 async def google_authorize(
-    scope_set: str = Query(..., regex="^(calendar:rw|gmail:ro)$"),
+    scope_set: str = Query(..., pattern="^(calendar:rw|gmail:ro)$"),
     user: User = Depends(get_current_user),  # noqa: B008
 ) -> dict:
     if not google_oauth.is_available():

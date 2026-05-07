@@ -57,11 +57,19 @@ _ALLOWED: dict[LumoState, set[LumoState]] = {
     LumoState.PLAYING_MEDIA: {
         LumoState.IDLE, LumoState.LISTENING, LumoState.SPEAKING,
     },
+    # CARA can be in sleep when a chat / voice request fires (Telegram
+    # bot, Web Push reply, scheduled alarm). The chat orchestrator
+    # transitions THINKING then SPEAKING — both must be reachable from
+    # SLEEPING / DEEP_SLEEP, otherwise the transition is rejected and
+    # the lipsync / glow indicator stays stuck on "asleep" while the
+    # voice plays. Always allow waking from any sleep state.
     LumoState.SLEEPING: {
         LumoState.IDLE, LumoState.LISTENING, LumoState.DEEP_SLEEP,
+        LumoState.THINKING, LumoState.SPEAKING, LumoState.PLAYING_MEDIA,
     },
     LumoState.DEEP_SLEEP: {
         LumoState.IDLE, LumoState.LISTENING,
+        LumoState.THINKING, LumoState.SPEAKING, LumoState.PLAYING_MEDIA,
     },
 }
 
