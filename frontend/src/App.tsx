@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
-import { AuthNetworkError, clearTokens, fetchMe, getToken } from './api/auth';
+import { AuthNetworkError, clearTokens, fetchMe, getToken, tryLanLogin } from './api/auth';
 import type { User } from './api/auth';
 import { getVoiceConfig } from './api/voice';
 import { AmbientStateBanner } from './components/AmbientStateBanner';
@@ -80,28 +80,43 @@ export default function App() {
   const [auth, setAuth] = useState<AuthState>({ kind: 'loading' });
 
   useEffect(() => {
-    if (!getToken()) {
-      setAuth({ kind: 'anonymous' });
-      return;
-    }
-    fetchMe()
-      .then((user) => setAuth({ kind: 'authenticated', user }))
-      .catch((err: Error) => {
-        // CRITICAL: only kick the user back to /login on an actual
-        // 401 from the server. Network errors (CORS, cert, DNS, server
-        // restart) leave the token alone — the user is still
-        // authenticated, the connection is just blip. Clearing the
-        // token here on a transient error was the source of the
-        // "auth loop" Antonio reported on Chrome / mobile.
-        if (err instanceof AuthNetworkError) {
-          // Stay authenticated-as-best-known, but show login as a
-          // last resort so the user has SOMETHING to interact with.
-          setAuth({ kind: 'anonymous' });
+    // Boot order:
+    //   1. We have a token in storage → try /me; on 401 try lan-login,
+    //      on network error stay on the last known state, otherwise
+    //      clear and show login.
+    //   2. No token → try lan-login (works on the home Wi-Fi /
+    //      WireGuard); on success fetch /me; on failure show login form.
+    void (async () => {
+      const haveToken = Boolean(getToken());
+      if (haveToken) {
+        try {
+          const user = await fetchMe();
+          setAuth({ kind: 'authenticated', user });
           return;
+        } catch (err) {
+          if (err instanceof AuthNetworkError) {
+            setAuth({ kind: 'anonymous' });
+            return;
+          }
+          // 401 → token expired or invalid. Fall through to lan-login.
+          clearTokens();
         }
-        clearTokens();
-        setAuth({ kind: 'anonymous' });
-      });
+      }
+
+      // Try password-less login from the LAN. Backend returns 403 from
+      // outside the trusted CIDRs; we silently fall back to the form.
+      const lanOk = await tryLanLogin();
+      if (lanOk) {
+        try {
+          const user = await fetchMe();
+          setAuth({ kind: 'authenticated', user });
+          return;
+        } catch {
+          /* fall through */
+        }
+      }
+      setAuth({ kind: 'anonymous' });
+    })();
   }, []);
 
   // Pull admin-set voice knobs once the user is authenticated, so every

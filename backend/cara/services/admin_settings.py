@@ -139,6 +139,13 @@ DEFAULTS: dict[str, Any] = {
     # face was seen recently we still tell the user "vedo movimento" if
     # Frigate had a `person` event within this window.
     "presence_motion_window_minutes": 30,
+    # Password-less login for clients on the home LAN or WireGuard VPN
+    # (192.168.1.0/24, 10.8.0.0/24, 127.0.0.0/8). When True, the
+    # frontend's POST /api/v1/auth/lan-login returns a JWT for the
+    # first admin without prompting for credentials. Public-internet
+    # access (Cloudflare Tunnel, port forward) is unaffected. Flip to
+    # False if you later want to enforce credential auth even at home.
+    "lan_auto_login_enabled": True,
 }
 
 
