@@ -182,12 +182,12 @@ async def _on_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _gate(update)
     if user is None:
         return
+    name = (user.full_name or user.email).split("@")[0].split()[0]
     await update.effective_chat.send_message(
-        f"Ciao {user.full_name or user.email}! Sono CARA. Scrivimi quello che vuoi.\n\n"
-        "Comandi:\n"
-        "/lista — le tue cose da fare\n"
-        "/spesa — la lista della spesa\n"
-        "/reset — inizia una nuova chat",
+        f"Ciao {name}, sono CARA 🤖\n\n"
+        "Scrivimi qualunque cosa (es. \"che tempo fa\", \"appuntamenti settimana prossima\", "
+        "\"aggiungi pane alla spesa\") e ti rispondo come dal web.\n\n"
+        "Comandi rapidi: /oggi /domani /spesa /note /meteo /casa /cam /help\n",
     )
 
 
@@ -310,6 +310,213 @@ async def _pipeline_collect(
         )
 
 
+# ─── Slash command helpers ────────────────────────────────────────────
+
+
+async def _run_phrase(
+    update: Update, phrase: str, *, fallback_llm: bool = False,
+) -> None:
+    """Translate a slash command into a natural-language phrase and
+    run it through the chat Pipeline. The phrases are chosen so the
+    intent router catches them deterministically — no LLM needed for
+    `/oggi`, `/spesa`, etc. Set `fallback_llm=True` for commands like
+    `/help` where a Pipeline miss is unexpected.
+    """
+    user = await _gate(update)
+    if user is None:
+        return
+    chat = update.effective_chat
+    convo_id = await _ensure_conversation(chat.id, user)
+
+    reply = None
+    try:
+        reply = await _pipeline_collect(user, convo_id, phrase)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.cmd.pipeline_failed", phrase=phrase, error=str(exc))
+
+    if reply is None and fallback_llm:
+        try:
+            reply = await _generate_reply(user, convo_id, phrase)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("telegram.cmd.llm_failed", phrase=phrase, error=str(exc))
+
+    if not reply:
+        reply = "Non ho capito, scusa. Riprova con altre parole o usa /help."
+
+    for i in range(0, len(reply), 4000):
+        await chat.send_message(reply[i : i + 4000])
+
+
+# ─── Concrete slash handlers ──────────────────────────────────────────
+
+
+async def _on_oggi(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_phrase(update, "cosa devo fare oggi")
+
+
+async def _on_domani(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_phrase(update, "appuntamenti di domani")
+
+
+async def _on_settimana(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_phrase(update, "appuntamenti settimana prossima")
+
+
+async def _on_appuntamenti(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_phrase(update, "elencami i miei appuntamenti")
+
+
+async def _on_meteo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    args = ctx.args or []
+    city = " ".join(args).strip() if args else ""
+    phrase = f"che tempo fa a {city}" if city else "che tempo fa"
+    await _run_phrase(update, phrase)
+
+
+async def _on_casa(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _run_phrase(update, "chi è in casa")
+
+
+async def _on_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    args = ctx.args or []
+    cat = " ".join(args).strip() if args else ""
+    phrase = f"notizie di {cat}" if cat else "leggi le ultime notizie"
+    await _run_phrase(update, phrase)
+
+
+async def _on_spesa_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/spesa` mostra la lista, `/spesa add <X>` aggiunge."""
+    args = ctx.args or []
+    if args and args[0].lower() in ("add", "aggiungi"):
+        item = " ".join(args[1:]).strip()
+        if not item:
+            await update.effective_chat.send_message(
+                "Uso: /spesa add <prodotto>"
+            )
+            return
+        await _run_phrase(update, f"aggiungi {item} alla spesa")
+        return
+    await _run_phrase(update, "la spesa")
+
+
+async def _on_note(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/note` mostra le note, `/note new <testo>` crea una nota."""
+    args = ctx.args or []
+    if args and args[0].lower() in ("new", "nuova", "add", "aggiungi"):
+        body = " ".join(args[1:]).strip()
+        if not body:
+            await update.effective_chat.send_message(
+                "Uso: /note new <testo della nota>"
+            )
+            return
+        await _run_phrase(update, f"salvami una nota: {body}")
+        return
+    await _run_phrase(update, "dammi le note")
+
+
+async def _on_task(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/task <testo>` aggiunge un task. Senza args: lista."""
+    args = ctx.args or []
+    if not args:
+        await _run_phrase(update, "lista delle cose da fare")
+        return
+    title = " ".join(args).strip()
+    await _run_phrase(update, f"ricordami {title}")
+
+
+async def _on_cam(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/cam <id>` scarica lo snapshot da Frigate e lo manda inline."""
+    user = await _gate(update)
+    if user is None:
+        return
+    chat = update.effective_chat
+    args = ctx.args or []
+    if not args:
+        await chat.send_message(
+            "Uso: /cam <id>  (es. /cam cam_194)\n"
+            "Usa /casa per vedere chi è in casa o l'app per la lista."
+        )
+        return
+    cam_id = args[0].strip()
+
+    import httpx  # noqa: PLC0415
+
+    base = (settings.frigate_url or "").rstrip("/")
+    if not base:
+        await chat.send_message("Frigate non configurato.")
+        return
+    url = f"{base}/api/{cam_id}/latest.jpg?h=480"
+    try:
+        await ctx.bot.send_chat_action(chat.id, ChatAction.UPLOAD_PHOTO)
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            blob = r.content
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.cam_fetch_failed", cam_id=cam_id, error=str(exc))
+        await chat.send_message(f"Non riesco a leggere {cam_id}: {exc}")
+        return
+    await chat.send_photo(photo=blob, caption=f"📷 {cam_id}")
+
+
+async def _on_diag(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin only — health check + last-N agent runs in one message."""
+    user = await _gate(update)
+    if user is None or not user.is_admin:
+        if user is not None:
+            await update.effective_chat.send_message("Solo admin.")
+        return
+    chat = update.effective_chat
+
+    lines = ["🩺 <b>CARA diagnostics</b>"]
+    try:
+        from cara.services import diagnostics as diag_svc  # noqa: PLC0415
+        checks = await diag_svc.run_all()
+        ok = sum(1 for c in checks if c["status"] == "ok")
+        warn = sum(1 for c in checks if c["status"] == "warn")
+        err = sum(1 for c in checks if c["status"] == "error")
+        lines.append(f"summary: ok={ok} warn={warn} error={err}")
+        for c in checks[:12]:
+            icon = "✓" if c["status"] == "ok" else ("⚠" if c["status"] == "warn" else "✗")
+            lines.append(f"{icon} <b>{c['name']}</b>: {c.get('detail', '')}")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"⚠ impossibile leggere diagnostics: {exc}")
+
+    text = "\n".join(lines)
+    await chat.send_message(text=text[:4000], parse_mode="HTML")
+
+
+async def _on_help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    user = await _gate(update)
+    if user is None:
+        return
+    text = (
+        "🤖 <b>Comandi CARA</b>\n\n"
+        "📅 <b>Tempo / appuntamenti</b>\n"
+        "/oggi — cosa devo fare oggi\n"
+        "/domani — appuntamenti di domani\n"
+        "/settimana — appuntamenti settimana prossima\n"
+        "/appuntamenti — tutti i miei appuntamenti\n\n"
+        "🛒 <b>Liste</b>\n"
+        "/spesa — lista della spesa\n"
+        "/spesa add &lt;prodotto&gt;\n"
+        "/note — le mie note\n"
+        "/note new &lt;testo&gt;\n"
+        "/task — lista task\n"
+        "/task &lt;descrizione&gt; — nuovo task\n\n"
+        "🌤️ <b>Casa</b>\n"
+        "/meteo [città] — meteo (Ferrara di default)\n"
+        "/casa — chi è in casa\n"
+        "/cam &lt;id&gt; — foto camera (es. /cam cam_194)\n\n"
+        "💬 <b>Chat libera</b>\n"
+        "Scrivimi qualsiasi cosa — userò CARA come dal web\n\n"
+        "🛠️ <b>Sistema</b>\n"
+        "/reset — nuova conversazione\n"
+        + ("/diag — diagnostica (admin)\n" if user.is_admin else "")
+    )
+    await update.effective_chat.send_message(text=text, parse_mode="HTML")
+
+
 # --- lifecycle ------------------------------------------------------------
 
 _application: Application | None = None
@@ -332,8 +539,21 @@ async def start_telegram_bot() -> None:
     )
     app.add_handler(CommandHandler("start", _on_start))
     app.add_handler(CommandHandler("reset", _on_reset))
-    app.add_handler(CommandHandler("lista", _on_lista))
-    app.add_handler(CommandHandler("spesa", _on_spesa))
+    app.add_handler(CommandHandler("help", _on_help))
+    # Phase 2 slash commands — all delegate to the chat Pipeline so
+    # the bot stays in lockstep with the web HomePage's intent router.
+    app.add_handler(CommandHandler("oggi", _on_oggi))
+    app.add_handler(CommandHandler("domani", _on_domani))
+    app.add_handler(CommandHandler("settimana", _on_settimana))
+    app.add_handler(CommandHandler("appuntamenti", _on_appuntamenti))
+    app.add_handler(CommandHandler("meteo", _on_meteo))
+    app.add_handler(CommandHandler("casa", _on_casa))
+    app.add_handler(CommandHandler("news", _on_news))
+    app.add_handler(CommandHandler(["spesa", "lista"], _on_spesa_v2))
+    app.add_handler(CommandHandler(["note", "nota"], _on_note))
+    app.add_handler(CommandHandler(["task", "tasks"], _on_task))
+    app.add_handler(CommandHandler("cam", _on_cam))
+    app.add_handler(CommandHandler("diag", _on_diag))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
 
     await app.initialize()
