@@ -462,6 +462,18 @@ async def _on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip() if update.message else ""
     if not text:
         return
+
+    # Step 0 — camera snapshot intercept. Telegram is the only surface
+    # that can deliver an inline image, so handle "fammi vedere la
+    # cam 136" / "mostrami l'ingresso" / "foto della camera 194" here
+    # before the text Pipeline. On match we ship a photo and return;
+    # on miss we fall through to the regular chat path.
+    try:
+        if await _maybe_handle_camera_request(update, ctx, text):
+            return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.camera_intercept_failed", error=str(exc))
+
     convo_id = await _ensure_conversation(chat.id, user)
     await ctx.bot.send_chat_action(chat.id, ChatAction.TYPING)
 
@@ -647,21 +659,63 @@ async def _on_task(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_phrase(update, f"ricordami {title}")
 
 
-async def _on_cam(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/cam <id>` scarica lo snapshot da Frigate e lo manda inline."""
-    user = await _gate(update)
-    if user is None:
-        return
-    chat = update.effective_chat
-    args = ctx.args or []
-    if not args:
-        await chat.send_message(
-            "Uso: /cam <id>  (es. /cam cam_194)\n"
-            "Usa /casa per vedere chi è in casa o l'app per la lista."
-        )
-        return
-    cam_id = args[0].strip()
+async def _resolve_camera_id(query: str) -> tuple[str | None, str | None]:
+    """Resolve a free-form camera reference to a Frigate camera id.
 
+    Accepts:
+      - exact id (`cam_194`, `cam_136`) → returned as-is
+      - bare number (`136`, `194`) → mapped to `cam_<N>`
+      - admin override label (`ingresso`, `cucina`) → looked up in
+        `admin_settings["cameras"]`
+    Returns (camera_id, label) or (None, None) when the query doesn't
+    match any known camera.
+    """
+    q = query.strip().lower()
+    if not q:
+        return None, None
+
+    # Pull the live camera list from Frigate via the cameras service so
+    # admin overrides + Frigate config stay in sync.
+    try:
+        from cara.services import cameras as cam_svc  # noqa: PLC0415
+        async with get_sessionmaker()() as session:
+            cams = await cam_svc.list_cameras(session)
+    except Exception:  # noqa: BLE001
+        cams = []
+
+    if not cams:
+        # Fallback: bare-number heuristic so we still answer when
+        # the cameras service is degraded.
+        if q.isdigit():
+            return f"cam_{q}", None
+        if q.startswith("cam_") or q.startswith("cam"):
+            return q.replace(" ", "_"), None
+        return None, None
+
+    # Exact id match.
+    for c in cams:
+        if c.id.lower() == q:
+            return c.id, c.label
+    # Number suffix match: "136" → cam_136
+    if q.isdigit():
+        for c in cams:
+            if c.id.lower().endswith(f"_{q}") or c.id.lower() == f"cam_{q}":
+                return c.id, c.label
+    # Label / area match: "ingresso" → cam_194 (override)
+    for c in cams:
+        if (c.label or "").lower() == q or (c.area or "").lower() == q:
+            return c.id, c.label
+    # Substring fallback (last resort).
+    for c in cams:
+        if q in c.id.lower() or q in (c.label or "").lower():
+            return c.id, c.label
+    return None, None
+
+
+async def _send_camera_snapshot(
+    chat, ctx: ContextTypes.DEFAULT_TYPE, cam_id: str, label: str | None = None,
+) -> None:
+    """Fetch a JPEG from Frigate and ship it via send_photo."""
     import httpx  # noqa: PLC0415
 
     base = (settings.frigate_url or "").rstrip("/")
@@ -677,9 +731,121 @@ async def _on_cam(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             blob = r.content
     except Exception as exc:  # noqa: BLE001
         logger.warning("telegram.cam_fetch_failed", cam_id=cam_id, error=str(exc))
-        await chat.send_message(f"Non riesco a leggere {cam_id}: {exc}")
+        await chat.send_message(
+            f"Non riesco a leggere la camera {label or cam_id}: {exc}"
+        )
         return
-    await chat.send_photo(photo=blob, caption=f"📷 {cam_id}")
+    caption = f"📷 {label} ({cam_id})" if label else f"📷 {cam_id}"
+    await chat.send_photo(photo=blob, caption=caption)
+
+
+async def _on_cam(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/cam <id>` scarica lo snapshot da Frigate e lo manda inline.
+    Accetta sia l'id (`/cam cam_194`) che il numero (`/cam 194`) che
+    la label admin (`/cam ingresso`)."""
+    user = await _gate(update)
+    if user is None:
+        return
+    chat = update.effective_chat
+    args = ctx.args or []
+    if not args:
+        await chat.send_message(
+            "Uso: /cam <id>  (es. /cam cam_194 oppure /cam ingresso)\n"
+            "Usa /casa per vedere chi è in casa."
+        )
+        return
+    raw = " ".join(args).strip()
+    cam_id, label = await _resolve_camera_id(raw)
+    if cam_id is None:
+        await chat.send_message(
+            f"Non trovo una camera che corrisponda a \"{raw}\".\n"
+            "Camere disponibili: cam_002, cam_020, cam_136, cam_194 (Ingresso)."
+        )
+        return
+    await _send_camera_snapshot(chat, ctx, cam_id, label)
+
+
+# Free-text patterns that should be intercepted BEFORE the chat
+# Pipeline. Camera snapshot requests aren't deterministic intents —
+# they're a Telegram-only side channel because the web chat doesn't
+# render images inline yet.
+#
+# Strategy: a small list of "header + tail" regexes, each producing
+# a `target` group. Headers cover imperative ("fammi vedere",
+# "mostrami", "voglio vedere"), question ("cosa si vede"), bare
+# noun ("camera"/"cam"/"telecamera"). Tails cover the optional
+# "un'immagine/foto/snapshot della" filler before the target.
+import re as _re_cam  # noqa: E402
+
+# Filler tokens that may appear between the verb and the target.
+# Italian elision matters: "un'immagine" / "l'immagine" have NO space
+# between article and noun, so the article+noun is one combined token
+# with whitespace OR apostrophe as separator. Articles standalone
+# (without elision) keep the trailing whitespace.
+_CAM_FILLER = (
+    # Article + photo-like noun. Either "un'immagine" (apostrophe) or
+    # "una foto" / "il video" (whitespace separated). Whole group optional.
+    r"(?:\s+(?:un['’]|l['’]|un\s+|una\s+|uno\s+|la\s+|il\s+|le\s+|gli\s+|i\s+))?"
+    r"(?:foto|immagin[ei]|istantanea|snapshot|inquadratura|panoramica|riprese|ripresa|video|live|stream)?"
+    r"(?:\s+(?:di|del|della|dell['’]|sulla|su|dalla|da|in))?"  # prep
+    r"(?:\s+(?:la|il|le|gli|i))?"               # second article ("della cam" / "del la cam")
+    r"(?:\s+(?:cam(?:era)?|telecamera))?"
+    r"(?:\s+(?:numero|n\.))?"
+)
+_CAM_TARGET = r"\s+(?P<target>[a-zA-Z0-9_àèéìòù]+)\s*[?!.]*$"
+
+_CAMERA_PATTERNS: tuple = tuple(
+    _re_cam.compile(rf"^\s*(?:cara,?\s*)?{header}{_CAM_FILLER}{_CAM_TARGET}", _re_cam.IGNORECASE)
+    for header in (
+        # imperative verbs
+        r"fammi\s+vedere",
+        r"mostra(?:mi|ci)?",
+        r"fai\s+vedere",
+        r"voglio\s+vedere",
+        r"vorrei\s+vedere",
+        r"dam[mn]i",
+        r"manda(?:mi)?",
+        r"inviami",
+        # question forms
+        r"che\s+(?:si\s+)?vede",
+        r"cosa\s+(?:si\s+)?vede",
+        r"cosa\s+c['’]?\s*[èe]",
+        r"chi\s+(?:c['’]?\s*[èe]|si\s+vede)",
+        # noun-only entry: "foto/immagine/snapshot/camera <X>"
+        r"foto",
+        r"immagine",
+        r"istantanea",
+        r"snapshot",
+        r"cam(?:era)?",
+        r"telecamera",
+    )
+)
+
+
+async def _maybe_handle_camera_request(
+    update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str,
+) -> bool:
+    """If `text` looks like 'fammi vedere la cam 136', short-circuit
+    the Pipeline + LLM path and ship a snapshot. Returns True when the
+    handler took ownership, False when the message should be processed
+    normally (chat Pipeline, etc.).
+    """
+    stripped = text.strip()
+    target: str | None = None
+    for rx in _CAMERA_PATTERNS:
+        m = rx.match(stripped)
+        if m is not None:
+            target = m.group("target")
+            break
+    if not target:
+        return False
+    chat = update.effective_chat
+    cam_id, label = await _resolve_camera_id(target)
+    if cam_id is None:
+        # Don't claim the message — let the chat Pipeline / LLM try.
+        return False
+    await _send_camera_snapshot(chat, ctx, cam_id, label)
+    return True
 
 
 async def _on_diag(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
