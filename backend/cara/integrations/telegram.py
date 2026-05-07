@@ -241,14 +241,73 @@ async def _on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     convo_id = await _ensure_conversation(chat.id, user)
     await ctx.bot.send_chat_action(chat.id, ChatAction.TYPING)
+
+    # Step 1 — try the deterministic chat Pipeline (intent router,
+    # skills, recipe chain). Same code path as the web chat, so
+    # "che tempo fa", "lista delle cose da fare", "appuntamenti
+    # settimana prossima", etc. produce identical answers in
+    # Telegram and on the HomePage.
+    reply: str | None = None
     try:
-        reply = await _generate_reply(user, convo_id, text)
-    except Exception as exc:  # pragma: no cover
-        logger.exception("telegram.generate_failed")
-        reply = f"Errore: {exc!r}"
+        reply = await _pipeline_collect(user, convo_id, text)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.pipeline_failed", error=str(exc))
+
+    # Step 2 — Pipeline missed (free-form chat, "raccontami una
+    # barzelletta", etc.) → fall through to the LLM. Persists the
+    # turn in the same Conversation row used by the Pipeline so the
+    # multi-turn memory is shared.
+    if reply is None:
+        try:
+            reply = await _generate_reply(user, convo_id, text)
+        except Exception as exc:  # pragma: no cover
+            logger.exception("telegram.generate_failed")
+            reply = f"Errore: {exc!r}"
+
+    # Persist the assistant turn so the next message in the same
+    # chat sees it as conversation history. Pipeline canned replies
+    # don't write to DB themselves (the streaming path in chat.py
+    # does that on the web side), so we do it here.
+    if reply:
+        try:
+            assert _sessionmaker is not None  # noqa: S101
+            async with _sessionmaker() as s:
+                await convo_svc.add_message(
+                    s, conversation_id=convo_id, role="user", content=text
+                )
+                await convo_svc.add_message(
+                    s, conversation_id=convo_id, role="assistant", content=reply
+                )
+                await s.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("telegram.persist_failed", error=str(exc))
+
     # Telegram message cap is 4096 chars — chunk if needed.
     for i in range(0, len(reply), 4000):
         await chat.send_message(reply[i : i + 4000])
+
+
+async def _pipeline_collect(
+    user: User, convo_id: uuid.UUID, text: str,
+) -> str | None:
+    """Run the chat Pipeline non-streaming, return the assembled text
+    or None on miss (caller falls back to LLM)."""
+    from cara.api.v1._chat_pipeline import execute_pipeline_collect  # noqa: PLC0415
+    from cara.services.conversations import get_conversation  # noqa: PLC0415
+
+    assert _sessionmaker is not None  # noqa: S101
+    async with _sessionmaker() as session:
+        try:
+            convo = await get_conversation(session, convo_id, user_id=user.id)
+        except Exception:  # noqa: BLE001
+            convo = None
+        return await execute_pipeline_collect(
+            session=session,
+            user=user,
+            text=text,
+            convo=convo,
+            conversation_id=str(convo_id),
+        )
 
 
 # --- lifecycle ------------------------------------------------------------

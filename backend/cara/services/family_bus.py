@@ -89,7 +89,11 @@ async def publish(
     except Exception as exc:  # noqa: BLE001
         log.warning("family_bus.serialize_failed", kind=kind, error=str(exc))
         return
-    if len(body) > 4096:
+    # Hard ceiling — TTS audio chunks (Piper WAV base64) need ~200 KB,
+    # everything else (task.created, presence.changed, …) is well
+    # under 1 KB. 256 KB keeps Redis happy and rejects pathological
+    # payloads.
+    if len(body) > 262_144:
         log.warning("family_bus.payload_too_big", kind=kind, size=len(body))
         return
 

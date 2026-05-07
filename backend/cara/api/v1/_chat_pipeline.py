@@ -196,6 +196,62 @@ CHAT_PIPELINE: Pipeline = build_chat_pipeline()
 # ---------------------------------------------------------------------------
 
 
+async def execute_pipeline_collect(
+    *,
+    session: Any,
+    user: Any,
+    text: str,
+    convo: Any = None,
+    conversation_id: str | None = None,
+) -> str | None:
+    """Run the chat Pipeline non-streaming and return the assembled
+    text, or `None` when every stage missed.
+
+    Used by surfaces that don't speak SSE (Telegram bot, scheduled
+    proactivity rules, scripted automations). The deterministic stages
+    (intent_router, skill_dispatcher, recipe_chain) all emit a single
+    canned `token` frame followed by `done`, so a string concatenation
+    over the parsed SSE body is enough — we don't need to handle
+    multi-chunk LLM streaming here. A miss means the caller should
+    fall through to its own LLM path (Telegram falls back to
+    `_generate_reply`).
+    """
+    import json  # noqa: PLC0415
+
+    resp = await route_chat_request(
+        session=session,
+        user=user,
+        last_user_q=text,
+        attached_files=[],
+        convo=convo,
+        conversation_id=conversation_id,
+    )
+    if resp is None:
+        return None
+
+    parts: list[str] = []
+    body_iter = resp.body_iterator
+    async for chunk in body_iter:
+        if isinstance(chunk, bytes):
+            chunk = chunk.decode("utf-8", errors="replace")
+        for raw_line in chunk.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            data_json = line[5:].strip()
+            if not data_json:
+                continue
+            try:
+                ev = json.loads(data_json)
+            except json.JSONDecodeError:
+                continue
+            text_part = ev.get("text") if isinstance(ev, dict) else None
+            if isinstance(text_part, str):
+                parts.append(text_part)
+    out = "".join(parts).strip()
+    return out or None
+
+
 async def route_chat_request(
     *,
     session: Any,

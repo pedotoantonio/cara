@@ -65,25 +65,37 @@ async def _channel_enabled(session, channel: str) -> bool:
 # ─── Channel implementations ───────────────────────────────────────────
 
 
+def _html_escape(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
 async def _send_telegram(notif: Notification) -> None:
     """Forward to the CARA Telegram bot owners. Uses the bot wrapper
-    that's already initialised in `cara.integrations.telegram`."""
+    that's already initialised in `cara.integrations.telegram`.
+
+    HTML mode (vs Markdown) because the title / body can contain
+    arbitrary user-typed punctuation that Telegram's Markdown V1
+    parser chokes on (`_underscores_in_words`, unmatched `*`, etc.).
+    """
     from cara.integrations import telegram as _tg  # noqa: PLC0415
 
-    text_lines = [f"*{notif.title}*"]
-    if notif.body:
-        text_lines.append(notif.body)
+    title = _html_escape(notif.title)
+    body = _html_escape(notif.body)
+    text_lines = [f"<b>{title}</b>"]
+    if body:
+        text_lines.append(body)
     if notif.deep_link:
-        # cara.home.lan is the LAN-side hostname; the user's phone resolves
-        # it via Pi-hole. From outside (Cloudflare Tunnel) the public domain
-        # would substitute, configurable in admin_settings later.
         base = "https://cara.home.lan:8455"
-        text_lines.append(f"\n→ {base}{notif.deep_link}")
+        text_lines.append(f'\n<a href="{base}{notif.deep_link}">apri</a>')
     text = "\n".join(text_lines)
 
     try:
         await _tg.send_message_to_owners(
-            text=text, parse_mode="Markdown", image_url=notif.image_url,
+            text=text, parse_mode="HTML", image_url=notif.image_url,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("notify.telegram.failed", kind=notif.kind, error=str(exc))
