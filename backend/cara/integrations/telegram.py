@@ -213,19 +213,71 @@ async def _generate_reply(user: User, conversation_id: uuid.UUID, user_text: str
 
 
 async def _gate(update: Update) -> User | None:
+    """Auth gate. Resolves chat_id → User via DB mapping (admin-managed)
+    or env-bootstrap. On miss, replies with an actionable Italian
+    message that includes the chat_id, then notifies the admin so they
+    can add the mapping with one tap from /admin/telegram.
+    """
     chat = update.effective_chat
-    if chat is None or chat.id not in _OWNERS:
-        if chat is not None:
-            await chat.send_message("Non sei autorizzato a usare questo bot.")
+    if chat is None:
         return None
+
+    # Phase 5 — try the unified resolver first (DB > env > single-user
+    # fallback). Returns None for any unknown / unauthorized chat.
     user = await _resolve_user_for_chat(chat.id)
-    if user is None:
+    if user is not None:
+        return user
+
+    # Unknown / unauthorized chat. Tell THIS user where they stand,
+    # then ping the admin with the info they need to add the mapping.
+    sender = update.effective_user
+    sender_name = "?"
+    sender_username = ""
+    if sender is not None:
+        sender_name = sender.full_name or sender.username or str(sender.id)
+        sender_username = f"@{sender.username}" if sender.username else ""
+
+    try:
         await chat.send_message(
-            "Bot configurato ma manca il mapping chat→utente CARA. "
-            "Imposta CARA_TELEGRAM_CHAT_USER_MAP."
+            "Ciao 👋\n\n"
+            "Non sei ancora autorizzato a usare CARA da questa chat.\n"
+            f"Il tuo chat_id Telegram è <code>{chat.id}</code>.\n\n"
+            "Comunica questo numero a chi gestisce CARA in casa: dovrà "
+            "aggiungerti dalla sezione "
+            "<a href=\"https://cara.home.lan:8455/admin/telegram\">"
+            "Telegram → Aggiungi chat</a> usando il tuo chat_id e la tua "
+            "email CARA. Una volta fatto, scrivi di nuovo qui e CARA "
+            "ti riconoscerà.",
+            parse_mode="HTML", disable_web_page_preview=True,
         )
-        return None
-    return user
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.gate.user_message_failed", error=str(exc))
+
+    # Notify the admin via the dispatcher so they get one push +
+    # Telegram message with a button to add the chat in one tap.
+    try:
+        from cara.services.notify import (  # noqa: PLC0415
+            Notification, TelegramAction, dispatch,
+        )
+        await dispatch(
+            Notification(
+                kind="telegram.unknown_chat",
+                title="🔔 Nuovo chat Telegram",
+                body=(
+                    f"{sender_name} {sender_username} (chat_id "
+                    f"<code>{chat.id}</code>) ha scritto al bot. "
+                    "Aggiungilo dalla pagina admin se è qualcuno che conosci."
+                ),
+                tag=f"telegram.unknown_chat.{chat.id}",
+                deep_link="/admin/telegram",
+                severity="warn",
+                extra={"chat_id": chat.id, "sender": sender_name},
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.gate.admin_notify_failed", error=str(exc))
+
+    return None
 
 
 async def _on_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
