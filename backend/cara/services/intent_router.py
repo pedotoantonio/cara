@@ -178,10 +178,10 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
 
             # 2. Bare noun: "appuntamenti?" "i miei impegni" "appuntamenti
             #    della settimana prossima" "impegni di oggi" "appuntamenti
-            #    del weekend"
+            #    del weekend" "appuntamenti settimana prossima" (no prep)
             r"^(?:i\s+miei\s+|gli\s+|tutti\s+gli\s+|miei\s+)?"
             r"(?:appuntament(?:i|o)|impegni|impegno)"
-            r"(?:\s+(?:di|della|del|dell['’]|in|per)\s+"
+            r"(?:\s+(?:(?:di|della|del|dell['’]|in|per)\s+)?"
             r"(?:oggi|domani|questa\s+settimana|"
             r"(?:la\s+)?(?:prossima\s+settimana|settimana\s+prossima)|"
             r"weekend|questo\s+weekend|il\s+weekend|fine\s+settimana|"
