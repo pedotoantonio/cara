@@ -46,6 +46,29 @@ export class AuthNetworkError extends Error {
   }
 }
 
+/**
+ * Try password-less LAN login. Returns true when the backend issued
+ * tokens (we're on the home Wi-Fi or WireGuard VPN), false on any
+ * other outcome (403 from outside the LAN, network error, storage
+ * unavailable). Caller falls back to the credential login form.
+ */
+export async function tryLanLogin(): Promise<boolean> {
+  try {
+    const r = await fetch(`${API}/auth/lan-login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (!r.ok) return false;
+    const data = (await r.json()) as { access_token: string; refresh_token: string };
+    setTokens(data.access_token, data.refresh_token);
+    return getToken() === data.access_token;
+  } catch {
+    return false;
+  }
+}
+
+
 export async function login(email: string, password: string): Promise<void> {
   const r = await fetch(`${API}/auth/login`, {
     method: 'POST',

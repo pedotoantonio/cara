@@ -90,9 +90,37 @@ def _make_fetchers(session: AsyncSession) -> _Fetchers:
         return out
 
     async def weather_for(user_id: int) -> WeatherBrief | None:
-        # Wires to a per-user location once /me/preferences ships;
-        # for now the widget falls back to "available: false".
-        return None
+        # Reads family residence from admin_settings (set via the
+        # /admin/settings → "family_lat/family_lon/family_city") and
+        # asks Open-Meteo for the current observation. Cached at the
+        # WeatherService layer (15 min Redis TTL) so this fetcher is
+        # cheap to call on every wallet render.
+        from cara.services import admin_settings as _admin  # noqa: PLC0415
+        from cara.services.weather import WeatherService  # noqa: PLC0415
+
+        try:
+            lat = await _admin.get(session, "family_lat")
+            lon = await _admin.get(session, "family_lon")
+            city = await _admin.get(session, "family_city")
+        except Exception:  # noqa: BLE001
+            return None
+        if lat is None or lon is None:
+            return None
+        try:
+            ws = WeatherService()
+            cur = await ws.current(float(lat), float(lon))
+        except Exception:  # noqa: BLE001
+            return None
+        if cur is None:
+            return None
+        return WeatherBrief(
+            temperature_c=cur.temperature_c,
+            apparent_temperature_c=cur.apparent_temperature_c,
+            label=cur.label,
+            icon_slug=cur.icon_slug,
+            is_day=cur.is_day,
+            location=str(city or ""),
+        )
 
     async def presence() -> list[PresenceBrief]:
         # Wires to frigate-faces when its API is bridged into CARA.

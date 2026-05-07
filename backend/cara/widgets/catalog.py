@@ -70,6 +70,8 @@ class WeatherBrief:
     label: str
     icon_slug: str
     is_day: bool
+    location: str = ""               # "Ferrara" — shown in the widget header
+    apparent_temperature_c: float | None = None
 
 
 @dataclass
@@ -259,12 +261,25 @@ class WeatherNowWidget:
                 body = {
                     "available": True,
                     "temperature_c": round(w.temperature_c, 1),
+                    "apparent_temperature_c": (
+                        round(w.apparent_temperature_c, 1)
+                        if w.apparent_temperature_c is not None
+                        else None
+                    ),
                     "label": w.label,
                     "icon_slug": w.icon_slug,
                     "is_day": w.is_day,
+                    "location": w.location,
                 }
+        title = (
+            f"Meteo · {body['location']}"
+            if body.get("location")
+            else self.title_default
+        )
+        # `kind="weather"` routes the body through the dedicated
+        # WeatherView in the frontend (icon + temp + apparent + label).
         return WidgetData(
-            widget_id=self.id, title=self.title_default, kind="metric",
+            widget_id=self.id, title=title, kind="weather",
             body=body, deep_link="/weather", last_updated_unix=time.time(),
         )
 
@@ -305,10 +320,14 @@ class QuickActionsWidget:
     available_for_roles: tuple[str, ...] = ()
 
     DEFAULT_ACTIONS: tuple[dict[str, str], ...] = (
-        {"id": "add_task", "label": "Nuovo task", "icon": "plus", "deep_link": "/tasks/new"},
-        {"id": "add_shopping", "label": "Aggiungi spesa", "icon": "shopping", "deep_link": "/shopping/new"},
-        {"id": "add_note", "label": "Nota rapida", "icon": "note", "deep_link": "/notes/new"},
-        {"id": "voice", "label": "Parla a CARA", "icon": "mic", "deep_link": "/chat?voice=1"},
+        # Deep-links go to the existing pages — each one has its own
+        # "Aggiungi" affordance once landed. The `?new=1` query param
+        # is a hint that the page can pick up to auto-focus its
+        # creation form (no-op on pages that don't read it yet).
+        {"id": "add_task", "label": "Nuovo task", "icon": "plus", "deep_link": "/tasks?new=1"},
+        {"id": "add_shopping", "label": "Aggiungi spesa", "icon": "shopping", "deep_link": "/shopping?new=1"},
+        {"id": "add_note", "label": "Nota rapida", "icon": "note", "deep_link": "/notes?new=1"},
+        {"id": "voice", "label": "Parla a CARA", "icon": "mic", "deep_link": "/"},
     )
 
     async def render(self, ctx: WidgetContext, *, size: WidgetSize = WidgetSize.MEDIUM) -> WidgetData:
