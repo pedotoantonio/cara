@@ -74,3 +74,8 @@ class CalendarEvent(Base):
         ForeignKey("tasks.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Public Wall surface — admin can hide private events from /wall
+    # without unsubscribing from the upstream calendar.
+    wall_visible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )

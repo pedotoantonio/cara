@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -204,6 +205,64 @@ async def upload_photo(
 
 
 # ─── Unknown sightings ────────────────────────────────────────────────
+
+
+@router.get("/{person_id}/photo")
+async def person_photo(
+    person_id: int,
+    _admin: User = Depends(require_admin),  # noqa: B008
+) -> Response:
+    """Same-origin proxy for the latest face image of a person.
+
+    Without this the frontend would build cross-port URLs like
+    `https://cara.home.lan:8452/api/image/...` which (a) require the
+    user to accept the cert on a second port and (b) cause mixed
+    cert-trust state in some browsers. With the proxy the <img>
+    fetch stays on `:8455` end-to-end.
+    """
+    # frigate-faces doesn't expose /api/people/{id} — pull from the list.
+    rows = await ff.list_people()
+    person = next((r for r in rows if int(r.get("id") or 0) == int(person_id)), None)
+    if person is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "person not found")
+    latest = person.get("latest_image")
+    if not latest:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no image yet")
+    out = await ff.fetch_image_blob(str(latest))
+    if out is None:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "frigate-faces unreachable")
+    blob, ctype = out
+    return Response(
+        content=blob, media_type=ctype,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+@router.get("/unknowns/{sighting_id}/image")
+async def unknown_image(
+    sighting_id: int,
+    _admin: User = Depends(require_admin),  # noqa: B008
+) -> Response:
+    """Same-origin proxy for an unknown-sighting thumbnail."""
+    sighting = await ff.get_unknown_sighting(sighting_id)
+    if sighting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "sighting not found")
+    filename = (
+        sighting.get("image_path")
+        or sighting.get("image")
+        or sighting.get("filename")
+        or (sighting.get("image_url") or "").rsplit("/", 1)[-1]
+    )
+    if not filename:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no image for this sighting")
+    out = await ff.fetch_image_blob(str(filename))
+    if out is None:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "frigate-faces unreachable")
+    blob, ctype = out
+    return Response(
+        content=blob, media_type=ctype,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
 
 
 @router.get("/unknowns", response_model=list[UnknownSightingOut])

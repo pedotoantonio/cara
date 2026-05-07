@@ -2,15 +2,15 @@
  * Admin "Persone" page — lista volti noti, gestione, sezione sconosciuti.
  *
  * Backed by `/api/v1/admin/persons` which proxies frigate-faces under
- * the CARA auth + audit layer. Image URLs come straight from
- * frigate-faces (`http://192.168.1.23:8452/...`); admin browser must
- * be on the LAN or the URL won't resolve. We accept that for now —
- * the alternative is proxying every image through CARA, which is
- * heavy and not the priority for v1.
+ * the CARA auth + audit layer. Images are fetched same-origin via
+ * `/api/v1/admin/persons/{id}/photo` so the browser doesn't have to
+ * accept the cert on a second port (`:8452`) — that crossport setup
+ * caused image loads to silently fail in some browsers.
  */
 
 import { useEffect, useState } from 'react';
 
+import { authFetch } from '../api/auth';
 import {
   Person,
   UnknownSighting,
@@ -25,16 +25,48 @@ import {
 } from '../api/persons';
 import { Card, Icon, cn } from '../design';
 
-const FRIGATE_FACES_BASE =
-  typeof window !== 'undefined'
-    ? `${window.location.protocol}//${window.location.hostname}:8452`
-    : 'http://192.168.1.23:8452';
+/** Fetches an authenticated image and turns it into an object URL the
+ *  <img> tag can load. <img src> can't carry the Bearer header, so we
+ *  pull bytes via authFetch then expose them via createObjectURL. The
+ *  URL is revoked on unmount so we don't leak blobs. */
+function AuthedImage({
+  endpoint,
+  alt,
+  className,
+  fallback,
+}: {
+  endpoint: string;
+  alt: string;
+  className?: string;
+  fallback?: React.ReactNode;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
 
-function imageUrl(latest: string | null | undefined): string | null {
-  if (!latest) return null;
-  if (latest.startsWith('http')) return latest;
-  // frigate-faces serves images at /api/image/<filename>
-  return `${FRIGATE_FACES_BASE}/api/image/${latest}`;
+  useEffect(() => {
+    let revoked = false;
+    let url: string | null = null;
+    (async () => {
+      try {
+        const r = await authFetch(endpoint);
+        if (!r.ok) { setFailed(true); return; }
+        const blob = await r.blob();
+        url = URL.createObjectURL(blob);
+        if (!revoked) setSrc(url);
+      } catch {
+        setFailed(true);
+      }
+    })();
+    return () => {
+      revoked = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [endpoint]);
+
+  if (failed || !src) {
+    return <>{fallback ?? <div className={cn('bg-surface2', className)} />}</>;
+  }
+  return <img src={src} alt={alt} className={className} />;
 }
 
 function relTime(iso: string | null): string {
@@ -155,7 +187,9 @@ function PersonCard({ person, onChange }: { person: Person; onChange: () => void
   const [notify, setNotify] = useState(person.notify);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const img = imageUrl(person.latest_image);
+  const photoUrl = person.latest_image
+    ? `/api/v1/admin/persons/${person.id}/photo`
+    : null;
 
   async function save() {
     setBusy(true); setErr(null);
@@ -184,8 +218,17 @@ function PersonCard({ person, onChange }: { person: Person; onChange: () => void
   return (
     <Card>
       <div className="flex items-start gap-3">
-        {img ? (
-          <img src={img} alt={person.name} className="w-16 h-16 rounded-md object-cover bg-surface2" />
+        {photoUrl ? (
+          <AuthedImage
+            endpoint={photoUrl}
+            alt={person.name}
+            className="w-16 h-16 rounded-md object-cover bg-surface2"
+            fallback={
+              <div className="w-16 h-16 rounded-md bg-surface2 flex items-center justify-center">
+                <Icon name="profile" size={28} className="text-fg-muted" />
+              </div>
+            }
+          />
         ) : (
           <div className="w-16 h-16 rounded-md bg-surface2 flex items-center justify-center">
             <Icon name="profile" size={28} className="text-fg-muted" />
@@ -268,7 +311,9 @@ function UnknownCard({
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
-  const img = imageUrl(sighting.image_url);
+  const photoUrl = sighting.image_url
+    ? `/api/v1/admin/persons/unknowns/${sighting.id}/image`
+    : null;
 
   async function assign(personId: number) {
     setBusy(true); setErr(null);
@@ -286,8 +331,17 @@ function UnknownCard({
 
   return (
     <Card padded={false}>
-      {img ? (
-        <img src={img} alt="" className="w-full h-32 object-cover bg-surface2 rounded-t-md" />
+      {photoUrl ? (
+        <AuthedImage
+          endpoint={photoUrl}
+          alt=""
+          className="w-full h-32 object-cover bg-surface2 rounded-t-md"
+          fallback={
+            <div className="w-full h-32 bg-surface2 rounded-t-md flex items-center justify-center">
+              <Icon name="profile" size={28} className="text-fg-muted" />
+            </div>
+          }
+        />
       ) : (
         <div className="w-full h-32 bg-surface2 rounded-t-md flex items-center justify-center">
           <Icon name="profile" size={28} className="text-fg-muted" />

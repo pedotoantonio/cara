@@ -160,6 +160,15 @@ DEFAULTS: dict[str, Any] = {
     # persistent in the chat history, so opt-in.
     "notify_voice_message_enabled": False,   # send voice note alongside push
     "chat_voice_reply_enabled": False,       # reply to voice messages with voice
+    # ── Wall surface (`/wall`) ──────────────────────────────────────────
+    # Public read-only display for a wall-mounted tablet. No login.
+    # `wall_enabled=False` makes /wall return 503 (kill switch).
+    # `wall_idle_carousel_enabled=True` rotates Today→Week→Month every
+    # 60s after 2 min of touch inactivity.
+    # `wall_silent_hours_dim=True` dims the UI 22:00–07:00.
+    "wall_enabled": True,
+    "wall_idle_carousel_enabled": False,
+    "wall_silent_hours_dim": True,
 }
 
 

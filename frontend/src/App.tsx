@@ -75,6 +75,11 @@ import { SettingsPage } from './routes/SettingsPage';
 import { ShoppingPage } from './routes/ShoppingPage';
 import { TasksPage } from './routes/TasksPage';
 import { WalletPage } from './routes/WalletPage';
+import { WallShell } from './routes/wall/WallShell';
+import { WallToday } from './routes/wall/WallToday';
+import { WallCalendarPage } from './routes/wall/WallCalendarPage';
+import { WallWeekPage } from './routes/wall/WallWeekPage';
+import { WallShoppingPage } from './routes/wall/WallShoppingPage';
 
 type AuthState = { kind: 'loading' } | { kind: 'anonymous' } | { kind: 'authenticated'; user: User };
 
@@ -157,6 +162,28 @@ export default function App() {
   function logout() {
     clearTokens();
     setAuth({ kind: 'anonymous' });
+  }
+
+  // Wall surface — public read-only display, bypasses both the
+  // loading screen and the auth gate. Renders immediately on every
+  // boot state so a wall-mounted tablet never shows a login prompt.
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/wall')) {
+    return (
+      <ThemeProvider>
+        <ToastProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/wall" element={<WallShell />}>
+                <Route index element={<WallToday />} />
+                <Route path="week" element={<WallWeekPage />} />
+                <Route path="calendar" element={<WallCalendarPage />} />
+                <Route path="shopping" element={<WallShoppingPage />} />
+              </Route>
+            </Routes>
+          </BrowserRouter>
+        </ToastProvider>
+      </ThemeProvider>
+    );
   }
 
   if (auth.kind === 'loading') {

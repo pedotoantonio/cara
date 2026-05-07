@@ -137,20 +137,77 @@ async def upload_face_image(
         return None
 
 
+async def fetch_image_blob(filename: str) -> tuple[bytes, str] | None:
+    """Download a face/sighting image from frigate-faces and return
+    the raw bytes + content-type. Used by the admin photo proxy in
+    `cara.api.v1.persons` so the browser only ever talks to CARA on
+    port 8455 (avoids extra cert prompts on :8452 + CORS gotchas).
+    """
+    base = _base_url()
+    if not base or not filename:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as c:
+            r = await c.get(f"{base}/api/image/{filename}")
+            if r.status_code != 200:
+                return None
+            return r.content, r.headers.get("content-type", "image/jpeg")
+    except httpx.HTTPError as exc:
+        log.warning("frigate_faces.fetch_image.failed", file=filename, error=str(exc))
+        return None
+
+
+async def get_unknown_sighting(sighting_id: int) -> dict[str, Any] | None:
+    """Look up one unknown sighting by id (returns whatever the
+    frigate-faces /api/unknown gives us — image filename, camera,
+    timestamp, etc.). frigate-faces doesn't expose a per-id endpoint
+    for unknowns, so we filter the list. Cheap (small list)."""
+    base = _base_url()
+    if not base:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+            r = await c.get(f"{base}/api/unknown")
+            r.raise_for_status()
+            rows = r.json() or []
+    except (httpx.HTTPError, ValueError):
+        return None
+    for row in rows:
+        try:
+            if int(row.get("id") or 0) == int(sighting_id):
+                return row
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 async def list_unknown_sightings(*, limit: int = 50) -> list[dict[str, Any]]:
     base = _base_url()
     if not base:
         return []
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-            r = await c.get(f"{base}/api/sightings/unknown?limit={limit}")
+            r = await c.get(f"{base}/api/unknown")
             if r.status_code == 404:
                 return []
             r.raise_for_status()
-            return r.json() or []
+            rows = r.json() or []
     except (httpx.HTTPError, ValueError) as exc:
         log.warning("frigate_faces.list_unknowns.failed", error=str(exc))
         return []
+    # Normalise frigate-faces' shape (image_path / timestamp / camera)
+    # into what `UnknownSightingOut` expects, and cap at `limit` since
+    # the upstream endpoint doesn't honour a query param.
+    out: list[dict[str, Any]] = []
+    for row in rows[:limit]:
+        out.append({
+            "id": row.get("id"),
+            "camera": row.get("camera"),
+            "timestamp": row.get("timestamp") or row.get("created_at"),
+            "image_url": row.get("image_path"),
+            "image_path": row.get("image_path"),
+        })
+    return out
 
 
 async def ignore_sighting(sighting_id: int) -> bool:

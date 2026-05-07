@@ -39,3 +39,8 @@ class Task(Base):
     reminded_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Show this task on the public Wall surface? Default true; admin or
+    # owner can opt out via PATCH for sensitive items.
+    wall_visible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )

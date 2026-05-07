@@ -25,6 +25,15 @@ class User(Base):
     # Optional birth date — only month+day are used for the birthday reaction;
     # the year is kept just to display "Antonio (38)" style if we ever want it.
     birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Public Wall surface (`/wall`) — show this user as an owner on the
+    # wall-mounted family display? Default true for family roles, false
+    # for `guest`. Their color/emoji identify them on chips and the
+    # calendar grid; defaults backfilled by migration.
+    wall_visible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    wall_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    wall_emoji: Mapped[str | None] = mapped_column(String(8), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
