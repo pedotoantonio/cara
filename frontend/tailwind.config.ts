@@ -97,11 +97,19 @@ export default {
           '0%, 100%': { transform: 'rotate(-1deg)' },
           '50%':      { transform: 'rotate(1deg)' },
         },
+        // Wall mic transcript: scrolls long text horizontally on a
+        // single line, looping from right to left. Two copies of the
+        // text are rendered side-by-side so the loop is seamless.
+        'marquee-x': {
+          '0%':   { transform: 'translateX(0%)' },
+          '100%': { transform: 'translateX(-50%)' },
+        },
       },
       animation: {
         breathe: 'breathe 3.6s cubic-bezier(0.45, 0, 0.55, 1) infinite',
         rise:    'rise 420ms cubic-bezier(0.22, 1, 0.36, 1) both',
         sway:    'sway 5s cubic-bezier(0.45, 0, 0.55, 1) infinite',
+        'marquee-x': 'marquee-x 18s linear infinite',
       },
     },
   },

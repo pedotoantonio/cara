@@ -917,6 +917,92 @@ async def wall_shopping_delete(
     return None
 
 
+# ─── Face check from device camera (LAN, no-auth) ───────────────────
+
+
+_FACE_DEVICE_COOLDOWN_SEC = 90  # don't re-greet the same person more than every 90s
+
+
+@router.post("/face-check")
+async def wall_face_check(
+    image: UploadFile = File(...),  # noqa: B008
+    _lan: None = Depends(require_lan),  # noqa: B008
+    _enabled: None = Depends(require_wall_enabled),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, Any]:
+    """Recognize faces from the device camera.
+
+    The Wall frontend captures a frame from `getUserMedia` every ~30s
+    and POSTs it here. We forward to frigate-faces' `/api/recognize-image`
+    and (on a known match) publish a `presence.known.arrived` event on
+    the family bus so the avatar greets and the rest of the family-bus
+    consumers behave exactly like a Frigate camera sighting.
+
+    Cooldown via Redis keeps repeated arrivals from spamming the bus.
+    """
+    blob = await image.read()
+    if not blob:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty image")
+    if len(blob) > 4 * 1024 * 1024:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "image too large (max 4 MB)",
+        )
+
+    base = await admin_svc.get(session, "frigate_faces_url")
+    base = (base or app_settings.frigate_faces_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "frigate-faces not configured",
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0)) as c:
+            r = await c.post(
+                f"{base}/api/recognize-image",
+                files={"image": (image.filename or "frame.jpg", blob, image.content_type or "image/jpeg")},
+            )
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPError as exc:
+        log.warning("wall.face_check.upstream_failed", error=str(exc))
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "frigate-faces unreachable"
+        ) from exc
+
+    match = data.get("match") if isinstance(data, dict) else None
+    found_face = bool(data.get("found_face")) if isinstance(data, dict) else False
+
+    # Publish a presence event when we have a known person, with a
+    # Redis-backed cooldown to avoid greeting the same person every
+    # 30s. The Wall avatar consumer dedupes by `name`.
+    if match and isinstance(match, dict) and match.get("name"):
+        name = str(match["name"])
+        try:
+            from cara.config import settings as _cfg  # noqa: PLC0415
+            import redis.asyncio as redis_asyncio  # noqa: PLC0415
+
+            r = redis_asyncio.from_url(_cfg.redis_url, decode_responses=True)
+            key = f"wall:device_face:{name.lower()}"
+            already = await r.get(key)
+            if not already:
+                await r.set(key, "1", ex=_FACE_DEVICE_COOLDOWN_SEC)
+                await family_bus.publish(
+                    "presence.known.arrived",
+                    payload={"name": name, "source": "wall_device_cam"},
+                )
+            await r.aclose()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("wall.face_check.bus_failed", error=str(exc))
+
+    return {
+        "found_face": found_face,
+        "match": match,
+        "cooldown_sec": _FACE_DEVICE_COOLDOWN_SEC,
+    }
+
+
 @router.post("/shopping/clear-bought", status_code=status.HTTP_204_NO_CONTENT)
 async def wall_shopping_clear_bought(
     _lan: None = Depends(require_lan),  # noqa: B008

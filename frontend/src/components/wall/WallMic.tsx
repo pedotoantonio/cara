@@ -17,30 +17,141 @@ import { askCara, transcribeAudio } from '../../api/wall';
 
 type Phase = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'error';
 
+// We type the constructor loosely so TS doesn't complain — the real
+// API is provided by the browser when available.
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((ev: { results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((ev: { error?: string }) => void) | null;
+};
+
+declare global {
+  interface Window {
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+  }
+}
+
+function getRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
+  if (typeof window === 'undefined') return null;
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
 export function WallMic() {
   const [phase, setPhase] = useState<Phase>('idle');
   const [transcript, setTranscript] = useState<string>('');
   const [reply, setReply] = useState<string>('');
   const [diag, setDiag] = useState<string>('');
+  // Wake-word listener state. When true, we keep a passive
+  // SpeechRecognition session listening for "cara"; on detection we
+  // auto-start the MediaRecorder pipeline.
+  const [wakeOn, setWakeOn] = useState<boolean>(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const armedAtRef = useRef<number>(0);
+  const wakeRecRef = useRef<SpeechRecognitionLike | null>(null);
+  const phaseRef = useRef<Phase>('idle');
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
 
   // Quick capability probes for the diagnostics tooltip.
   const supportsMR =
     typeof window !== 'undefined' &&
     typeof window.MediaRecorder !== 'undefined' &&
     !!navigator.mediaDevices?.getUserMedia;
+  const supportsWake = Boolean(getRecognitionCtor());
 
   useEffect(() => {
     return () => {
       stopAll();
+      stopWake();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Mount/unmount the wake-word listener when the toggle flips. We
+  // restart the recognizer on each `onend` so it stays alive as long
+  // as `wakeOn` is true (browsers terminate the session after every
+  // utterance).
+  useEffect(() => {
+    if (!wakeOn) {
+      stopWake();
+      return;
+    }
+    if (!supportsWake) return;
+    startWake();
+    return () => stopWake();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wakeOn]);
+
+  function startWake() {
+    const Ctor = getRecognitionCtor();
+    if (!Ctor) return;
+    if (wakeRecRef.current) return;
+    let rec: SpeechRecognitionLike;
+    try {
+      rec = new Ctor();
+    } catch {
+      return;
+    }
+    rec.lang = 'it-IT';
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.onresult = (ev) => {
+      // Look for "cara" in any final result. The user can be saying
+      // anything around it — "cara accendi…", "ehi cara…", etc.
+      // Conservative: only trigger when the recorder is idle and not
+      // already speaking back.
+      const results = ev.results;
+      for (let i = 0; i < results.length; i++) {
+        const text = results[i][0]?.transcript?.toLowerCase() || '';
+        if (results[i].isFinal && /\bcara\b/.test(text)) {
+          if (phaseRef.current === 'idle' || phaseRef.current === 'error') {
+            setDiag('Parola d\'ordine "CARA" rilevata');
+            void startRecording();
+          }
+          return;
+        }
+      }
+    };
+    rec.onerror = (ev) => {
+      const code = ev.error || 'unknown';
+      // `no-speech`/`aborted` are normal — recognition restarts in onend.
+      if (code !== 'no-speech' && code !== 'aborted') {
+        setDiag(`wake: ${code}`);
+      }
+    };
+    rec.onend = () => {
+      // Auto-restart so the listener keeps running.
+      if (wakeRecRef.current === rec && phaseRef.current !== 'speaking') {
+        try { rec.start(); } catch { /* noop */ }
+      }
+    };
+    try {
+      rec.start();
+      wakeRecRef.current = rec;
+    } catch {
+      wakeRecRef.current = null;
+    }
+  }
+
+  function stopWake() {
+    if (wakeRecRef.current) {
+      try { wakeRecRef.current.abort(); } catch { /* noop */ }
+      wakeRecRef.current = null;
+    }
+  }
 
   function stopAll() {
     try {
@@ -226,8 +337,20 @@ export function WallMic() {
     }
   })();
 
+  // Build a single-line transcript string. We avoid two separate
+  // <div>s because the user wants ONE horizontal line, not stacked
+  // lines. When both transcript and reply exist we join them with a
+  // separator. The marquee scrolls only when the text overflows the
+  // fixed-width track.
+  const lineText = (() => {
+    const parts: string[] = [];
+    if (transcript) parts.push(`« ${transcript} »`);
+    if (reply) parts.push(reply);
+    return parts.join('   →   ');
+  })();
+
   return (
-    <div className="flex flex-col items-center gap-2 select-none relative">
+    <div className="flex flex-col items-center gap-2 select-none">
       <button
         type="button"
         onPointerDown={(e) => {
@@ -267,20 +390,55 @@ export function WallMic() {
       >
         {buttonLabel}
       </span>
-      {(transcript || reply) && (
-        <div
-          className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-72 max-w-[80vw] bg-bg/90 backdrop-blur-md rounded-xl p-3 shadow-lg z-30 text-center"
-          style={{ fontSize: 'clamp(13px, 1.1vw, 16px)' }}
+      {/* Single-line transcript track. Always reserves vertical space
+          (h-7) so layout doesn't jump when text appears. Inline-flow,
+          not absolute-positioned, so it never overlaps siblings. */}
+      <MicTranscriptLine text={lineText} />
+      {supportsWake && (
+        <button
+          type="button"
+          onClick={() => setWakeOn((v) => !v)}
+          className={[
+            'inline-flex items-center gap-1.5 rounded-pill px-3 py-1 text-xs',
+            wakeOn
+              ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+              : 'bg-surface2/80 text-fg-muted hover:text-fg',
+          ].join(' ')}
+          title={wakeOn
+            ? 'Wake-word "CARA" attiva: di "CARA" + comando'
+            : 'Attiva wake-word: dì "CARA" per parlare senza premere'}
         >
-          {transcript && (
-            <div className="text-fg-soft italic">
-              «{transcript}»
-            </div>
+          {wakeOn && (
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
           )}
-          {reply && (
-            <div className="text-fg mt-1.5 break-words">{reply}</div>
-          )}
+          {wakeOn ? 'Wake "CARA" attivo' : 'Attiva wake "CARA"'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function MicTranscriptLine({ text }: { text: string }) {
+  if (!text) {
+    return <div className="h-7" aria-hidden="true" />;
+  }
+  // Heuristic: text wider than ~30 chars likely needs scrolling. We
+  // duplicate the string and animate the inner track so the loop is
+  // seamless.
+  const needsScroll = text.length > 30;
+  return (
+    <div
+      className="w-72 max-w-[60vw] h-7 overflow-hidden rounded-full bg-bg/85 backdrop-blur-sm flex items-center px-3"
+      style={{ fontSize: 'clamp(12px, 1vw, 15px)' }}
+      aria-live="polite"
+    >
+      {needsScroll ? (
+        <div className="flex whitespace-nowrap animate-marquee-x">
+          <span className="text-fg pr-12">{text}</span>
+          <span className="text-fg pr-12" aria-hidden="true">{text}</span>
         </div>
+      ) : (
+        <span className="text-fg whitespace-nowrap mx-auto">{text}</span>
       )}
     </div>
   );

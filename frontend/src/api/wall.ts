@@ -287,6 +287,28 @@ export async function deleteShopping(id: string): Promise<void> {
   }
 }
 
+// ─── Device camera face recognition ──────────────────────────────
+
+export interface WallFaceCheckResult {
+  found_face: boolean;
+  match: { name: string; person_id: number; distance: number } | null;
+  cooldown_sec: number;
+}
+
+export async function checkFaceFromDevice(blob: Blob): Promise<WallFaceCheckResult> {
+  const fd = new FormData();
+  fd.append('image', blob, 'frame.jpg');
+  const r = await fetch(`${API}/face-check`, {
+    method: 'POST',
+    body: fd,
+    credentials: 'omit',
+  });
+  if (!r.ok) {
+    throw new Error(`Wall /face-check → HTTP ${r.status}`);
+  }
+  return (await r.json()) as WallFaceCheckResult;
+}
+
 export async function clearBoughtShopping(): Promise<void> {
   const r = await fetch(`${API}/shopping/clear-bought`, {
     method: 'POST',

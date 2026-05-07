@@ -9,6 +9,7 @@ import { fetchSummary } from '../../api/wall';
 import type { WallSummary } from '../../api/wall';
 import { WallAvatarPanel } from '../../components/wall/WallAvatarPanel';
 import { WallClock } from '../../components/wall/WallClock';
+import { WallDeviceCam } from '../../components/wall/WallDeviceCam';
 import { WallMic } from '../../components/wall/WallMic';
 import { WeatherIcon } from '../../components/wall/WeatherIcon';
 
@@ -100,6 +101,7 @@ export function WallShell() {
         <div className="flex flex-col items-center gap-3">
           <WallAvatarPanel size={156} />
           <WallMic />
+          <WallDeviceCam />
         </div>
         <div className="flex justify-end">
           <HeaderMeta summary={summary} />
@@ -132,8 +134,11 @@ export function WallShell() {
         ))}
       </nav>
 
-      {/* Outlet */}
-      <main className="flex-1 overflow-y-auto px-8 pb-8 z-10">
+      {/* Outlet — `min-h-0` is the magic that lets `flex-1` actually
+          clamp the main panel to remaining viewport so children that
+          rely on `overflow-y-auto` (calendar grid, week scroll) can
+          compute heights instead of growing to fit content. */}
+      <main className="flex-1 min-h-0 overflow-y-auto px-8 pb-8 z-10">
         {error && (
           <div className="text-alert text-center py-4">
             ⚠ {error}

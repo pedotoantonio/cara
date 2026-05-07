@@ -127,7 +127,7 @@ export function WallCalendarPage() {
           Carico il calendario…
         </div>
       ) : (
-        <div className="grid grid-cols-7 gap-2 auto-rows-fr">
+        <div className="grid grid-cols-7 gap-2">
           {data.days.map((day) => (
             <WallDayCell
               key={day.date}
