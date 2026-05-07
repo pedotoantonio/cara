@@ -47,23 +47,28 @@ log = structlog.get_logger(__name__)
 # ─── Celery-side async session ──────────────────────────────────────
 #
 # Workers are forked processes — they cannot reuse the FastAPI engine.
-# Build a dedicated engine per worker the first time a task touches
-# the DB. `pool_size=2` is plenty given concurrency=1 on each worker.
+# We also can't keep an engine module-global with a persistent pool:
+# each Celery task spins up its OWN asyncio loop (see `_run_in_loop`),
+# so an asyncpg connection allocated by task N is "attached to a
+# different loop" when task N+1 picks it up. NullPool sidesteps this:
+# every session opens a fresh connection (~10 ms) and disposes on
+# close, no cross-loop state.
 
-_engine = None
+from sqlalchemy.pool import NullPool
+
+
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
 def _get_sessionmaker() -> async_sessionmaker[AsyncSession]:
-    global _engine, _sessionmaker
+    global _sessionmaker
     if _sessionmaker is None:
-        _engine = create_async_engine(
+        engine = create_async_engine(
             settings.database_url,
-            pool_size=2,
-            max_overflow=2,
-            pool_pre_ping=True,
+            poolclass=NullPool,
+            pool_pre_ping=False,
         )
-        _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
+        _sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     return _sessionmaker
 
 

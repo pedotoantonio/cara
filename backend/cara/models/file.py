@@ -17,6 +17,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 from cara.store.db import Base
 
 
+# Phase 3 ingestion is async — `pending` right after upload (blob saved
+# but not parsed), `processing` while the files-agent runs, `ready`
+# when text + summary are populated, `failed` if extraction crashed.
+FILE_STATUS_PENDING = "pending"
+FILE_STATUS_PROCESSING = "processing"
+FILE_STATUS_READY = "ready"
+FILE_STATUS_FAILED = "failed"
+
+
 class UploadedFile(Base):
     __tablename__ = "files"
 
@@ -37,6 +46,13 @@ class UploadedFile(Base):
     text_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Async ingestion state (Phase 3). Existing rows get `ready` by
+    # the migration so legacy reads keep working unchanged.
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=FILE_STATUS_READY,
+        server_default=FILE_STATUS_READY,
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

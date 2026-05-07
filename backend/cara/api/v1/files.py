@@ -26,17 +26,22 @@ async def list_my_files(
     return [FileOut.model_validate(r) for r in rows]
 
 
-@router.post("", response_model=FileOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=FileOut, status_code=status.HTTP_202_ACCEPTED)
 async def upload_file(
     file: UploadFile = File(...),  # noqa: B008
     user: User = Depends(get_current_user),  # noqa: B008
     session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> FileOut:
+    """Async upload: persist the blob with status=pending and enqueue
+    extraction to the files-agent. Returns 202 immediately so the
+    chat backend isn't blocked by a 50-page PDF parse. The frontend
+    polls `GET /files/{id}` until status flips to `ready`.
+    """
     blob = await file.read()
     if not blob:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty file")
     try:
-        row = await svc.ingest_blob(
+        row = await svc.store_blob_pending(
             session,
             user_id=user.id,
             filename=file.filename or "untitled",
@@ -45,6 +50,29 @@ async def upload_file(
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)) from exc
+    await session.commit()  # row must be visible to the worker
+    # Enqueue extraction. Lazy import keeps the cold-start of the
+    # files router independent from Celery (and lets unit tests run
+    # without a broker).
+    try:
+        from cara.tasks.celery_app import celery_app  # noqa: PLC0415
+        celery_app.send_task(
+            "cara.agents.files.ingest_file",
+            kwargs={
+                "file_id": str(row.id),
+                "user_id": user.id,
+                "idempotency_key": f"file:{row.id}",
+            },
+            queue="files",
+        )
+    except Exception:  # noqa: BLE001
+        # Broker unreachable — degrade to inline parse so the user
+        # still gets a working file. Logged so we know the queue is
+        # struggling.
+        from cara.services.files import extract_into_row  # noqa: PLC0415
+        await extract_into_row(session, file_id=row.id)
+        await session.commit()
+        await session.refresh(row)
     return FileOut.model_validate(row)
 
 

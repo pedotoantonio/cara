@@ -31,7 +31,7 @@ from cara.models import UploadedFile
 
 logger = structlog.get_logger(__name__)
 
-UPLOADS_ROOT = Path("/app/data/uploads")
+UPLOADS_ROOT = Path("/app/uploads")  # mounted from host ./data/uploads in compose
 MAX_FILE_BYTES = 25 * 1024 * 1024   # 25 MB hard cap
 MAX_TEXT_CHARS = 100_000             # cap text storage; longer files are truncated
 
@@ -166,6 +166,11 @@ async def ingest_blob(
     mime_type: str,
     blob: bytes,
 ) -> UploadedFile:
+    """Synchronous all-in-one path. Kept for any caller that still
+    wants the original semantics; the public API now uses
+    `store_blob_pending` + `extract_into_row` so heavy parses run on
+    the files-agent.
+    """
     if len(blob) > MAX_FILE_BYTES:
         raise ValueError(f"file too large: {len(blob)} > {MAX_FILE_BYTES}")
     sha = hashlib.sha256(blob).hexdigest()
@@ -185,8 +190,94 @@ async def ingest_blob(
         text_content=text or None,
         summary=summary or None,
         metadata_json=metadata,
+        status="ready",
     )
     session.add(row)
+    await session.flush()
+    return row
+
+
+async def store_blob_pending(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    filename: str,
+    mime_type: str,
+    blob: bytes,
+) -> UploadedFile:
+    """Persist the blob + insert a row with status=pending. The actual
+    text extraction is enqueued as a Celery task (`cara.agents.files
+    .ingest_file`). The API returns immediately with 202 and the row,
+    so the upload doesn't tie up the chat backend with a 50-page PDF.
+    """
+    if len(blob) > MAX_FILE_BYTES:
+        raise ValueError(f"file too large: {len(blob)} > {MAX_FILE_BYTES}")
+    sha = hashlib.sha256(blob).hexdigest()
+    path = _store_blob(blob, sha)
+    kind = _kind_from_mime(filename, mime_type)
+    row = UploadedFile(
+        user_id=user_id,
+        filename=filename,
+        mime_type=mime_type or "application/octet-stream",
+        kind=kind,
+        size_bytes=len(blob),
+        sha256=sha,
+        storage_path=str(path),
+        text_content=None,
+        summary=None,
+        metadata_json={"text_chars": 0},
+        status="pending",
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def extract_into_row(
+    session: AsyncSession,
+    *,
+    file_id: uuid.UUID,
+) -> UploadedFile | None:
+    """Background-side: read the persisted blob from disk, run the
+    appropriate text extractor, write text + summary back to the row,
+    flip status to `ready`. On failure flip to `failed` with the
+    error message. Idempotent: re-running on a `ready` row re-extracts
+    and overwrites — useful if the parser is upgraded.
+    """
+    row = (
+        await session.execute(
+            select(UploadedFile).where(UploadedFile.id == file_id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    row.status = "processing"
+    row.error_message = None
+    await session.flush()
+
+    try:
+        blob = Path(row.storage_path).read_bytes()
+    except OSError as exc:
+        row.status = "failed"
+        row.error_message = f"blob read failed: {exc}"
+        await session.flush()
+        return row
+
+    try:
+        text = extract_text(row.kind, blob)
+    except Exception as exc:  # noqa: BLE001
+        row.status = "failed"
+        row.error_message = f"extract_text {type(exc).__name__}: {exc}"[:500]
+        await session.flush()
+        return row
+
+    summary = _summary_of(text)
+    metadata = dict(row.metadata_json or {})
+    metadata["text_chars"] = len(text)
+    row.text_content = text or None
+    row.summary = summary or None
+    row.metadata_json = metadata
+    row.status = "ready"
     await session.flush()
     return row
 

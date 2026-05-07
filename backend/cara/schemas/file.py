@@ -18,4 +18,8 @@ class FileOut(BaseModel):
     size_bytes: int
     sha256: str
     summary: str | None = None
+    # Phase 3 async ingestion: pending → processing → ready (or failed).
+    # Frontend polls GET /files/{id} until status == "ready".
+    status: str = "ready"
+    error_message: str | None = None
     created_at: datetime
