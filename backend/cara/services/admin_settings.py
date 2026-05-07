@@ -156,6 +156,10 @@ DEFAULTS: dict[str, Any] = {
     "notify_telegram_enabled": True,
     "notify_push_enabled": True,
     "notify_ws_tts_enabled": True,
+    # Telegram voice features. Both off by default — voice notes are
+    # persistent in the chat history, so opt-in.
+    "notify_voice_message_enabled": False,   # send voice note alongside push
+    "chat_voice_reply_enabled": False,       # reply to voice messages with voice
 }
 
 

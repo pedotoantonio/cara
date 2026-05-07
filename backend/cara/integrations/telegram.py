@@ -231,6 +231,115 @@ async def _on_spesa(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_chat.send_message("Da comprare:\n" + "\n".join(lines))
 
 
+async def _on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """User sent a voice note or audio file. Download → Whisper STT
+    → route as if it were a text message. Optionally reply with a
+    voice note when the admin enabled `chat_voice_reply_enabled`.
+    """
+    user = await _gate(update)
+    if user is None:
+        return
+    chat = update.effective_chat
+    msg = update.effective_message
+    voice = msg.voice if msg else None
+    audio = msg.audio if msg else None
+    obj = voice or audio
+    if obj is None:
+        return
+
+    await ctx.bot.send_chat_action(chat.id, ChatAction.TYPING)
+    try:
+        tg_file = await ctx.bot.get_file(obj.file_id)
+        blob_bytes = await tg_file.download_as_bytearray()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.voice.download_failed", error=str(exc))
+        await chat.send_message("Non sono riuscita a scaricare il vocale.")
+        return
+
+    # Pipe through the existing Whisper ASR service. Telegram voice
+    # notes are OGG/Opus, audio files vary; faster-whisper handles
+    # both via libsndfile.
+    text: str | None = None
+    try:
+        from cara.services.asr import transcribe_bytes  # noqa: PLC0415
+        result = await transcribe_bytes(bytes(blob_bytes), language="it")
+        if isinstance(result, dict):
+            text = result.get("text")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.voice.transcribe_failed", error=str(exc))
+
+    if not text or not text.strip():
+        await chat.send_message(
+            "Non ho capito il vocale. Riprova in un posto silenzioso o "
+            "scrivi il messaggio."
+        )
+        return
+
+    transcription = text.strip()
+    # Echo the transcription so the user sees what we heard, then
+    # process it through the same pipeline as text messages.
+    await chat.send_message(f"🎤 _\"{transcription}\"_", parse_mode="Markdown")
+
+    convo_id = await _ensure_conversation(chat.id, user)
+    reply: str | None = None
+    try:
+        reply = await _pipeline_collect(user, convo_id, transcription)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.voice.pipeline_failed", error=str(exc))
+    if reply is None:
+        try:
+            reply = await _generate_reply(user, convo_id, transcription)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("telegram.voice.llm_failed", error=str(exc))
+            reply = f"Errore: {exc!r}"
+
+    if reply:
+        try:
+            assert _sessionmaker is not None  # noqa: S101
+            async with _sessionmaker() as s:
+                await convo_svc.add_message(
+                    s, conversation_id=convo_id, role="user",
+                    content=transcription,
+                )
+                await convo_svc.add_message(
+                    s, conversation_id=convo_id, role="assistant", content=reply,
+                )
+                await s.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("telegram.voice.persist_failed", error=str(exc))
+
+    for i in range(0, len(reply), 4000):
+        await chat.send_message(reply[i : i + 4000])
+
+    # Optional voice reply — feature-flagged because most users
+    # prefer text. The setting is `chat_voice_reply_enabled` (admin).
+    voice_reply = await _setting_bool("chat_voice_reply_enabled", default=False)
+    if voice_reply and reply:
+        try:
+            from cara.integrations.telegram_audio import synth_voice_note  # noqa: PLC0415
+            ogg = await synth_voice_note(reply[:600])  # cap so audio stays short
+            if ogg:
+                await ctx.bot.send_voice(chat_id=chat.id, voice=ogg)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("telegram.voice.synth_failed", error=str(exc))
+
+
+async def _setting_bool(key: str, *, default: bool) -> bool:
+    """Read an admin_settings boolean; falls back to default on
+    missing engine / settings (e.g. when the bot starts before the
+    DB is fully initialised)."""
+    try:
+        from cara.services import admin_settings as _admin  # noqa: PLC0415
+        assert _sessionmaker is not None  # noqa: S101
+        async with _sessionmaker() as s:
+            v = await _admin.get(s, key)
+        if v is None:
+            return default
+        return bool(v)
+    except Exception:  # noqa: BLE001
+        return default
+
+
 async def _on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _gate(update)
     if user is None:
@@ -554,6 +663,9 @@ async def start_telegram_bot() -> None:
     app.add_handler(CommandHandler(["task", "tasks"], _on_task))
     app.add_handler(CommandHandler("cam", _on_cam))
     app.add_handler(CommandHandler("diag", _on_diag))
+    # Phase 3 — voice in / audio in: any voice note or audio file
+    # gets transcribed by Whisper and routed as text.
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, _on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
 
     await app.initialize()
@@ -594,9 +706,10 @@ async def send_message_to_owners(
     *,
     parse_mode: str | None = "Markdown",
     image_url: str | None = None,
+    voice_ogg: bytes | None = None,
 ) -> None:
-    """Push a message (and optional photo) to every chat in
-    `CARA_TELEGRAM_CHAT_OWNERS`. Used by `cara.services.notify` for
+    """Push a message (and optional photo / voice note) to every chat
+    in `CARA_TELEGRAM_CHAT_OWNERS`. Used by `cara.services.notify` for
     presence alerts, agent failures, proactivity nudges, etc.
 
     Failures on individual chats are logged and skipped — one
@@ -623,6 +736,11 @@ async def send_message_to_owners(
                     parse_mode=parse_mode,
                     disable_web_page_preview=True,
                 )
+            if voice_ogg:
+                # A voice note follows the text message so the user
+                # sees the headline first then has the audio for
+                # eyes-free listening.
+                await bot.send_voice(chat_id=chat_id, voice=voice_ogg)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "telegram.send_message.failed",

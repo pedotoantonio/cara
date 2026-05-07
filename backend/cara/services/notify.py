@@ -93,9 +93,28 @@ async def _send_telegram(notif: Notification) -> None:
         text_lines.append(f'\n<a href="{base}{notif.deep_link}">apri</a>')
     text = "\n".join(text_lines)
 
+    # Voice note: opt-in — when admin enabled `notify_voice_message_enabled`
+    # AND the notification carries a `speak_text`, we synth and ship it
+    # alongside the text. Telegram voice notes appear in the chat with
+    # a play button, perfect for hands-free greetings while driving.
+    voice_ogg: bytes | None = None
+    if notif.speak_text:
+        try:
+            from cara.store.db import get_sessionmaker  # noqa: PLC0415
+            from cara.services import admin_settings as _admin  # noqa: PLC0415
+            sm = get_sessionmaker()
+            async with sm() as s:
+                voice_on = await _admin.get(s, "notify_voice_message_enabled")
+            if voice_on:
+                from cara.integrations.telegram_audio import synth_voice_note  # noqa: PLC0415
+                voice_ogg = await synth_voice_note(notif.speak_text)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("notify.telegram.voice_synth_failed", error=str(exc))
+
     try:
         await _tg.send_message_to_owners(
-            text=text, parse_mode="HTML", image_url=notif.image_url,
+            text=text, parse_mode="HTML",
+            image_url=notif.image_url, voice_ogg=voice_ogg,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("notify.telegram.failed", kind=notif.kind, error=str(exc))
