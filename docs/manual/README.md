@@ -1,6 +1,6 @@
 # CARA — Manuale del Programmatore
 
-> Versione manuale: **0.1.0** · Versione CARA documentata: **1.1.0** · Aggiornato: 2026-05-06
+> Versione manuale: **0.2.0** · Versione CARA documentata: **1.1.0** · Aggiornato: 2026-05-07
 
 Questa è la documentazione tecnica completa di CARA — l'assistente AI di
 casa che gira sul NanoPC-T6. Se sei arrivato qui sei un programmatore
@@ -45,52 +45,50 @@ Il manuale ha 32 capitoli divisi in 7 grandi aree:
 
 ### Backend e frontend
 
-- Cap 4 — Backend, moduli profondi *(in scrittura)*
-  - 4.1 cara.config · 4.2 cara.store · 4.3 cara.models · 4.4 cara.api.v1
-  - 4.5 cara.api.deps · 4.6 cara.services · 4.7 cara.ai · 4.8 cara.cda
-  - 4.9 cara.core · 4.10 cara.integrations · 4.11 cara.learning
-  - 4.12 cara.router · 4.13 cara.skills · 4.14 cara.smarthome
-  - 4.15 cara.widgets · 4.16 cara.workflows
-- Cap 5 — Frontend, moduli profondi *(in scrittura)*
+- [Cap 4 — Backend, moduli profondi](04-backend-moduli.md) · *I 16 sotto-pacchetti `cara.*` mappati uno per uno*
+- [Cap 5 — Frontend, moduli profondi](05-frontend-moduli.md) · *Stack React/Vite/Tailwind/PWA, design system, API client*
 
 ### Funzionalità
 
-- Cap 6 — AI / LLM (Qwen, RKLLM, KV cache, sampling, system prompt) *(in scrittura)*
-- Cap 7 — Voce, TTS, STT *(in scrittura)*
-- Cap 8 — Memoria (episodic + semantic) *(in scrittura)*
-- Cap 9 — Skill Factory *(in scrittura)*
-- Cap 10 — Wallet & widgets *(in scrittura)*
-- Cap 11 — Proattività *(in scrittura)*
-- Cap 12 — Smart home *(in scrittura)*
-- Cap 13 — CDA (Content Discovery Agent) *(in scrittura)*
-- Cap 14 — Workflow (Receipt, Bill, Recipe) *(in scrittura)*
-- Cap 15 — Multi-device + pairing *(in scrittura)*
-- Cap 16 — Integrazioni Google *(in scrittura)*
-- Cap 17 — Notifiche e bus famiglia *(in scrittura)*
+- [Cap 6 — AI / LLM](06-ai-llm.md) · *Qwen 2.5-1.5B, RKLLM, KV cache TTFT 8.3×, sampling, system prompt*
+- [Cap 7 — Voce, TTS, STT](07-voce-tts-stt.md) · *Piper TTS, sentence streaming, Whisper, Web Speech, wake word*
+- [Cap 8 — Memoria](08-memoria.md) · *Episodic + semantic, fact extraction, top-k retrieval, GDPR*
+- [Cap 9 — Skill Factory](09-skill-factory.md) · *JSON skill, primitive, executor, dispatcher Tier-1/2/3, Skill Author*
+- [Cap 10 — Wallet & widgets](10-wallet-widgets.md) · *Engine, 13 widget, layout per surface, 4 preset profili*
+- [Cap 11 — Proattività](11-proattivita.md) · *Engine + 10 rules concrete, scheduler, silent hours*
+- [Cap 12 — Smart home](12-smart-home.md) · *HA REST + WS adapter, NLU 4-stadi, permessi per ruolo, alias*
+- [Cap 13 — CDA (Content Discovery)](13-cda.md) · *Search → discovery → verify → KB, rate limit, safe search minori*
+- [Cap 14 — Workflow](14-workflow.md) · *Receipt, Bill, Recipe + auto-confirm trust streak*
+- [Cap 15 — Multi-device + pairing](15-multi-device.md) · *Pairing 6-cifre, surface (mobile/wall/watch), JWT 1 anno*
+- [Cap 16 — Integrazioni Google](16-integrazioni-google.md) · *Calendar 2-way sync, Gmail readonly garantito, NLU 3-livelli*
+- [Cap 17 — Notifiche e bus famiglia](17-notifiche-bus.md) · *VAPID push, family bus Redis pub/sub + WebSocket*
 
 ### Strumenti
 
-- Cap 18 — Setup wizard `/setup` *(in scrittura)*
-- Cap 19 — Sicurezza *(in scrittura)*
-- Cap 20 — Pannello admin *(in scrittura)*
-- Cap 21 — Diagnostica e debug *(in scrittura)*
+- [Cap 18 — Setup wizard `/setup`](18-setup-wizard.md) · *8 step, italian-first, idempotente, resumable*
+- [Cap 19 — Sicurezza](19-sicurezza.md) · *JWT, bcrypt, AES-GCM OAuth tokens, mkcert TLS, audit log*
+- [Cap 20 — Pannello admin](20-pannello-admin.md) · *Settings, audit, sub-pages admin, KV cache flush*
+- [Cap 21 — Diagnostica e debug](21-diagnostica-debug.md) · *Diagnostics suite, sysadmin dashboard, debug overlay, structlog*
 
 ### Ciclo di vita
 
-- Cap 22 — Test (unit, smoke, E2E) *(in scrittura)*
-- Cap 23 — Deploy *(in scrittura)*
-- Cap 24 — Manutenzione *(in scrittura)*
-- Cap 25 — Estendere CARA (tutorial pratici) *(in scrittura)*
+- [Cap 22 — Test](22-test.md) · *Unit (in-memory SQLite), smoke (httpx vs live), Playwright E2E*
+- [Cap 23 — Deploy](23-deploy.md) · *docker compose --profile app, migration, restart, rollback*
+- [Cap 24 — Manutenzione](24-manutenzione.md) · *Backup Postgres, KV cache cleanup, aggiornamento modello/voci*
+- [Cap 25 — Estendere CARA (tutorial pratici)](25-estendere-cara.md) · *Endpoint, widget, rule, primitive, migration, webhook*
 
 ### Riferimenti
 
-- Cap 26 — Riferimento variabili `.env` *(in scrittura)*
-- Cap 27 — Riferimento `admin_settings` *(in scrittura)*
-- Cap 28 — Riferimento API REST *(in scrittura)*
-- Cap 29 — Riferimento WebSocket *(in scrittura)*
-- Cap 30 — Glossario *(in scrittura)*
-- Cap 31 — Troubleshooting *(in scrittura)*
-- Cap 32 — Changelog del manuale + roadmap *(in scrittura)*
+- [Cap 26 — Riferimento variabili `.env`](26-env-vars.md) · *Tabella di tutte le env vars per dominio*
+- [Cap 27 — Riferimento `admin_settings`](27-admin-settings.md) · *Tutti i flag runtime modificabili*
+- [Cap 28 — Riferimento API REST](28-api-rest.md) · *~149 endpoint elencati per dominio*
+- [Cap 29 — Riferimento WebSocket](29-websocket.md) · *Family bus topic + payload format*
+- [Cap 30 — Glossario](30-glossario.md) · *Definizioni dei termini tecnici CARA*
+- [Cap 31 — Troubleshooting](31-troubleshooting.md) · *16 scenari di problema + diagnosi + fix*
+
+### Storia
+
+- [Cap 32 — Changelog del manuale + roadmap](32-changelog-roadmap.md) · *Cronologia release manuale + futuro CARA*
 
 ---
 
@@ -157,7 +155,8 @@ pandoc README.md 0?-*.md 1?-*.md 2?-*.md 3?-*.md \
 
 ---
 
-> Il manuale è **un'opera in corso**. I capitoli 0-3 sono completi
-> nella versione 0.1.0; gli altri arrivano nelle prossime release. Il
-> changelog dettagliato è in [Cap 32](32-changelog-roadmap.md) (quando
-> sarà pronto).
+> **Status**: tutti i 32 capitoli sono completi nella versione 0.2.0.
+> Mancano gli **screenshot** (effort separato di ~2h cattura+ottimizzazione,
+> vedi [docs/programmer-manual-prompt.md](../programmer-manual-prompt.md)
+> § 4 per le convenzioni). Il changelog dettagliato del manuale è in
+> [Cap 32](32-changelog-roadmap.md).
