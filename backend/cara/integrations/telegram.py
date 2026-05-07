@@ -87,17 +87,39 @@ _USER_MAP = _parse_user_map()
 
 
 async def _resolve_user_for_chat(chat_id: int) -> User | None:
+    """Map a Telegram chat_id → CARA `User`. Resolution order:
+      1. DB row in `telegram_chat_mappings` (admin-managed runtime).
+      2. env-var `CARA_TELEGRAM_CHAT_OWNERS` + `…_USER_MAP` bootstrap.
+      3. fallback: when there's exactly one user in DB, use it.
+
+    DB mappings imply allowlist (presence of a row = authorised).
+    """
     if _sessionmaker is None:
         return None
-    if chat_id not in _OWNERS:
-        return None
+    from cara.services import telegram_mappings as tg_map  # noqa: PLC0415
+
     async with _sessionmaker() as session:
-        # Explicit chat→user mapping wins
+        # 1. DB mapping wins.
+        row = await tg_map.get_by_chat_id(session, chat_id)
+        if row is not None:
+            user = await session.get(User, row.user_id)
+            if user is not None and user.is_active:
+                try:
+                    await tg_map.touch(session, chat_id)
+                    await session.commit()
+                except Exception:  # noqa: BLE001
+                    await session.rollback()
+                return user
+
+        # 2. Env-var bootstrap.
+        if chat_id not in _OWNERS:
+            return None
         email = _USER_MAP.get(chat_id)
         if email:
             stmt = select(User).where(User.email == email)
             return (await session.execute(stmt)).scalar_one_or_none()
-        # Fallback: if there's exactly one user, use it
+
+        # 3. Single-user shortcut for personal installs.
         rows = (await session.execute(select(User))).scalars().all()
         return rows[0] if len(rows) == 1 else None
 
@@ -111,10 +133,26 @@ def _qwen_prompt(history: list) -> str:
 
 
 async def _ensure_conversation(chat_id: int, user: User) -> uuid.UUID:
+    """Resolve a stable Conversation UUID for this Telegram chat.
+    Persisted in `telegram_chat_mappings.conversation_id` so it
+    survives backend restarts (and so the admin UI can list "active
+    chats with last message at …").
+    """
+    # Fast path — in-process cache.
     if chat_id in _chat_to_convo:
         return _chat_to_convo[chat_id]
+
     assert _sessionmaker is not None  # noqa: S101
+    from cara.services import telegram_mappings as tg_map  # noqa: PLC0415
+
     async with _sessionmaker() as session:
+        # Try the persisted pointer first.
+        row = await tg_map.get_by_chat_id(session, chat_id)
+        if row is not None and row.conversation_id is not None:
+            _chat_to_convo[chat_id] = row.conversation_id
+            return row.conversation_id
+
+        # Create a new conversation + persist back to the mapping row.
         convo = await convo_svc.create_conversation(
             session, user_id=user.id, title=f"Telegram {chat_id}"
         )
@@ -122,6 +160,17 @@ async def _ensure_conversation(chat_id: int, user: User) -> uuid.UUID:
             session, conversation_id=convo.id, role="system",
             content=settings.llm_system_prompt,
         )
+
+        # Auto-create the mapping row if missing (env-bootstrap users
+        # don't have a DB row until first message — this fills it).
+        if row is None:
+            await tg_map.create_or_update(
+                session,
+                chat_id=chat_id,
+                user_id=user.id,
+                label=None,
+            )
+        await tg_map.set_conversation(session, chat_id, convo.id)
         await session.commit()
         _chat_to_convo[chat_id] = convo.id
         return convo.id
@@ -198,6 +247,16 @@ async def _on_reset(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     chat_id = update.effective_chat.id
     _chat_to_convo.pop(chat_id, None)
+    # Drop the DB pointer too so the next message starts a fresh
+    # Conversation UUID (with a system-prompt seed message).
+    try:
+        from cara.services import telegram_mappings as tg_map  # noqa: PLC0415
+        assert _sessionmaker is not None  # noqa: S101
+        async with _sessionmaker() as session:
+            await tg_map.clear_conversation(session, chat_id)
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.reset.persist_failed", error=str(exc))
     await update.effective_chat.send_message("Conversazione azzerata. Da capo.")
 
 

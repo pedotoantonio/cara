@@ -22,6 +22,7 @@ from cara.models.push_subscription import PushSubscription
 from cara.models.shopping import ShoppingItem
 from cara.models.skill import Skill
 from cara.models.task import Task
+from cara.models.telegram_chat import TelegramChatMapping
 from cara.models.tool_metric import ToolCallMetric
 from cara.models.user import User
 from cara.models.wallet_layout import WalletLayout
@@ -55,6 +56,7 @@ __all__ = [
     "ShoppingItem",
     "Skill",
     "Task",
+    "TelegramChatMapping",
     "ToolCallMetric",
     "UploadedFile",
     "User",
