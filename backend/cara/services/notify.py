@@ -29,6 +29,18 @@ log = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)
+class TelegramAction:
+    """A single inline-keyboard button. `callback_data` follows the
+    `namespace:verb:arg1:arg2` convention parsed by `_on_callback` in
+    `cara.integrations.telegram`. Telegram caps callback_data at
+    64 bytes, so keep arguments compact (numeric IDs, no free text).
+    """
+
+    label: str
+    callback_data: str
+
+
+@dataclass(slots=True)
 class Notification:
     """One thing CARA wants to tell someone.
 
@@ -47,6 +59,9 @@ class Notification:
     severity: str = "info"                     # "info" | "warn" | "alert" — UI styling hint
     target_user_ids: list[int] | None = None   # None = broadcast to all admins
     extra: dict[str, Any] = field(default_factory=dict)
+    # Inline keyboard rows. Each inner list is a row, the outer list
+    # is the keyboard. Telegram only — push and ws_tts ignore it.
+    telegram_actions: list[list[TelegramAction]] | None = None
 
     @property
     def effective_tag(self) -> str:
@@ -111,10 +126,20 @@ async def _send_telegram(notif: Notification) -> None:
         except Exception as exc:  # noqa: BLE001
             log.warning("notify.telegram.voice_synth_failed", error=str(exc))
 
+    # Build inline keyboard from telegram_actions, if any.
+    keyboard_rows: list[list[dict[str, str]]] | None = None
+    if notif.telegram_actions:
+        keyboard_rows = [
+            [{"label": a.label, "callback_data": a.callback_data} for a in row]
+            for row in notif.telegram_actions
+            if row
+        ]
+
     try:
         await _tg.send_message_to_owners(
             text=text, parse_mode="HTML",
             image_url=notif.image_url, voice_ogg=voice_ogg,
+            keyboard_rows=keyboard_rows,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("notify.telegram.failed", kind=notif.kind, error=str(exc))
@@ -253,6 +278,14 @@ async def enqueue_for_backend(notif: Notification) -> None:
         "severity": notif.severity,
         "target_user_ids": notif.target_user_ids,
         "extra": notif.extra,
+        "telegram_actions": (
+            [
+                [{"label": a.label, "callback_data": a.callback_data} for a in row]
+                for row in notif.telegram_actions
+            ]
+            if notif.telegram_actions
+            else None
+        ),
     }
     try:
         await _bus_publish(NOTIFY_BUS_KIND, payload=payload)
@@ -262,6 +295,19 @@ async def enqueue_for_backend(notif: Notification) -> None:
 
 def _from_payload(payload: dict[str, Any]) -> Notification:
     """Reconstruct a Notification from the bus payload."""
+    raw_actions = payload.get("telegram_actions") or []
+    actions: list[list[TelegramAction]] | None = None
+    if raw_actions:
+        actions = [
+            [
+                TelegramAction(
+                    label=str(a.get("label", "")),
+                    callback_data=str(a.get("callback_data", "")),
+                )
+                for a in row
+            ]
+            for row in raw_actions
+        ]
     return Notification(
         kind=str(payload.get("kind", "unknown")),
         title=str(payload.get("title", "")),
@@ -273,6 +319,7 @@ def _from_payload(payload: dict[str, Any]) -> Notification:
         severity=str(payload.get("severity", "info")),
         target_user_ids=payload.get("target_user_ids"),
         extra=payload.get("extra") or {},
+        telegram_actions=actions,
     )
 
 

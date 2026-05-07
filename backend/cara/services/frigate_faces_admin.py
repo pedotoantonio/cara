@@ -153,20 +153,57 @@ async def list_unknown_sightings(*, limit: int = 50) -> list[dict[str, Any]]:
         return []
 
 
+async def ignore_sighting(sighting_id: int) -> bool:
+    """Tell frigate-faces this unknown sighting is noise (not a face,
+    or one we don't care about). Removes it from the unknowns queue
+    so it doesn't keep showing up."""
+    base = _base_url()
+    if not base:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+            r = await c.post(f"{base}/api/ignore/{sighting_id}")
+            return r.status_code in (200, 204, 404)
+    except httpx.HTTPError as exc:
+        log.warning(
+            "frigate_faces.ignore_sighting.failed",
+            sighting_id=sighting_id, error=str(exc),
+        )
+        return False
+
+
 async def assign_sighting(sighting_id: int, person_id: int) -> bool:
+    """Assign an unknown sighting to an existing person id. We resolve
+    the id → name first because frigate-faces' `/api/identify` accepts
+    {sighting_id, name} and looks up / creates the person by name."""
+    base = _base_url()
+    if not base:
+        return False
+    person = await get_person(person_id)
+    name = (person or {}).get("name") if person else None
+    if not name:
+        log.warning("frigate_faces.assign_sighting.unknown_person", id=person_id)
+        return False
+    return await identify_sighting_with_name(sighting_id, str(name))
+
+
+async def identify_sighting_with_name(sighting_id: int, name: str) -> bool:
+    """Tell frigate-faces "this sighting is <name>". The endpoint
+    auto-creates the person row if the name is new and auto-matches
+    other unknowns with similar face encoding (built-in)."""
     base = _base_url()
     if not base:
         return False
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
             r = await c.post(
-                f"{base}/api/sightings/{sighting_id}/assign",
-                json={"person_id": person_id},
+                f"{base}/api/identify",
+                json={"sighting_id": int(sighting_id), "name": name.strip()},
             )
             return r.status_code in (200, 204)
     except httpx.HTTPError as exc:
         log.warning(
-            "frigate_faces.assign_sighting.failed",
+            "frigate_faces.identify.failed",
             sighting_id=sighting_id, error=str(exc),
         )
         return False

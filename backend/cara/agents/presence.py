@@ -401,6 +401,75 @@ async def _cooldown_set(redis_client, key: str, ttl_seconds: int) -> None:
         return
 
 
+async def _build_unknown_actions(
+    presence_event_id: int,
+) -> list[list[Any]] | None:
+    """Build inline-keyboard rows for an unknown-sighting notification.
+
+    Layout:
+      [Riconosci come <X>]  ← top 3 known people, one button each
+      [Riconosci come <Y>]
+      [🚫 Ignora]
+
+    Telegram callback_data is capped at 64 bytes. We encode the
+    *frigate-faces sighting id* (looked up from the PresenceEvent
+    row) and the person id. Format:
+      `presence:assign:<sighting_id>:<person_id>`
+      `presence:ignore:<sighting_id>`
+    """
+    from cara.services.notify import TelegramAction  # noqa: PLC0415
+    from cara.services import frigate_faces_admin as ff  # noqa: PLC0415
+
+    sessionmaker = _get_sessionmaker()
+    sighting_id = None
+    async with sessionmaker() as s:
+        from cara.models.presence_event import PresenceEvent  # noqa: PLC0415
+        row = await s.get(PresenceEvent, presence_event_id)
+        if row is not None:
+            # Unknown poll path stores the real frigate-faces sighting
+            # id; people-poll path stores a synthetic id we can't act on.
+            extra = row.extra or {}
+            if extra.get("source") == "unknown_poll":
+                sighting_id = row.sighting_id
+
+    if sighting_id is None:
+        # Unknown path with no actionable sighting — still expose the
+        # ignore button bound to the PresenceEvent row id.
+        return [[TelegramAction(label="🚫 Ignora", callback_data=f"presence:ignore:{presence_event_id}")]]
+
+    try:
+        people = await ff.list_people()
+    except Exception:  # noqa: BLE001
+        people = []
+    # Sort by sighting_count desc — the admin almost always wants
+    # to assign to a frequent face. Cap at 3 buttons to fit Telegram's
+    # vertical real estate.
+    people.sort(key=lambda p: int(p.get("sighting_count", 0) or 0), reverse=True)
+    rows: list[list[TelegramAction]] = []
+    for p in people[:3]:
+        pid = int(p.get("id") or 0)
+        name = str(p.get("name") or "?")
+        if not pid:
+            continue
+        rows.append(
+            [
+                TelegramAction(
+                    label=f"👤 {name}",
+                    callback_data=f"presence:assign:{sighting_id}:{pid}",
+                ),
+            ]
+        )
+    rows.append(
+        [
+            TelegramAction(
+                label="🚫 Ignora",
+                callback_data=f"presence:ignore:{sighting_id}",
+            ),
+        ]
+    )
+    return rows
+
+
 async def _dispatch_arrival(
     *,
     evt_id: int,
@@ -412,18 +481,30 @@ async def _dispatch_arrival(
 ) -> None:
     """Build a Notification and hand it to the dispatcher. Voice-only
     text is suppressed during silent hours; push + Telegram still fire."""
-    from cara.services.notify import Notification, enqueue_for_backend  # noqa: PLC0415
+    from cara.services.notify import (  # noqa: PLC0415
+        Notification, TelegramAction, enqueue_for_backend,
+    )
 
     if is_known:
         title = f"🚪 {person_name} è arrivato"
         body = f"avvistato su {camera_id}"
         speak = None if in_silent else f"Ciao {person_name}, bentornato!"
         deep_link = "/wallet"
+        actions = None
     else:
         title = "🚪 Sconosciuto in casa"
         body = f"volto non riconosciuto su {camera_id}"
         speak = None if in_silent else "Ciao, chi sei? Fatti riconoscere."
         deep_link = "/admin/persone"
+        # Pull the top 3 known people so the admin can one-tap
+        # assign without typing. Sighting id is the synthetic /
+        # frigate-faces id depending on source — both stored as
+        # `sighting_id` on PresenceEvent, but for the callback
+        # we need the frigate-faces id. For the unknown poll path
+        # `evt_id` is the PresenceEvent row id; we encode the
+        # presence-event row id, the callback handler resolves it
+        # to the underlying sighting_id via DB lookup at click time.
+        actions = await _build_unknown_actions(evt_id)
 
     notif = Notification(
         kind="presence.arrival" if is_known else "presence.unknown",
@@ -435,6 +516,7 @@ async def _dispatch_arrival(
         speak_text=speak,
         severity="info" if is_known else "warn",
         extra={"event_id": evt_id, "camera_id": camera_id},
+        telegram_actions=actions,
     )
     try:
         await enqueue_for_backend(notif)

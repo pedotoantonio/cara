@@ -30,6 +30,7 @@ from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -626,6 +627,160 @@ async def _on_help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_chat.send_message(text=text, parse_mode="HTML")
 
 
+# --- inline-keyboard callback dispatch ------------------------------------
+#
+# Notifications carry actions encoded as `namespace:verb:arg1:arg2...`
+# (Telegram caps callback_data at 64 bytes; numeric IDs only). When the
+# user taps a button we route to the matching handler, run the action,
+# and edit the original message to reflect the new state so the chat
+# history stays useful as a log.
+
+
+async def _ack(query) -> None:  # type: ignore[no-untyped-def]
+    """Telegram requires every callback_query be answered within 15s
+    or the loading spinner stays forever. Always call this first."""
+    try:
+        await query.answer()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _edit_resolved(query, suffix: str) -> None:  # type: ignore[no-untyped-def]
+    """Replace the original message text with `<original> + suffix` and
+    drop the keyboard so the buttons can't be tapped twice."""
+    try:
+        original = (query.message.text or query.message.caption or "").strip()
+        new_text = f"{original}\n\n<i>{suffix}</i>"[:4000]
+        if query.message.text is not None:
+            await query.message.edit_text(
+                text=new_text, parse_mode="HTML", reply_markup=None,
+                disable_web_page_preview=True,
+            )
+        else:
+            await query.message.edit_caption(
+                caption=new_text, parse_mode="HTML", reply_markup=None,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.callback.edit_failed", error=str(exc))
+
+
+async def _cb_presence_ignore(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
+    if not args:
+        await _edit_resolved(query, "⚠ Argomento mancante")
+        return
+    sighting_id = int(args[0])
+    from cara.services import frigate_faces_admin as ff  # noqa: PLC0415
+    ok = await ff.ignore_sighting(sighting_id)
+    await _edit_resolved(
+        query,
+        "🚫 Ignorato" if ok else "⚠ Impossibile ignorare (frigate-faces non risponde)",
+    )
+
+
+async def _cb_presence_assign(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
+    if len(args) < 2:
+        await _edit_resolved(query, "⚠ Argomenti mancanti")
+        return
+    sighting_id = int(args[0])
+    person_id = int(args[1])
+    from cara.services import frigate_faces_admin as ff  # noqa: PLC0415
+    person = await ff.get_person(person_id)
+    name = (person or {}).get("name") if person else None
+    if not name:
+        await _edit_resolved(query, "⚠ Persona non trovata")
+        return
+    ok = await ff.identify_sighting_with_name(sighting_id, str(name))
+    await _edit_resolved(
+        query,
+        f"👤 Riconosciuto come <b>{name}</b>" if ok else "⚠ Riconoscimento fallito",
+    )
+
+
+async def _cb_task_done(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
+    if not args:
+        await _edit_resolved(query, "⚠ Argomento mancante")
+        return
+    task_id = int(args[0])
+    try:
+        from cara.services import tasks as task_svc  # noqa: PLC0415
+        assert _sessionmaker is not None  # noqa: S101
+        async with _sessionmaker() as s:
+            # The chat owner is the task owner — assigned via _USER_MAP.
+            owner = await _resolve_user_for_chat(query.message.chat.id)
+            if owner is None:
+                await _edit_resolved(query, "⚠ Utente non riconosciuto")
+                return
+            t = await task_svc.update_task(s, task_id, user_id=owner.id, done=True)
+            await s.commit()
+        await _edit_resolved(
+            query,
+            f"✅ Fatto: {t.title}" if t else "⚠ Task non trovato",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.cb.task_done_failed", error=str(exc))
+        await _edit_resolved(query, f"⚠ Errore: {exc}")
+
+
+async def _cb_shopping_bought(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
+    if not args:
+        await _edit_resolved(query, "⚠ Argomento mancante")
+        return
+    item_id = int(args[0])
+    try:
+        from cara.services import shopping as shop_svc  # noqa: PLC0415
+        assert _sessionmaker is not None  # noqa: S101
+        async with _sessionmaker() as s:
+            owner = await _resolve_user_for_chat(query.message.chat.id)
+            if owner is None:
+                await _edit_resolved(query, "⚠ Utente non riconosciuto")
+                return
+            it = await shop_svc.update_item(s, item_id, user_id=owner.id, bought=True)
+            await s.commit()
+        await _edit_resolved(
+            query,
+            f"🛒 Preso: {it.title}" if it else "⚠ Articolo non trovato",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.cb.shopping_bought_failed", error=str(exc))
+        await _edit_resolved(query, f"⚠ Errore: {exc}")
+
+
+CALLBACK_HANDLERS: dict[str, Any] = {
+    "presence:ignore": _cb_presence_ignore,
+    "presence:assign": _cb_presence_assign,
+    "task:done": _cb_task_done,
+    "shopping:bought": _cb_shopping_bought,
+}
+
+
+async def _on_callback(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    await _ack(query)
+    # Auth: only owners can act on inline buttons.
+    if query.message.chat.id not in _OWNERS:
+        await _edit_resolved(query, "⚠ Non autorizzato")
+        return
+
+    parts = query.data.split(":")
+    if len(parts) < 2:
+        await _edit_resolved(query, "⚠ Callback non valida")
+        return
+    key = f"{parts[0]}:{parts[1]}"
+    args = parts[2:]
+    handler = CALLBACK_HANDLERS.get(key)
+    if handler is None:
+        logger.warning("telegram.callback.unknown", key=key)
+        await _edit_resolved(query, f"⚠ Azione sconosciuta ({key})")
+        return
+    try:
+        await handler(query, args)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("telegram.callback.handler_error", key=key)
+        await _edit_resolved(query, f"⚠ Errore: {exc}")
+
+
 # --- lifecycle ------------------------------------------------------------
 
 _application: Application | None = None
@@ -667,6 +822,9 @@ async def start_telegram_bot() -> None:
     # gets transcribed by Whisper and routed as text.
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, _on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
+    # Phase 4 — inline keyboard callbacks (presence:assign / ignore,
+    # task:done, shopping:bought, …).
+    app.add_handler(CallbackQueryHandler(_on_callback))
 
     await app.initialize()
     await app.start()
@@ -707,20 +865,43 @@ async def send_message_to_owners(
     parse_mode: str | None = "Markdown",
     image_url: str | None = None,
     voice_ogg: bytes | None = None,
+    keyboard_rows: list[list[dict[str, str]]] | None = None,
 ) -> None:
-    """Push a message (and optional photo / voice note) to every chat
-    in `CARA_TELEGRAM_CHAT_OWNERS`. Used by `cara.services.notify` for
-    presence alerts, agent failures, proactivity nudges, etc.
+    """Push a message (and optional photo / voice note / inline buttons)
+    to every chat in `CARA_TELEGRAM_CHAT_OWNERS`.
+
+    `keyboard_rows` is a list of rows; each row a list of
+    `{"label": str, "callback_data": str}` dicts. Used by
+    `cara.services.notify` to attach actionable buttons to presence
+    sightings, task reminders, etc.
 
     Failures on individual chats are logged and skipped — one
     unreachable owner doesn't block the others.
     """
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup  # noqa: PLC0415
+
     if _application is None:
         logger.debug("telegram.send_message.skipped_no_bot")
         return
     if not _OWNERS:
         logger.debug("telegram.send_message.skipped_no_owners")
         return
+
+    reply_markup = None
+    if keyboard_rows:
+        reply_markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        text=str(b.get("label", "")),
+                        callback_data=str(b.get("callback_data", ""))[:64],
+                    )
+                    for b in row
+                ]
+                for row in keyboard_rows
+                if row
+            ]
+        )
 
     bot = _application.bot
     for chat_id in _OWNERS:
@@ -729,12 +910,14 @@ async def send_message_to_owners(
                 await bot.send_photo(
                     chat_id=chat_id, photo=image_url,
                     caption=text[:1000], parse_mode=parse_mode,
+                    reply_markup=reply_markup,
                 )
             else:
                 await bot.send_message(
                     chat_id=chat_id, text=text[:4000],
                     parse_mode=parse_mode,
                     disable_web_page_preview=True,
+                    reply_markup=reply_markup,
                 )
             if voice_ogg:
                 # A voice note follows the text message so the user
