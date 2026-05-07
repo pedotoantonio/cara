@@ -269,23 +269,53 @@ function PresenceView({ body }: { body: Record<string, unknown> }) {
   );
 }
 
+interface QuickAction {
+  id?: string;
+  label: string;
+  icon?: string;       // matches IconName when possible (plus, shopping, note, mic, ...)
+  deep_link?: string;  // route to navigate to when tapped
+}
+
 function ActionGridView({ body }: { body: Record<string, unknown> }) {
-  const actions = (body.actions as Array<{ label: string; icon?: string }>) ?? [];
+  const actions = (body.actions as QuickAction[] | undefined) ?? [];
   if (actions.length === 0) {
     return <p className="text-sm text-fg-muted">Niente azioni rapide.</p>;
   }
   return (
     <div className="grid grid-cols-2 gap-2">
-      {actions.slice(0, 4).map((a, i) => (
-        <button
-          key={i}
-          type="button"
-          onClick={(e) => e.preventDefault()}
-          className="bg-surface2 hover:bg-accent/12 rounded-md py-2.5 text-sm font-medium transition"
-        >
-          {a.label}
-        </button>
-      ))}
+      {actions.slice(0, 4).map((a, i) => {
+        const iconName = (a.icon ?? 'plus') as IconName;
+        const inner = (
+          <span className="flex items-center justify-center gap-1.5">
+            <Icon name={iconName} size={16} />
+            <span>{a.label}</span>
+          </span>
+        );
+        const cls =
+          'block bg-surface2 hover:bg-accent/12 active:scale-95 ' +
+          'rounded-md py-2.5 text-sm font-medium transition text-center';
+        if (a.deep_link) {
+          // Outer Link is preventDefault'd by the parent Card wrapper
+          // when the widget itself has a deep_link, but quick_actions
+          // intentionally has no widget-level deep_link, so this Link
+          // is the only navigation target.
+          return (
+            <Link
+              key={a.id ?? i}
+              to={a.deep_link}
+              onClick={(e) => e.stopPropagation()}
+              className={cls}
+            >
+              {inner}
+            </Link>
+          );
+        }
+        return (
+          <button key={a.id ?? i} type="button" className={cls}>
+            {inner}
+          </button>
+        );
+      })}
     </div>
   );
 }
