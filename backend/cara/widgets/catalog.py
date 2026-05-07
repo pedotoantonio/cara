@@ -70,6 +70,8 @@ class WeatherBrief:
     label: str
     icon_slug: str
     is_day: bool
+    location: str = ""               # "Ferrara" — shown in the widget header
+    apparent_temperature_c: float | None = None
 
 
 @dataclass
@@ -259,12 +261,25 @@ class WeatherNowWidget:
                 body = {
                     "available": True,
                     "temperature_c": round(w.temperature_c, 1),
+                    "apparent_temperature_c": (
+                        round(w.apparent_temperature_c, 1)
+                        if w.apparent_temperature_c is not None
+                        else None
+                    ),
                     "label": w.label,
                     "icon_slug": w.icon_slug,
                     "is_day": w.is_day,
+                    "location": w.location,
                 }
+        title = (
+            f"Meteo · {body['location']}"
+            if body.get("location")
+            else self.title_default
+        )
+        # `kind="weather"` routes the body through the dedicated
+        # WeatherView in the frontend (icon + temp + apparent + label).
         return WidgetData(
-            widget_id=self.id, title=self.title_default, kind="metric",
+            widget_id=self.id, title=title, kind="weather",
             body=body, deep_link="/weather", last_updated_unix=time.time(),
         )
 

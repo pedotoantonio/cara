@@ -310,18 +310,59 @@ function NowPlayingView({ body }: { body: Record<string, unknown> }) {
   );
 }
 
+// Map WMO icon slugs from cara/services/weather.py → emoji glyph.
+// Falls back to a clean placeholder when the slug is unknown.
+const WEATHER_EMOJI: Record<string, string> = {
+  'sun': '☀️',
+  'sun-cloud': '🌤️',
+  'cloud-sun': '⛅',
+  'cloud': '☁️',
+  'fog': '🌫️',
+  'drizzle': '🌦️',
+  'rain': '🌧️',
+  'rain-heavy': '🌧️',
+  'showers': '🌦️',
+  'snow': '❄️',
+  'snow-heavy': '🌨️',
+  'snow-showers': '🌨️',
+  'thunderstorm': '⛈️',
+  'thunderstorm-hail': '🌩️',
+};
+
 function WeatherView({ body }: { body: Record<string, unknown> }) {
   const available = body.available as boolean | undefined;
   if (available === false) {
-    const reason = String(body.reason ?? 'Posizione non configurata.');
+    const reason = String(
+      body.reason ?? 'Imposta la città in /admin (Impostazioni → Residenza).',
+    );
     return <p className="text-sm text-fg-muted">{reason}</p>;
   }
-  const temp = body.temp_c != null ? `${body.temp_c}°` : '—';
-  const desc = String(body.desc ?? '');
+  // Backend (cara.widgets.catalog.WeatherNowWidget) sends:
+  //   temperature_c, apparent_temperature_c, label, icon_slug, is_day, location
+  const tempVal = body.temperature_c as number | undefined;
+  const apparent = body.apparent_temperature_c as number | undefined;
+  const label = String(body.label ?? '');
+  const slug = String(body.icon_slug ?? '');
+  const isDay = body.is_day !== false;
+  const emoji = WEATHER_EMOJI[slug]
+    ?? (isDay ? WEATHER_EMOJI['sun'] : '🌙');
+  const temp = tempVal != null ? `${Math.round(tempVal)}°` : '—';
   return (
     <div className="flex items-center gap-4">
-      <div className="font-display text-4xl text-fg leading-none">{temp}</div>
-      {desc && <div className="text-sm text-fg-soft">{desc}</div>}
+      <span className="text-5xl leading-none select-none" aria-hidden>
+        {emoji}
+      </span>
+      <div className="min-w-0">
+        <div className="font-display text-3xl text-fg leading-none">{temp}</div>
+        {label && (
+          <div className="text-sm text-fg-soft mt-1 capitalize">{label}</div>
+        )}
+        {apparent != null && (
+          <div className="text-2xs text-fg-muted mt-0.5">
+            percepiti {Math.round(apparent)}°
+          </div>
+        )}
+      </div>
     </div>
   );
 }
