@@ -251,6 +251,29 @@ services:
       proxy-net:
         ipv4_address: 172.31.0.28
 
+  celery-presence:
+    <<: *app-env
+    image: cara-backend:0.1.0
+    container_name: cara-celery-presence
+    restart: unless-stopped
+    profiles: ["app"]
+    command: ["celery", "-A", "cara.tasks.celery_app", "worker",
+              "--loglevel=info", "--queues=presence", "--concurrency=1",
+              "--hostname=presence@%h"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+    environment:
+      LLM_ENABLED: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A cara.tasks.celery_app inspect ping -d celery@$$(hostname) 2>/dev/null || exit 0"]
+      interval: 60s
+      timeout: 10s
+      retries: 1
+    networks:
+      proxy-net:
+        ipv4_address: 172.31.0.29
+
   frontend:
     build:
       context: ./frontend

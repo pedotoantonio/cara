@@ -310,7 +310,52 @@ async def stop_telegram_bot() -> None:
         logger.info("telegram.stopped")
 
 
-__all__: list[str] = ["start_telegram_bot", "stop_telegram_bot"]
+async def send_message_to_owners(
+    text: str,
+    *,
+    parse_mode: str | None = "Markdown",
+    image_url: str | None = None,
+) -> None:
+    """Push a message (and optional photo) to every chat in
+    `CARA_TELEGRAM_CHAT_OWNERS`. Used by `cara.services.notify` for
+    presence alerts, agent failures, proactivity nudges, etc.
+
+    Failures on individual chats are logged and skipped — one
+    unreachable owner doesn't block the others.
+    """
+    if _application is None:
+        logger.debug("telegram.send_message.skipped_no_bot")
+        return
+    if not _OWNERS:
+        logger.debug("telegram.send_message.skipped_no_owners")
+        return
+
+    bot = _application.bot
+    for chat_id in _OWNERS:
+        try:
+            if image_url:
+                await bot.send_photo(
+                    chat_id=chat_id, photo=image_url,
+                    caption=text[:1000], parse_mode=parse_mode,
+                )
+            else:
+                await bot.send_message(
+                    chat_id=chat_id, text=text[:4000],
+                    parse_mode=parse_mode,
+                    disable_web_page_preview=True,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "telegram.send_message.failed",
+                chat_id=chat_id, error=str(exc),
+            )
+
+
+__all__: list[str] = [
+    "start_telegram_bot",
+    "stop_telegram_bot",
+    "send_message_to_owners",
+]
 
 
 def _hint_unused(_: Any) -> None:  # keeps lint happy on optional deps

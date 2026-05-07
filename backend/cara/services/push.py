@@ -131,6 +131,35 @@ async def send_to_subscription(
         return False
 
 
+async def broadcast_to_admins(
+    payload: PushPayload | dict,
+    *,
+    user_ids: list[int] | None = None,
+) -> int:
+    """Broadcast a push payload to all admin users (or to the explicit
+    list `user_ids`). Used by `cara.services.notify` so the dispatcher
+    doesn't need to know about sessions or subscriptions.
+    """
+    from sqlalchemy import select  # noqa: PLC0415
+    from cara.models.user import User  # noqa: PLC0415
+    from cara.store.db import get_sessionmaker  # noqa: PLC0415
+
+    sessionmaker = get_sessionmaker()
+    delivered_total = 0
+    async with sessionmaker() as s:
+        if user_ids:
+            stmt = select(User).where(User.id.in_(user_ids), User.is_active.is_(True))
+        else:
+            stmt = select(User).where(User.is_admin.is_(True), User.is_active.is_(True))
+        users = (await s.execute(stmt)).scalars().all()
+        for u in users:
+            try:
+                delivered_total += await send_to_user(s, u.id, payload)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("push.broadcast.user_failed", user_id=u.id, error=str(exc))
+    return delivered_total
+
+
 async def send_to_user(
     session: AsyncSession,
     user_id: int,

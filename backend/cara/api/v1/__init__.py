@@ -24,6 +24,7 @@ from cara.api.v1 import (
     news,
     notes,
     oauth,
+    persons,
     proactivity,
     proposals,
     push,
@@ -62,6 +63,7 @@ router.include_router(memory.router)
 router.include_router(news.router)
 router.include_router(notes.router)
 router.include_router(oauth.router)
+router.include_router(persons.router)
 router.include_router(proactivity.router)
 router.include_router(proposals.router)
 router.include_router(push.router)

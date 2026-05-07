@@ -43,6 +43,7 @@ celery_app = Celery(
         "cara.agents.mail",
         "cara.agents.files",
         "cara.agents.learn",
+        "cara.agents.presence",
     ],
 )
 
@@ -52,6 +53,7 @@ celery_app.conf.update(
         "cara.agents.mail.*": {"queue": "mail"},
         "cara.agents.files.*": {"queue": "files"},
         "cara.agents.learn.*": {"queue": "learn"},
+        "cara.agents.presence.*": {"queue": "presence"},
     },
     task_serializer="json",
     accept_content=["json"],
@@ -79,6 +81,12 @@ celery_app.conf.update(
 # overnight when the family is asleep.
 
 celery_app.conf.beat_schedule = {
+    # Presence group — the most latency-sensitive: 30 s gives an
+    # acceptable "X is home" delay without spamming frigate-faces.
+    "presence-poll-every-30-sec": {
+        "task": "cara.agents.presence.poll_arrivals",
+        "schedule": 30,
+    },
     # Mail group — frequent because users expect a fresh view on the
     # phone, and Gmail polling cost is low.
     "scan-gmail-every-15-min": {

@@ -146,6 +146,16 @@ DEFAULTS: dict[str, Any] = {
     # access (Cloudflare Tunnel, port forward) is unaffected. Flip to
     # False if you later want to enforce credential auth even at home.
     "lan_auto_login_enabled": True,
+    # Presence agent — face arrivals via frigate-faces poll.
+    "presence_greeting_enabled": True,
+    "presence_greeting_cooldown_min_known": 30,
+    "presence_greeting_cooldown_min_unknown": 5,
+    "presence_greeting_silent_hours": [22, 8],     # local Europe/Rome
+    "presence_push_enabled": True,
+    # Notification dispatcher — per-channel master switches.
+    "notify_telegram_enabled": True,
+    "notify_push_enabled": True,
+    "notify_ws_tts_enabled": True,
 }
 
 

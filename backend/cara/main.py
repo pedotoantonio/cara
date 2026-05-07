@@ -88,6 +88,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     logger.info("cara.ha_events_started")
 
+    # Notification bus consumer — workers (Celery) can't hit Telegram /
+    # Web Push / WebSocket directly because those resources live in
+    # this backend process. The agents enqueue Notifications on the
+    # family bus and we consume them here, dispatching to all enabled
+    # channels in-process.
+    from cara.services.notify import consume_dispatch_bus  # noqa: PLC0415
+    notify_consumer_task = asyncio.create_task(
+        consume_dispatch_bus(), name="notify_consumer",
+    )
+
     # Google Calendar / Gmail scheduling moved to Celery beat:
     #   cara-celery-beat → schedules `cara.agents.mail.scan_gmail`
     #     every 15 min and `cara.agents.mail.sync_calendar` every 5 min.
@@ -97,7 +107,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        for t in (push_task, proactivity_task, ha_events_task):
+        for t in (push_task, proactivity_task, ha_events_task, notify_consumer_task):
             if t is None:
                 continue
             t.cancel()
