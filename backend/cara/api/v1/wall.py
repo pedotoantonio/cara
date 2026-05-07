@@ -958,7 +958,11 @@ async def wall_face_check(
         )
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0)) as c:
+        # 25 s total: face_recognition's HOG detector + encoding can
+        # take a few seconds on a busy box, plus the upload itself
+        # (~1-2 MB Antonio test images are slow on the proxy hop).
+        # 320×240 device-cam frames complete in well under 1 s.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=3.0)) as c:
             r = await c.post(
                 f"{base}/api/recognize-image",
                 files={"image": (image.filename or "frame.jpg", blob, image.content_type or "image/jpeg")},
@@ -966,7 +970,10 @@ async def wall_face_check(
             r.raise_for_status()
             data = r.json()
     except httpx.HTTPError as exc:
-        log.warning("wall.face_check.upstream_failed", error=str(exc))
+        log.warning(
+            "wall.face_check.upstream_failed",
+            error=str(exc) or type(exc).__name__,
+        )
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, "frigate-faces unreachable"
         ) from exc
