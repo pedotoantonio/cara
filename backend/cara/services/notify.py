@@ -107,22 +107,41 @@ async def _send_push(notif: Notification) -> None:
 
 
 async def _emit_ws_tts(notif: Notification) -> None:
-    """Emit a `tts.play` event on the family bus. Subscribed HomePage
-    tabs synthesise+play the audio. No-op when nothing's subscribed."""
+    """Synthesise the greeting via Piper and broadcast the WAV (base64)
+    on the family bus. Subscribed HomePage tabs decode + play through
+    the WebAudio queue. No-op when no HomePage is connected; the
+    Telegram + push channels still fire independently."""
     if not notif.speak_text:
         return
+    import base64  # noqa: PLC0415
+
+    from cara.ai.tts.service import get_tts_service  # noqa: PLC0415
     from cara.services.family_bus import publish as _bus_publish  # noqa: PLC0415
+
+    audio_b64: str | None = None
+    sample_rate = 0
+    try:
+        svc = get_tts_service()
+        wav, sample_rate = await svc.synthesize_wav(text=notif.speak_text)
+        if wav:
+            audio_b64 = base64.b64encode(wav).decode("ascii")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("notify.ws_tts.synthesize_failed", error=str(exc))
+
     try:
         await _bus_publish(
             "tts.play",
             payload={
                 "text": notif.speak_text,
                 "kind": notif.kind,
+                "audio_b64": audio_b64,
+                "format": "wav",
+                "sample_rate": sample_rate,
                 "ts": datetime.now(timezone.utc).isoformat(),
             },
         )
     except Exception as exc:  # noqa: BLE001
-        log.warning("notify.ws_tts.failed", kind=notif.kind, error=str(exc))
+        log.warning("notify.ws_tts.publish_failed", kind=notif.kind, error=str(exc))
 
 
 # ─── Public entry point ───────────────────────────────────────────────

@@ -130,6 +130,39 @@ export function onFamilyEvent(listener: Listener): () => void {
   return () => { _listeners.delete(listener); };
 }
 
+// Auto-play voice greetings (presence.arrival / presence.unknown / etc.)
+// pushed by the backend on `tts.play`. Set up once, on first import,
+// so any open tab plays the audio without each route having to wire
+// the handler. Suppressed when the tab is hidden.
+let _ttsAutoplayBound = false;
+
+function _bindTtsAutoplay() {
+  if (_ttsAutoplayBound) return;
+  _ttsAutoplayBound = true;
+  onFamilyEvent((ev) => {
+    if (ev.kind !== 'tts.play') return;
+    const payload = (ev.payload ?? {}) as { audio_b64?: string; text?: string; kind?: string };
+    if (!payload.audio_b64) return;
+    if (typeof document !== 'undefined' && document.hidden) {
+      // Tab hidden — skip autoplay (browser would block it anyway).
+      return;
+    }
+    void import('./streamingAudio').then(({ startTurn, enqueueAudioChunk, endTurn }) => {
+      startTurn();
+      enqueueAudioChunk(payload.audio_b64!, {
+        seq: 0,
+        text: payload.text ?? '',
+        voiceId: 'piper:greeting',
+      });
+      endTurn();
+    });
+  });
+}
+
+// Bind on module import — `familySync.ts` is imported during App boot
+// for any authenticated user, so the listener is always live.
+_bindTtsAutoplay();
+
 /** Convenience helper: subscribe only to events whose `kind` starts with
  *  `prefix` (e.g. `useFamilyEvent("task.")` for task.created/updated/deleted). */
 export function onFamilyEventPrefix(prefix: string, listener: Listener): () => void {
