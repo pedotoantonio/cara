@@ -174,7 +174,8 @@ services:
       timeout: 10s
       retries: 1
     networks:
-      - proxy-net
+      proxy-net:
+        ipv4_address: 172.31.0.25
 
   celery-mail:
     <<: *app-env
@@ -197,7 +198,8 @@ services:
       timeout: 10s
       retries: 1
     networks:
-      - proxy-net
+      proxy-net:
+        ipv4_address: 172.31.0.26
 
   celery-files:
     <<: *app-env
@@ -222,7 +224,8 @@ services:
       timeout: 10s
       retries: 1
     networks:
-      - proxy-net
+      proxy-net:
+        ipv4_address: 172.31.0.27
 
   celery-learn:
     <<: *app-env
@@ -245,7 +248,8 @@ services:
       timeout: 10s
       retries: 1
     networks:
-      - proxy-net
+      proxy-net:
+        ipv4_address: 172.31.0.28
 
   frontend:
     build:
