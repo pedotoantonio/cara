@@ -85,15 +85,46 @@ interface BrowGeom {
   visible: boolean;
 }
 
+interface MouthGeom {
+  /** Closed-lip path. Stroked, not filled. Defines the resting expression. */
+  lipPath: string;
+  /** Resting mouth opening height in viewBox px (0 for closed-lip emotions,
+   *  > 0 for naturally agape ones like surprised). The interior ellipse
+   *  inflates from this baseline when CARA speaks. */
+  openHeight: number;
+  /** Cheek dot offset (blush). 0 = no blush. */
+  blush?: number;
+}
+
 interface FrameGeom {
   left: EyeGeom;
   right: EyeGeom;
   brows: { left: BrowGeom; right: BrowGeom };
+  mouth: MouthGeom;
   /** Highlight (small white dot) intensity 0–1; love/joy boost it. */
   sparkle: number;
 }
 
 // Pure functions: state → geometry. Keeps the JSX clean.
+
+// Mouth shapes — anchored at y≈70 with cx≈50. Lip arc is stroke-only.
+// `openHeight` = resting interior opening (0 closed, 6 surprised-O); the
+// speaking pulse adds on top of this so a closed lip "wakes up" into a
+// chatter when CARA talks.
+const MOUTHS: Record<Emotion, MouthGeom> = {
+  neutral:     { lipPath: 'M 40 70 Q 50 72 60 70',   openHeight: 0 },
+  happy:       { lipPath: 'M 38 67 Q 50 76 62 67',   openHeight: 0 },
+  joyful:      { lipPath: 'M 36 65 Q 50 80 64 65',   openHeight: 2.5 },
+  love:        { lipPath: 'M 44 70 Q 50 73 56 70',   openHeight: 0, blush: 1 },
+  surprised:   { lipPath: '',                         openHeight: 6 },
+  thoughtful:  { lipPath: 'M 42 70 Q 50 71 58 68',   openHeight: 0 },
+  confused:    { lipPath: 'M 40 70 Q 45 67 50 70 T 60 70', openHeight: 0 },
+  sad:         { lipPath: 'M 38 73 Q 50 65 62 73',   openHeight: 0 },
+  embarrassed: { lipPath: 'M 44 71 Q 50 72 56 71',   openHeight: 0, blush: 1 },
+  ironic:      { lipPath: 'M 40 72 Q 50 70 60 67',   openHeight: 0 },
+  sleepy:      { lipPath: 'M 44 71 L 56 71',         openHeight: 0 },
+  error:       { lipPath: 'M 40 67 L 60 73 M 40 73 L 60 67', openHeight: 0 },
+};
 
 function emotionGeometry(emotion: Emotion): FrameGeom {
   // Default neutral baseline. Eyes centred, gentle highlight.
@@ -104,6 +135,7 @@ function emotionGeometry(emotion: Emotion): FrameGeom {
       left: { d: 'M 28 30 Q 36 27 44 30', visible: true },
       right: { d: 'M 56 30 Q 64 27 72 30', visible: true },
     },
+    mouth: MOUTHS[emotion] ?? MOUTHS.neutral,
     sparkle: 0.4,
   };
 
@@ -267,11 +299,12 @@ function applyEnergy(geom: FrameGeom, energy: EnergyState, blink: boolean, drift
       right: { ...g.right, cy: g.right.cy - 4, cx: g.right.cx - 2 },
     };
   } else if (energy === 'listening') {
-    // Wide and attentive.
+    // Wide and attentive — lips part slightly to read as "ready to reply".
     g = {
       ...g,
       left: { ...g.left, rx: g.left.rx + 1, ry: g.left.ry + 1 },
       right: { ...g.right, rx: g.right.rx + 1, ry: g.right.ry + 1 },
+      mouth: { ...g.mouth, openHeight: Math.max(g.mouth.openHeight, 1) },
     };
   } else if (energy === 'sensing') {
     // Subtle attention — left brow up.
@@ -281,6 +314,7 @@ function applyEnergy(geom: FrameGeom, energy: EnergyState, blink: boolean, drift
         ...g.brows,
         right: { ...g.brows.right, d: 'M 56 26 Q 64 22 72 26' },
       },
+      mouth: { ...g.mouth, openHeight: Math.max(g.mouth.openHeight, 1) },
     };
   } else if (energy === 'sleeping') {
     g = {
@@ -288,6 +322,7 @@ function applyEnergy(geom: FrameGeom, energy: EnergyState, blink: boolean, drift
       left: { ...g.left, ry: 2, path: undefined },
       right: { ...g.right, ry: 2, path: undefined },
       brows: { left: { d: '', visible: false }, right: { d: '', visible: false } },
+      mouth: { lipPath: 'M 44 71 L 56 71', openHeight: 0 },
     };
   } else if (energy === 'deep_sleep') {
     g = {
@@ -295,6 +330,8 @@ function applyEnergy(geom: FrameGeom, energy: EnergyState, blink: boolean, drift
       left: { ...g.left, path: 'M 30 46 Q 36 48 42 46' },
       right: { ...g.right, path: 'M 58 46 Q 64 48 70 46' },
       brows: { left: { d: '', visible: false }, right: { d: '', visible: false } },
+      // A slightly parted "asleep" mouth — never animates with speech.
+      mouth: { lipPath: 'M 44 70 Q 50 73 56 70', openHeight: 1.5 },
     };
   }
   // Idle drift: eyes wander a couple of pixels around their target.
@@ -519,6 +556,38 @@ export function CaraFace({
             fill="#fff"
             opacity={geom.sparkle}
           />
+        </>
+      )}
+
+      {/* mouth — lip outline (resting expression) + interior cavity that
+          inflates with speakPulse so words are visibly mouthed. The cavity
+          is a darker fill behind the lip so the lip arc reads as the
+          upper rim when the mouth opens. */}
+      {(geom.mouth.openHeight + (energy === 'speaking' ? 1 : 0)) > 0 && (
+        <ellipse
+          cx={50}
+          cy={70}
+          rx={Math.min(8, 4 + speakPulse * 4)}
+          ry={Math.max(0, geom.mouth.openHeight + (energy === 'speaking' ? 1 + speakPulse * 4 : 0))}
+          fill="#0a0a0a"
+          style={{ transition: 'rx 80ms linear, ry 80ms linear' }}
+        />
+      )}
+      {geom.mouth.lipPath && (
+        <path
+          d={geom.mouth.lipPath}
+          stroke={EYE}
+          strokeWidth={3}
+          strokeLinecap="round"
+          fill="none"
+          style={{ transition: 'd 240ms ease' }}
+        />
+      )}
+      {/* blush — small pink dots on the cheeks for love/embarrassed */}
+      {(geom.mouth.blush ?? 0) > 0 && (
+        <>
+          <circle cx={26} cy={62} r={4} fill="#fb7185" opacity={0.55 * (geom.mouth.blush ?? 0)} />
+          <circle cx={74} cy={62} r={4} fill="#fb7185" opacity={0.55 * (geom.mouth.blush ?? 0)} />
         </>
       )}
 
