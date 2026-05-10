@@ -211,8 +211,14 @@ async def _generate_reply(user: User, conversation_id: uuid.UUID, user_text: str
     except LLMUnavailableError:
         return "Sono offline al momento, riprova tra poco."
 
+    # Telegram has no streaming UX — the user sees nothing until the
+    # final message arrives. At ~8 tok/s on the 1.5B Qwen, 200 tokens
+    # is ~25 s of staring at "typing…". Cap the bare-LLM fallback to
+    # 140 tokens, which still fits a 3-4 sentence answer and lands in
+    # ~17 s. Skill / pipeline replies are unaffected (they're already
+    # short canned text).
     buf: list[str] = []
-    async for chunk in llm.generate(prompt):
+    async for chunk in llm.generate(prompt, max_new_tokens=140):
         buf.append(chunk.text)
     full = "".join(buf).strip()
 
@@ -411,16 +417,17 @@ async def _on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     convo_id = await _ensure_conversation(chat.id, user)
     reply: str | None = None
-    try:
-        reply = await _pipeline_collect(user, convo_id, transcription)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("telegram.voice.pipeline_failed", error=str(exc))
-    if reply is None:
+    async with _typing_indicator(chat):
         try:
-            reply = await _generate_reply(user, convo_id, transcription)
+            reply = await _pipeline_collect(user, convo_id, transcription)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("telegram.voice.llm_failed", error=str(exc))
-            reply = f"Errore: {exc!r}"
+            logger.warning("telegram.voice.pipeline_failed", error=str(exc))
+        if reply is None:
+            try:
+                reply = await _generate_reply(user, convo_id, transcription)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("telegram.voice.llm_failed", error=str(exc))
+                reply = f"Errore: {exc!r}"
 
     if reply:
         try:
@@ -451,6 +458,38 @@ async def _on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await ctx.bot.send_voice(chat_id=chat.id, voice=ogg)
         except Exception as exc:  # noqa: BLE001
             logger.warning("telegram.voice.synth_failed", error=str(exc))
+
+
+async def _keep_typing(chat: Any, *, interval: float = 4.0) -> None:
+    """Keep the Telegram "typing…" indicator visible for the lifetime
+    of this task. Telegram auto-clears the action after 5 s, so on
+    long-running pipelines (web search + 25 s LLM) we'd otherwise
+    leave the user staring at a static chat for 30+ s thinking the
+    bot died. Refreshing every 4 s gives a smooth bubble while CARA
+    works. Cancel this task as soon as the work is done.
+    """
+    try:
+        while True:
+            try:
+                await chat.send_chat_action(ChatAction.TYPING)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("telegram.keep_typing.failed", error=str(exc))
+                return
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        return
+
+
+@contextlib.asynccontextmanager
+async def _typing_indicator(chat: Any):
+    """Context manager: spawn `_keep_typing`, cancel on exit."""
+    task = asyncio.create_task(_keep_typing(chat))
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(BaseException):
+            await task
 
 
 async def _setting_bool(key: str, *, default: bool) -> bool:
@@ -490,29 +529,34 @@ async def _on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.warning("telegram.camera_intercept_failed", error=str(exc))
 
     convo_id = await _ensure_conversation(chat.id, user)
-    await ctx.bot.send_chat_action(chat.id, ChatAction.TYPING)
 
     # Step 1 — try the deterministic chat Pipeline (intent router,
     # skills, recipe chain). Same code path as the web chat, so
     # "che tempo fa", "lista delle cose da fare", "appuntamenti
     # settimana prossima", etc. produce identical answers in
     # Telegram and on the HomePage.
+    #
+    # The whole pipeline + LLM fallback runs inside `_typing_indicator`
+    # so the chat shows a continuous "scrivendo…" bubble until the
+    # reply lands. Without this the indicator clears after 5 s and
+    # the user sits staring at silence for the remaining 20-30 s.
     reply: str | None = None
-    try:
-        reply = await _pipeline_collect(user, convo_id, text)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("telegram.pipeline_failed", error=str(exc))
-
-    # Step 2 — Pipeline missed (free-form chat, "raccontami una
-    # barzelletta", etc.) → fall through to the LLM. Persists the
-    # turn in the same Conversation row used by the Pipeline so the
-    # multi-turn memory is shared.
-    if reply is None:
+    async with _typing_indicator(chat):
         try:
-            reply = await _generate_reply(user, convo_id, text)
-        except Exception as exc:  # pragma: no cover
-            logger.exception("telegram.generate_failed")
-            reply = f"Errore: {exc!r}"
+            reply = await _pipeline_collect(user, convo_id, text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("telegram.pipeline_failed", error=str(exc))
+
+        # Step 2 — Pipeline missed (free-form chat, "raccontami una
+        # barzelletta", etc.) → fall through to the LLM. Persists the
+        # turn in the same Conversation row used by the Pipeline so the
+        # multi-turn memory is shared.
+        if reply is None:
+            try:
+                reply = await _generate_reply(user, convo_id, text)
+            except Exception as exc:  # pragma: no cover
+                logger.exception("telegram.generate_failed")
+                reply = f"Errore: {exc!r}"
 
     # Persist the assistant turn so the next message in the same
     # chat sees it as conversation history. Pipeline canned replies
@@ -579,16 +623,17 @@ async def _run_phrase(
     convo_id = await _ensure_conversation(chat.id, user)
 
     reply = None
-    try:
-        reply = await _pipeline_collect(user, convo_id, phrase)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("telegram.cmd.pipeline_failed", phrase=phrase, error=str(exc))
-
-    if reply is None and fallback_llm:
+    async with _typing_indicator(chat):
         try:
-            reply = await _generate_reply(user, convo_id, phrase)
+            reply = await _pipeline_collect(user, convo_id, phrase)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("telegram.cmd.llm_failed", phrase=phrase, error=str(exc))
+            logger.warning("telegram.cmd.pipeline_failed", phrase=phrase, error=str(exc))
+
+        if reply is None and fallback_llm:
+            try:
+                reply = await _generate_reply(user, convo_id, phrase)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("telegram.cmd.llm_failed", phrase=phrase, error=str(exc))
 
     if not reply:
         reply = "Non ho capito, scusa. Riprova con altre parole o usa /help."

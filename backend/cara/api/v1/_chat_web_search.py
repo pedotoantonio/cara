@@ -26,6 +26,7 @@ Toggle: admin setting `chat_web_fallback_enabled` (default True).
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from collections.abc import AsyncIterator
@@ -190,12 +191,22 @@ async def try_web_search(
 
     log.info("chat.web_fallback.triggered", q=last_user_q[:120])
 
-    # Run the search. Both providers raise on hard failure; we treat
-    # any exception or empty result as a miss so the LLM still gets a
-    # chance.
+    # Run the search with a hard ceiling. Without `wait_for` the DDG
+    # fallback can sit in a 30-second TCP read while SearXNG itself is
+    # already down, and that latency rolls straight to the user — on
+    # Telegram, where the user has nothing else on screen to look at,
+    # it reads as the bot being broken. 5 s is well above the happy
+    # path (~700 ms SearXNG, ~2 s DDG) and short enough that on a
+    # genuine network blip we still fall through to the bare LLM with
+    # plenty of time left in the user's patience budget.
     chain = build_default_chain()
     try:
-        hits: list[SearchHit] = await chain.search(last_user_q, limit=5)
+        hits: list[SearchHit] = await asyncio.wait_for(
+            chain.search(last_user_q, limit=5), timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        log.warning("chat.web_fallback.search_timeout", q=last_user_q[:80])
+        return None
     except Exception as exc:  # noqa: BLE001
         log.warning("chat.web_fallback.search_failed", error=str(exc))
         return None
@@ -229,7 +240,15 @@ async def try_web_search(
         t_start = time.monotonic()
         n_tokens = 0
         try:
-            async for chunk in llm.generate(prompt, max_new_tokens=220):
+            # 140 tokens ~= 2-3 paragraphs of grounded synthesis from
+            # the top-5 hits — enough to answer "what's happening
+            # today in Ferrara" without rambling. At ~8 tok/s on the
+            # NPU this lands in ~17 s instead of 27 s, which matters
+            # most on the Telegram surface (no streaming UX): the
+            # user used to see no activity for 30+ s while we
+            # generated 220 tokens of nicely-formatted detail
+            # nobody asked for.
+            async for chunk in llm.generate(prompt, max_new_tokens=140):
                 n_tokens += 1
                 yield _sse("token", {"text": chunk.text, "token_id": chunk.token_id})
         except Exception as exc:  # noqa: BLE001
