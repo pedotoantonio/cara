@@ -198,35 +198,66 @@ export function WeatherIcon({
   size?: number;
   className?: string;
 }) {
-  const s = (slug ?? 'unknown') as WeatherSlug;
+  // Accept BOTH the backend WMO-derived slugs (sun, sun-cloud,
+  // cloud-sun, cloud, drizzle, drizzle-cold, rain, rain-heavy,
+  // rain-cold, showers, showers-heavy, snow*, thunderstorm,
+  // thunderstorm-hail, fog) AND the original frontend taxonomy
+  // (clear, mostly-clear, partly-cloudy, cloudy, overcast, ...).
+  // Two callers, one component — must tolerate either.
+  const s = (slug ?? 'unknown') as string;
   switch (s) {
+    // ─── Clear sky ────────────────────────────────────────────
+    case 'sun':
     case 'clear':
       return isDay
         ? <Sun size={size} className={className} />
         : <Moon size={size} className={className} />;
+
+    // ─── Few clouds (sun-with-cloud) ──────────────────────────
+    case 'sun-cloud':
+    case 'cloud-sun':
     case 'mostly-clear':
     case 'partly-cloudy':
       return <PartlyCloudy size={size} className={className} day={isDay} />;
+
+    // ─── Overcast ─────────────────────────────────────────────
+    case 'cloud':
     case 'cloudy':
     case 'overcast':
       return <Cloud size={size} className={className} />;
+
+    // ─── Fog ──────────────────────────────────────────────────
     case 'fog':
       return <Fog size={size} className={className} />;
+
+    // ─── Rain (incl. showers and freezing variants) ───────────
     case 'drizzle':
+    case 'drizzle-cold':
     case 'rain':
+    case 'rain-cold':
     case 'rain-showers':
+    case 'showers':
       return <RainCloud size={size} className={className} />;
     case 'rain-heavy':
+    case 'showers-heavy':
       return <RainCloud size={size} className={className} heavy />;
+
+    // ─── Thunder ──────────────────────────────────────────────
     case 'thunder':
+    case 'thunderstorm':
+    case 'thunderstorm-hail':
+      return <ThunderCloud size={size} className={className} />;
     case 'thunder-heavy':
       return <ThunderCloud size={size} className={className} />;
+
+    // ─── Snow ─────────────────────────────────────────────────
     case 'snow':
     case 'snow-showers':
       return <SnowCloud size={size} className={className} />;
     case 'snow-heavy':
     case 'snow-showers-heavy':
       return <SnowCloud size={size} className={className} heavy />;
+
     default:
       return <Unknown size={size} className={className} />;
   }

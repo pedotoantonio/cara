@@ -34,10 +34,14 @@ export function WallClock() {
   }, []);
 
   return (
-    <div className="flex flex-col">
+    // min-h matches the avatar (156 px in the header); justify-center
+    // keeps the time digits at the same Y as the avatar centre. Without
+    // it the clock was anchored to the top of its grid cell, looking
+    // visually disconnected from the rest of the header row.
+    <div className="flex flex-col justify-center" style={{ minHeight: 156 }}>
       <span
         className="font-display text-fg leading-none tracking-tight"
-        style={{ fontSize: 'clamp(64px, 8vw, 132px)', fontWeight: 200 }}
+        style={{ fontSize: 'clamp(72px, 9vw, 156px)', fontWeight: 200 }}
       >
         {fmtTime(now)}
       </span>

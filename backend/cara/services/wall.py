@@ -436,6 +436,7 @@ async def build_calendar_grid(
     events = await events_in_range(
         session, start=start_dt, end=end_dt, owner_index=owners
     )
+    bdays = await birthday_index(session)
 
     # Bucket by local date
     buckets: dict[str, list[dict[str, Any]]] = {}
@@ -457,6 +458,7 @@ async def build_calendar_grid(
         )
 
     # Build day cells
+    from cara.services.saints import saint_for  # noqa: PLC0415
     days = []
     for i in range(grid_days):
         d = grid_start + timedelta(days=i)
@@ -467,6 +469,9 @@ async def build_calendar_grid(
             "is_today": d == datetime.now(zone).date(),
             "is_weekend": d.weekday() >= 5,
             "is_holiday": _is_italian_holiday(d),
+            "is_pre_holiday": _is_pre_holiday(d),
+            "saint": saint_for(d),
+            "birthdays": bdays.get((d.month, d.day), []),
             "items": buckets.get(iso, []),
         })
 
@@ -517,10 +522,60 @@ _FIXED_HOLIDAYS: set[tuple[int, int]] = {
 
 
 def _is_italian_holiday(d: date) -> bool:
+    """Italian "festivo": Sundays, fixed national holidays, and Easter
+    Sunday + Pasquetta. Used by the wall to paint the day red."""
+    if d.weekday() == 6:  # Sunday
+        return True
     if (d.month, d.day) in _FIXED_HOLIDAYS:
         return True
     easter = _easter_sunday(d.year)
     return d == easter or d == (easter + timedelta(days=1))
+
+
+def _is_pre_holiday(d: date) -> bool:
+    """Italian "prefestivo": the day BEFORE a holiday, provided the day
+    itself isn't already a holiday. Saturdays therefore qualify (next
+    day is Sunday). The wall paints the day-number orange."""
+    if _is_italian_holiday(d):
+        return False
+    return _is_italian_holiday(d + timedelta(days=1))
+
+
+# ─── Birthdays ───────────────────────────────────────────────────────
+
+
+async def birthday_index(
+    session: AsyncSession,
+) -> dict[tuple[int, int], list[dict[str, Any]]]:
+    """(month, day) → list of birthday entries `{user_id, name, color,
+    emoji, born_year}`. Only users with `wall_visible=True` and a
+    `birth_date` set are included."""
+    rows = (
+        await session.execute(
+            select(User)
+            .where(
+                User.is_active.is_(True),
+                User.wall_visible.is_(True),
+                User.birth_date.is_not(None),
+            )
+            .order_by(User.id.asc())
+        )
+    ).scalars().all()
+
+    out: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    for idx, u in enumerate(rows):
+        if u.birth_date is None:
+            continue
+        wu = _user_to_wall(u, idx)
+        key = (u.birth_date.month, u.birth_date.day)
+        out.setdefault(key, []).append({
+            "user_id": u.id,
+            "name": wu.display_name,
+            "color": wu.color,
+            "emoji": wu.emoji,
+            "born_year": u.birth_date.year,
+        })
+    return out
 
 
 # ─── Week view ───────────────────────────────────────────────────────
@@ -560,6 +615,8 @@ async def build_week(
         buckets[k].sort(
             key=lambda x: x.get("start") or x.get("due_date") or "9999"
         )
+    from cara.services.saints import saint_for  # noqa: PLC0415
+    bdays = await birthday_index(session)
     days = []
     today = datetime.now(zone).date()
     for i in range(days_count):
@@ -570,6 +627,9 @@ async def build_week(
             "is_today": d == today,
             "is_weekend": d.weekday() >= 5,
             "is_holiday": _is_italian_holiday(d),
+            "is_pre_holiday": _is_pre_holiday(d),
+            "saint": saint_for(d),
+            "birthdays": bdays.get((d.month, d.day), []),
             "items": buckets.get(iso, []),
         })
     return {

@@ -47,12 +47,23 @@ export interface WallSummary {
   };
 }
 
+export interface WallBirthday {
+  user_id: number;
+  name: string;
+  color: string;
+  emoji: string;
+  born_year: number;
+}
+
 export interface WallDay {
   date: string;
   in_month?: boolean;
   is_today: boolean;
   is_weekend: boolean;
   is_holiday: boolean;
+  is_pre_holiday?: boolean;
+  saint?: string;
+  birthdays?: WallBirthday[];
   items: WallItem[];
 }
 

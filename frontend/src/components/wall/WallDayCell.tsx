@@ -40,25 +40,62 @@ export function WallDayCell({
         'border border-surface2/60',
         dim ? 'opacity-40 bg-transparent' : 'bg-bg/30',
         day.is_holiday && !dim ? 'bg-rose-50/40 dark:bg-rose-900/20' : '',
+        day.is_pre_holiday && !day.is_holiday && !dim
+          ? 'bg-amber-50/30 dark:bg-amber-900/10' : '',
       ].join(' ')}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-1">
         <span
           className={[
             'inline-flex items-center justify-center font-display',
             day.is_today
               ? 'rounded-full bg-accent text-bg w-8 h-8 font-medium'
               : day.is_holiday
-                ? 'text-rose-600 dark:text-rose-300 font-medium'
-                : day.is_weekend
-                  ? 'text-fg-soft'
-                  : 'text-fg',
+                ? 'text-rose-600 dark:text-rose-300 font-semibold'
+                : day.is_pre_holiday
+                  ? 'text-amber-600 dark:text-amber-300 font-medium'
+                  : day.is_weekend
+                    ? 'text-fg-soft'
+                    : 'text-fg',
           ].join(' ')}
           style={{ fontSize: day.is_today ? 16 : 18 }}
         >
           {dayNum}
         </span>
+        {day.birthdays && day.birthdays.length > 0 && (
+          <span
+            className="text-base leading-none"
+            title={day.birthdays.map((b) => `🎂 ${b.name}`).join(', ')}
+          >
+            🎂
+          </span>
+        )}
       </div>
+      {day.saint && !dim && (
+        <div
+          className="text-[10px] leading-tight text-fg-muted truncate first-letter:capitalize"
+          title={day.saint}
+        >
+          {day.saint}
+        </div>
+      )}
+      {day.birthdays && day.birthdays.length > 0 && !dim && (
+        <div className="flex flex-col gap-0.5">
+          {day.birthdays.map((b) => (
+            <span
+              key={b.user_id}
+              className="text-[11px] leading-tight rounded px-1.5 py-0.5 truncate"
+              style={{
+                background: `${b.color}30`,
+                borderLeft: `3px solid ${b.color}`,
+              }}
+              title={`Compleanno di ${b.name} (${b.born_year})`}
+            >
+              🎂 {b.name}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex flex-col gap-0.5 overflow-hidden">
         {day.items.slice(0, MAX_CHIPS).map((it) => {
           const time = fmtTimeShort(it.start ?? it.due_date);
