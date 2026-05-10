@@ -81,6 +81,7 @@ import { WallCalendarPage } from './routes/wall/WallCalendarPage';
 import { WallWeekPage } from './routes/wall/WallWeekPage';
 import { WallShoppingPage } from './routes/wall/WallShoppingPage';
 import { WallServicesPage } from './routes/wall/WallServicesPage';
+import { WallPersonsPage } from './routes/wall/WallPersonsPage';
 
 type AuthState = { kind: 'loading' } | { kind: 'anonymous' } | { kind: 'authenticated'; user: User };
 
@@ -180,6 +181,7 @@ export default function App() {
                 <Route path="calendar" element={<WallCalendarPage />} />
                 <Route path="shopping" element={<WallShoppingPage />} />
                 <Route path="services" element={<WallServicesPage />} />
+                <Route path="persons" element={<WallPersonsPage />} />
               </Route>
             </Routes>
           </BrowserRouter>

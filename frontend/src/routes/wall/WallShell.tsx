@@ -19,6 +19,7 @@ const TABS = [
   { to: '/wall/calendar', label: 'Mese', end: false },
   { to: '/wall/shopping', label: 'Spesa', end: false },
   { to: '/wall/services', label: 'Servizi', end: false },
+  { to: '/wall/persons', label: 'Famiglia', end: false },
 ];
 
 function HeaderMeta({ summary }: { summary: WallSummary | null }) {

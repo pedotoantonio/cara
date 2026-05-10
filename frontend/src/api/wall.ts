@@ -324,6 +324,141 @@ export function fetchServices(): Promise<WallServicesSnapshot> {
   return getJson<WallServicesSnapshot>('/services');
 }
 
+// ─── Family persons (face recognition) ────────────────────────────
+
+export interface WallPerson {
+  id: number;
+  name: string;
+  notify: boolean;
+  sighting_count: number;
+  last_seen: string | null;
+  latest_image: string | null;
+}
+
+export interface WallUnknown {
+  id: number;
+  camera: string | null;
+  timestamp: string | null;
+  image_url: string | null;
+}
+
+export function fetchWallPersons(): Promise<WallPerson[]> {
+  return getJson<WallPerson[]>('/persons');
+}
+
+export async function createWallPerson(
+  name: string, notify = true,
+): Promise<WallPerson> {
+  const r = await fetch(`${API}/persons`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'omit',
+    body: JSON.stringify({ name, notify }),
+  });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { detail = (await r.json()).detail ?? detail; } catch {/* */}
+    throw new Error(detail);
+  }
+  return await r.json();
+}
+
+export async function patchWallPerson(
+  id: number, patch: { name?: string; notify?: boolean },
+): Promise<WallPerson> {
+  const r = await fetch(`${API}/persons/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'omit',
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return await r.json();
+}
+
+export async function deleteWallPerson(id: number): Promise<void> {
+  const r = await fetch(`${API}/persons/${id}`, {
+    method: 'DELETE', credentials: 'omit',
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+}
+
+export async function uploadWallPersonPhoto(
+  id: number, file: File,
+): Promise<void> {
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch(`${API}/persons/${id}/photos`, {
+    method: 'POST', body: fd, credentials: 'omit',
+  });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { detail = (await r.json()).detail ?? detail; } catch {/* */}
+    throw new Error(detail);
+  }
+}
+
+export function wallPersonPhotoUrl(id: number): string {
+  return `${API}/persons/${id}/photo`;
+}
+
+export function fetchWallUnknowns(limit = 50): Promise<WallUnknown[]> {
+  return getJson<WallUnknown[]>(`/persons/unknowns?limit=${limit}`);
+}
+
+export function wallUnknownImageUrl(sightingId: number): string {
+  return `${API}/persons/unknowns/${sightingId}/image`;
+}
+
+export async function assignWallUnknown(
+  sightingId: number, personId: number,
+): Promise<void> {
+  const r = await fetch(`${API}/persons/unknowns/${sightingId}/assign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'omit',
+    body: JSON.stringify({ person_id: personId }),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+}
+
+export interface WallProbeResult {
+  found_face: boolean;
+  match: { name: string; person_id: number; distance: number } | null;
+}
+
+export async function probeWallPersonImage(file: File): Promise<WallProbeResult> {
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch(`${API}/persons/probe-image`, {
+    method: 'POST', body: fd, credentials: 'omit',
+  });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { detail = (await r.json()).detail ?? detail; } catch {/* */}
+    throw new Error(detail);
+  }
+  return await r.json();
+}
+
+export async function createWallPersonFromUnknown(
+  sightingId: number, name: string, notify = true,
+): Promise<WallPerson> {
+  const r = await fetch(`${API}/persons/unknowns/${sightingId}/create_person`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'omit',
+    body: JSON.stringify({ name, notify }),
+  });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { detail = (await r.json()).detail ?? detail; } catch {/* */}
+    throw new Error(detail);
+  }
+  return await r.json();
+}
+
+
 // ─── Health probes ────────────────────────────────────────────────
 
 export type HealthStatus = 'ok' | 'warn' | 'fail' | 'unknown';

@@ -967,15 +967,31 @@ async def wall_face_check(
                 f"{base}/api/recognize-image",
                 files={"image": (image.filename or "frame.jpg", blob, image.content_type or "image/jpeg")},
             )
-            r.raise_for_status()
-            data = r.json()
     except httpx.HTTPError as exc:
-        log.warning(
-            "wall.face_check.upstream_failed",
-            error=str(exc) or type(exc).__name__,
-        )
+        # Connection / timeout / DNS — upstream genuinely unreachable.
+        log.warning("wall.face_check.upstream_unreachable", error=str(exc) or type(exc).__name__)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "frigate-faces unreachable") from exc
+
+    if r.status_code >= 500:
+        log.warning("wall.face_check.upstream_5xx", status=r.status_code, body=r.text[:200])
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "frigate-faces server error")
+    if r.status_code >= 400:
+        # Bad image, unsupported format, etc. — propagate upstream's complaint
+        # so the kiosk can show something useful instead of a misleading 502.
+        upstream_msg = ""
+        try:
+            upstream_msg = (r.json() or {}).get("error") or ""
+        except Exception:  # noqa: BLE001
+            upstream_msg = r.text[:200]
         raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, "frigate-faces unreachable"
+            status.HTTP_400_BAD_REQUEST,
+            f"frigate-faces rejected image: {upstream_msg or r.status_code}",
+        )
+    try:
+        data = r.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "frigate-faces returned non-JSON"
         ) from exc
 
     match = data.get("match") if isinstance(data, dict) else None
