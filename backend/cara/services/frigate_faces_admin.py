@@ -114,6 +114,19 @@ async def delete_person(person_id: int) -> bool:
         return False
 
 
+class FrigateFacesUploadError(Exception):
+    """Upload was processed by frigate-faces but rejected (4xx).
+    Carries the upstream message so the API layer can pass it back to
+    the user instead of a generic 502 — "nessun volto rilevato" is
+    actionable; "Bad Gateway" is not.
+    """
+    def __init__(self, status_code: int, message: str, hint: str = ""):
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+        self.hint = hint
+
+
 async def upload_face_image(
     person_id: int,
     *,
@@ -121,19 +134,49 @@ async def upload_face_image(
     mime_type: str,
     blob: bytes,
 ) -> dict[str, Any] | None:
+    """Upload a reference photo to frigate-faces.
+
+    Returns the new sighting dict on success, None on plumbing failure
+    (network/timeout/missing-config), and raises `FrigateFacesUploadError`
+    on a 4xx that carries an actionable message — typically "nessun volto
+    rilevato" with a hint. Distinguishing the two lets callers map them
+    to a 502 (we couldn't reach the service) vs a 422 (we reached it,
+    your image isn't usable) so the user knows whether to retry or fix
+    the photo.
+    """
     base = _base_url()
     if not base:
         return None
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as c:
+        # 60 s read timeout: HOG happy path is < 200 ms, but the CNN
+        # fallback for hard-to-detect frames can take a few seconds on
+        # this CPU even after we resize down to 1600 px.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0)) as c:
             r = await c.post(
                 f"{base}/api/people/{person_id}/images",
                 files={"image": (filename, blob, mime_type)},
             )
-            r.raise_for_status()
-            return r.json()
+        if 400 <= r.status_code < 500:
+            # Try to surface the upstream JSON. frigate-faces returns
+            # `{"error": "...", "hint": "..."}` for 4xx; if the body
+            # is unexpected we fall back to the status text.
+            try:
+                payload = r.json() or {}
+                msg = str(payload.get("error") or "").strip()
+                hint = str(payload.get("hint") or "").strip()
+            except ValueError:
+                msg = (r.text or "").strip()[:200]
+                hint = ""
+            raise FrigateFacesUploadError(r.status_code, msg or f"upload rifiutato ({r.status_code})", hint)
+        r.raise_for_status()
+        return r.json()
+    except FrigateFacesUploadError:
+        raise
     except (httpx.HTTPError, ValueError) as exc:
-        log.warning("frigate_faces.upload_image.failed", id=person_id, error=str(exc))
+        log.warning(
+            "frigate_faces.upload_image.failed",
+            id=person_id, error=str(exc) or type(exc).__name__,
+        )
         return None
 
 
@@ -242,6 +285,38 @@ async def assign_sighting(sighting_id: int, person_id: int) -> bool:
         log.warning("frigate_faces.assign_sighting.unknown_person", id=person_id)
         return False
     return await identify_sighting_with_name(sighting_id, str(name))
+
+
+async def cleanup_images(
+    person_id: int | None = None, *, keep_latest: int = 1, dry_run: bool = False,
+) -> dict[str, Any] | None:
+    """Free disk by deleting old reference/sighting JPEGs while keeping
+    encodings intact. `person_id=None` runs across the whole catalogue;
+    otherwise targets one person. Returns the upstream JSON payload
+    (counts + per-person breakdown for the all-catalogue path), or None
+    on plumbing failure."""
+    base = _base_url()
+    if not base:
+        return None
+    if person_id is None:
+        url = f"{base}/api/maintenance/cleanup-images"
+    else:
+        url = f"{base}/api/people/{int(person_id)}/cleanup-images"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=3.0)) as c:
+            r = await c.post(
+                url, json={"keep_latest": int(keep_latest), "dry_run": bool(dry_run)},
+            )
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            return r.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning(
+            "frigate_faces.cleanup_images.failed",
+            id=person_id, error=str(exc),
+        )
+        return None
 
 
 async def get_readiness(person_id: int) -> dict[str, Any] | None:

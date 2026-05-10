@@ -481,6 +481,14 @@ export interface ReadinessSuggestion {
   detail: string;
 }
 
+export interface ReadinessPair {
+  other_id: number;
+  other_name: string;
+  min_distance: number;
+  confidence_pct: number;
+  verdict: string;
+}
+
 export interface PersonReadiness {
   person_id: number;
   name: string;
@@ -490,7 +498,9 @@ export interface PersonReadiness {
   scores: {
     coverage: number;
     diversity: number;
-    discriminability: number;
+    // null when this is the only enrolled person — we can't measure
+    // distinguishability without something to distinguish from.
+    discriminability: number | null;
   };
   metrics: {
     reference_count: number;
@@ -502,11 +512,59 @@ export interface PersonReadiness {
     closest_other_id: number | null;
     match_tolerance: number;
   };
+  pairs: ReadinessPair[];
   suggestions: ReadinessSuggestion[];
 }
 
 export function fetchPersonReadiness(personId: number): Promise<PersonReadiness> {
   return getJson<PersonReadiness>(`/persons/${personId}/readiness`);
+}
+
+// ─── Disk cleanup ────────────────────────────────────────────────
+
+export interface CleanupAllResult {
+  dry_run: boolean;
+  keep_latest: number;
+  total_deleted: number;
+  total_bytes_freed: number;
+  per_person: Array<{
+    person_id: number; name: string;
+    deleted: number; bytes_freed: number;
+  }>;
+}
+
+export async function cleanupAllPersonImages(
+  keepLatest = 1, dryRun = false,
+): Promise<CleanupAllResult> {
+  const r = await fetch(`${API}/persons/cleanup-images`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'omit',
+    body: JSON.stringify({ keep_latest: keepLatest, dry_run: dryRun }),
+  });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { detail = (await r.json()).detail ?? detail; } catch {/* */}
+    throw new Error(detail);
+  }
+  return await r.json();
+}
+
+export async function cleanupPersonImages(
+  personId: number, keepLatest = 1, dryRun = false,
+): Promise<{ deleted: number; bytes_freed: number; kept: number }> {
+  const r = await fetch(`${API}/persons/${personId}/cleanup-images`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'omit',
+    body: JSON.stringify({ keep_latest: keepLatest, dry_run: dryRun }),
+  });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { detail = (await r.json()).detail ?? detail; } catch {/* */}
+    throw new Error(detail);
+  }
+  return await r.json();
 }
 
 

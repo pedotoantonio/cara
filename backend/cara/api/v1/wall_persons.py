@@ -312,6 +312,75 @@ async def create_person(
     return _row_to_out(created)
 
 
+class CleanupBody(BaseModel):
+    keep_latest: int = 1
+    dry_run: bool = False
+
+
+@router.post("/cleanup-images")
+async def cleanup_all_images(
+    body: CleanupBody,
+    request: Request,
+    _lan: None = Depends(require_lan),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, Any]:
+    """Free disk across all enrolled people. Encodings stay; only the
+    JPEG files (and corresponding image_path pointers) get deleted.
+
+    Why this is safe: every recognition path (`get_known_encodings`,
+    `match_face`, presence agent) reads encodings, never the image
+    bytes. The image file is only used as the profile thumbnail —
+    we keep the most recent `keep_latest` per person for that.
+    """
+    out = await ff.cleanup_images(
+        person_id=None, keep_latest=body.keep_latest, dry_run=body.dry_run,
+    )
+    if out is None:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "frigate-faces non raggiungibile",
+        )
+    if not body.dry_run and (out.get("total_deleted") or 0) > 0:
+        await _wall_audit(
+            session, request, "persons.cleanup_images",
+            {
+                "keep_latest": body.keep_latest,
+                "deleted": out.get("total_deleted"),
+                "bytes_freed": out.get("total_bytes_freed"),
+            },
+        )
+    return out
+
+
+@router.post("/{person_id}/cleanup-images")
+async def cleanup_person_images(
+    person_id: int,
+    body: CleanupBody,
+    request: Request,
+    _lan: None = Depends(require_lan),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, Any]:
+    """Same as `cleanup_all_images` but scoped to one person."""
+    out = await ff.cleanup_images(
+        person_id=person_id, keep_latest=body.keep_latest, dry_run=body.dry_run,
+    )
+    if out is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "persona non trovata o frigate-faces non raggiungibile",
+        )
+    if not body.dry_run and (out.get("deleted") or 0) > 0:
+        await _wall_audit(
+            session, request, f"persons.cleanup_images[{person_id}]",
+            {
+                "id": person_id,
+                "keep_latest": body.keep_latest,
+                "deleted": out.get("deleted"),
+                "bytes_freed": out.get("bytes_freed"),
+            },
+        )
+    return out
+
+
 @router.get("/{person_id}/readiness")
 async def person_readiness(
     person_id: int,
@@ -377,14 +446,30 @@ async def upload_photo(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "file vuoto")
     if len(blob) > 10 * 1024 * 1024:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "max 10 MB")
-    out = await ff.upload_face_image(
-        person_id,
-        filename=file.filename or "upload.jpg",
-        mime_type=file.content_type or "image/jpeg",
-        blob=blob,
-    )
+    try:
+        out = await ff.upload_face_image(
+            person_id,
+            filename=file.filename or "upload.jpg",
+            mime_type=file.content_type or "image/jpeg",
+            blob=blob,
+        )
+    except ff.FrigateFacesUploadError as exc:
+        # Upstream processed the request but rejected the image (e.g.
+        # no face detected). Pass the actionable message through.
+        detail = exc.message
+        if exc.hint:
+            detail = f"{detail} — {exc.hint}"
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY
+            if exc.status_code == 422 else status.HTTP_400_BAD_REQUEST,
+            detail,
+        ) from exc
     if not out:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "upload rifiutato")
+        # Plumbing failure: frigate-faces unreachable / config missing.
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "frigate-faces non raggiungibile",
+        )
     await _wall_audit(
         session, request, f"persons.upload_photo[{person_id}]",
         {"id": person_id, "size": len(blob), "filename": file.filename},

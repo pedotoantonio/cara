@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import {
   assignWallUnknown,
+  cleanupAllPersonImages,
   createWallPerson,
   createWallPersonFromUnknown,
   deleteWallPerson,
@@ -30,6 +31,7 @@ import {
 } from '../../api/wall';
 import type {
   PersonReadiness,
+  ReadinessPair,
   WallPerson,
   WallProbeResult,
   WallUnknown,
@@ -282,7 +284,10 @@ export function WallPersonsPage() {
 
       {/* ── Section 2: known people ───────────────────────────── */}
       <section className="space-y-3">
-        <h3 className="font-medium">Persone conosciute</h3>
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-medium">Persone conosciute</h3>
+          <DiskCleanupButton onDone={refresh} />
+        </div>
         {loading && persons.length === 0 ? (
           <div className="text-sm text-fg-muted">Caricamento…</div>
         ) : persons.length === 0 ? (
@@ -636,6 +641,14 @@ function ReadinessModal({
           />
         </div>
 
+        {/* Per-pair distinguishability */}
+        <div className="space-y-2">
+          <div className="text-fg-muted text-xs uppercase tracking-wide">
+            Distinzione vs altri membri
+          </div>
+          <PairwiseList pairs={readiness.pairs} />
+        </div>
+
         {/* Suggestions */}
         {readiness.suggestions.length > 0 && (
           <div className="space-y-2">
@@ -697,9 +710,75 @@ function ReadinessModal({
   );
 }
 
+function fmtBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${n} B`;
+}
+
+function DiskCleanupButton({ onDone }: { onDone: () => Promise<void> | void }) {
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setReport(null);
+    try {
+      // First a dry-run so we can warn the user what will go.
+      const dry = await cleanupAllPersonImages(1, true);
+      if (dry.total_deleted === 0) {
+        setReport('Niente da liberare.');
+        setTimeout(() => setReport(null), 3000);
+        return;
+      }
+      const ok = window.confirm(
+        `Liberare ${fmtBytes(dry.total_bytes_freed)} eliminando ${dry.total_deleted} file (uno per persona resta come miniatura)?\n\n` +
+        `Gli encoding facciali restano: il riconoscimento NON peggiora.`,
+      );
+      if (!ok) return;
+      const real = await cleanupAllPersonImages(1, false);
+      setReport(
+        `${real.total_deleted} file rimossi · liberati ${fmtBytes(real.total_bytes_freed)}`,
+      );
+      await onDone();
+      setTimeout(() => setReport(null), 6000);
+    } catch (e) {
+      setReport(`Errore: ${(e as Error).message}`);
+      setTimeout(() => setReport(null), 6000);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {report && (
+        <span className="text-xs text-fg-muted italic">{report}</span>
+      )}
+      <button
+        onClick={run}
+        disabled={busy}
+        className="px-3 py-1 rounded-md text-xs bg-zinc-700/40 hover:bg-zinc-700/60 disabled:opacity-30"
+        title="Cancella le foto vecchie già encodificate. Mantiene una miniatura per persona."
+      >
+        {busy ? 'Pulisco…' : '🧹 Libera spazio'}
+      </button>
+    </div>
+  );
+}
+
 function SubScoreCell({
   label, score, hint,
-}: { label: string; score: number; hint: string }) {
+}: { label: string; score: number | null; hint: string }) {
+  if (score === null) {
+    return (
+      <div className="rounded-lg bg-bg/40 ring-1 ring-white/5 px-3 py-2">
+        <div className="font-mono font-semibold text-fg-muted">n/d</div>
+        <div className="text-fg text-xs mt-0.5">{label}</div>
+        <div className="text-fg-muted text-[10px]">{hint}</div>
+      </div>
+    );
+  }
   const tone = readinessTone(score);
   return (
     <div className={`rounded-lg ${tone.bg} ring-1 ${tone.ring} px-3 py-2`}>
@@ -707,5 +786,39 @@ function SubScoreCell({
       <div className="text-fg text-xs mt-0.5">{label}</div>
       <div className="text-fg-muted text-[10px]">{hint}</div>
     </div>
+  );
+}
+
+function PairwiseList({ pairs }: { pairs: ReadinessPair[] }) {
+  if (pairs.length === 0) {
+    return (
+      <div className="rounded-lg bg-bg/40 ring-1 ring-white/5 px-3 py-2 text-xs text-fg-muted">
+        Sei l'unica persona iscritta — la distinzione fra membri della
+        famiglia diventa misurabile quando ne aggiungi un'altra.
+      </div>
+    );
+  }
+  return (
+    <ul className="space-y-1.5">
+      {pairs.map((p) => {
+        const tone = readinessTone(p.confidence_pct);
+        return (
+          <li
+            key={p.other_id}
+            className={`flex items-center justify-between gap-3 rounded-md ${tone.bg} ring-1 ${tone.ring} px-3 py-1.5`}
+          >
+            <div className="min-w-0">
+              <div className="text-sm truncate">vs <span className="font-medium">{p.other_name}</span></div>
+              <div className="text-[10px] text-fg-muted font-mono">
+                distanza {p.min_distance.toFixed(2)} · {p.verdict}
+              </div>
+            </div>
+            <div className={`font-mono font-semibold text-sm ${tone.text}`}>
+              {p.confidence_pct}%
+            </div>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
