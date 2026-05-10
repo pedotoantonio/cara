@@ -183,6 +183,13 @@ DEFAULTS: dict[str, Any] = {
     # open-meteo. Telegram alert when a probe fails N consecutive ticks.
     "wall_health_enabled": True,
     "wall_health_alert_streak": 2,
+    # ── Chat web-search fallback ────────────────────────────────────
+    # When a user query mentions "oggi"/"eventi"/"ultime notizie"/etc.
+    # the chat pipeline runs SearXNG (or DDG fallback) and feeds the
+    # top hits to the LLM as grounding, so it can answer instead of
+    # disclaiming "non ho informazioni in tempo reale". Set to False
+    # to disable and let those queries hit the bare LLM.
+    "chat_web_fallback_enabled": True,
 }
 
 

@@ -115,6 +115,23 @@ class IntentRouterStage(_RoutingStage):
     _handler = staticmethod(try_intent_router)
 
 
+class WebSearchStage(_RoutingStage):
+    """Last-chance stage before the plain LLM: if the query asks about
+    something happening *now* (events, news, weather, prices, "oggi a
+    Ferrara") we run a web search and stream a grounded answer. See
+    `_chat_web_search.try_web_search` for the heuristics + provider
+    chain used."""
+    name = "web_search"
+
+    @staticmethod
+    async def _handler(*, session, user, last_user_q, attached_files, convo):  # type: ignore[override]
+        from cara.api.v1._chat_web_search import try_web_search  # noqa: PLC0415
+        return await try_web_search(
+            session=session, user=user, last_user_q=last_user_q,
+            attached_files=attached_files, convo=convo,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Telemetry sink
 # ---------------------------------------------------------------------------
@@ -181,6 +198,11 @@ def build_chat_pipeline() -> Pipeline:
             SkillDispatcherStage(),
             RecipeChainStage(),
             IntentRouterStage(),
+            # Web fallback is INTENTIONALLY last: every cheaper tier
+            # gets first dibs (regex/skill/recipe match without a
+            # network round-trip), and we only burn a SearXNG/DDG call
+            # for queries the deterministic stages don't recognise.
+            WebSearchStage(),
         ],
         telemetry_sink=_telemetry_sink,
     )
