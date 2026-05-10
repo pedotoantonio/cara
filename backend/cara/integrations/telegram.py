@@ -467,17 +467,68 @@ async def _keep_typing(chat: Any, *, interval: float = 4.0) -> None:
     leave the user staring at a static chat for 30+ s thinking the
     bot died. Refreshing every 4 s gives a smooth bubble while CARA
     works. Cancel this task as soon as the work is done.
+
+    A *single* failed `send_chat_action` is not fatal — most often it's
+    a brief HTTP timeout while the GIL is held by the NPU during LLM
+    inference. We log once and keep retrying so when the inference
+    yields back the typing bubble resumes; only repeated failures
+    (5 in a row) make us give up to avoid log spam.
     """
+    consecutive_fails = 0
     try:
         while True:
             try:
                 await chat.send_chat_action(ChatAction.TYPING)
+                consecutive_fails = 0
             except Exception as exc:  # noqa: BLE001
-                logger.warning("telegram.keep_typing.failed", error=str(exc))
-                return
+                consecutive_fails += 1
+                if consecutive_fails == 1:
+                    logger.warning("telegram.keep_typing.failed", error=str(exc))
+                if consecutive_fails >= 5:
+                    logger.warning(
+                        "telegram.keep_typing.giving_up",
+                        consecutive_fails=consecutive_fails,
+                    )
+                    return
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
         return
+
+
+async def _send_with_retry(chat: Any, text: str, *, attempts: int = 3) -> bool:
+    """Send a Telegram message with retry on transient HTTP errors.
+
+    The first attempt sometimes fails when the LLM has just released
+    the GIL after holding it through a long inference run — the bot's
+    HTTP client picks up a stale connection and times out. A second
+    or third attempt 1-2 s later almost always succeeds. Returns True
+    on success, False if all attempts failed (we still log so the
+    user-visible "no reply" symptom can be traced).
+    """
+    last_exc: Exception | None = None
+    for i in range(attempts):
+        try:
+            await chat.send_message(text)
+            if i > 0:
+                logger.info(
+                    "telegram.send.retry_succeeded",
+                    chat_id=chat.id, after_attempts=i + 1,
+                )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            logger.warning(
+                "telegram.send.attempt_failed",
+                chat_id=chat.id, attempt=i + 1, error=str(exc),
+            )
+            if i < attempts - 1:
+                await asyncio.sleep(1.0 + i)  # 1 s, 2 s
+    logger.error(
+        "telegram.send.gave_up",
+        chat_id=chat.id, attempts=attempts,
+        error=str(last_exc) if last_exc else "?",
+    )
+    return False
 
 
 @contextlib.asynccontextmanager
@@ -516,6 +567,14 @@ async def _on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip() if update.message else ""
     if not text:
         return
+
+    # Trace marker: every received message gets a log line so we can
+    # always answer "did the bot see my question?" by grep alone, even
+    # when the reply path fails silently downstream.
+    logger.info(
+        "telegram.received",
+        chat_id=chat.id, user_id=user.id, text_preview=text[:80],
+    )
 
     # Step 0 — camera snapshot intercept. Telegram is the only surface
     # that can deliver an inline image, so handle "fammi vedere la
@@ -576,9 +635,24 @@ async def _on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception as exc:  # noqa: BLE001
             logger.warning("telegram.persist_failed", error=str(exc))
 
-    # Telegram message cap is 4096 chars — chunk if needed.
-    for i in range(0, len(reply), 4000):
-        await chat.send_message(reply[i : i + 4000])
+    if not reply:
+        # Defensive: never fall through silently. The user must always
+        # get *something* back, so they know the bot is alive.
+        reply = "Non sono riuscita a rispondere. Riprova fra un attimo."
+
+    # Telegram message cap is 4096 chars — chunk if needed. Each chunk
+    # goes through the retry helper so transient timeouts don't leave
+    # the user staring at "scrivendo…" forever.
+    chunks = [reply[i : i + 4000] for i in range(0, len(reply), 4000)]
+    sent_any = False
+    for chunk in chunks:
+        if await _send_with_retry(chat, chunk):
+            sent_any = True
+    if sent_any:
+        logger.info(
+            "telegram.replied",
+            chat_id=chat.id, length=len(reply), chunks=len(chunks),
+        )
 
 
 async def _pipeline_collect(
