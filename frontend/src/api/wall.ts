@@ -469,6 +469,46 @@ export async function createWallPersonFromUnknown(
   return await r.json();
 }
 
+// ─── Recognition readiness ────────────────────────────────────────
+
+export type ReadinessVerdictKind =
+  | 'excellent' | 'good' | 'ok' | 'weak' | 'missing';
+
+export interface ReadinessSuggestion {
+  kind: string;
+  priority: 'high' | 'medium' | 'low';
+  text: string;
+  detail: string;
+}
+
+export interface PersonReadiness {
+  person_id: number;
+  name: string;
+  overall: number;
+  verdict: string;
+  verdict_kind: ReadinessVerdictKind;
+  scores: {
+    coverage: number;
+    diversity: number;
+    discriminability: number;
+  };
+  metrics: {
+    reference_count: number;
+    sampled_for_pairs: number;
+    intra_mean_distance: number | null;
+    intra_max_distance: number | null;
+    closest_other_distance: number | null;
+    closest_other_name: string | null;
+    closest_other_id: number | null;
+    match_tolerance: number;
+  };
+  suggestions: ReadinessSuggestion[];
+}
+
+export function fetchPersonReadiness(personId: number): Promise<PersonReadiness> {
+  return getJson<PersonReadiness>(`/persons/${personId}/readiness`);
+}
+
 
 // ─── Health probes ────────────────────────────────────────────────
 

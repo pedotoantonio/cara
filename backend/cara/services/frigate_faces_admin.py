@@ -244,6 +244,28 @@ async def assign_sighting(sighting_id: int, person_id: int) -> bool:
     return await identify_sighting_with_name(sighting_id, str(name))
 
 
+async def get_readiness(person_id: int) -> dict[str, Any] | None:
+    """Recognition readiness payload for an enrolled person. Computed
+    server-side in frigate-faces (where the encodings live); returns
+    None on 404 / network failure so the caller can decide between a
+    503 and a "not enrolled yet" message."""
+    base = _base_url()
+    if not base:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=3.0)) as c:
+            r = await c.get(f"{base}/api/people/{person_id}/readiness")
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            return r.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning(
+            "frigate_faces.readiness.failed", id=person_id, error=str(exc),
+        )
+        return None
+
+
 async def identify_sighting_with_name(sighting_id: int, name: str) -> bool:
     """Tell frigate-faces "this sighting is <name>". The endpoint
     auto-creates the person row if the name is new and auto-matches

@@ -19,6 +19,7 @@ import {
   createWallPerson,
   createWallPersonFromUnknown,
   deleteWallPerson,
+  fetchPersonReadiness,
   fetchWallPersons,
   fetchWallUnknowns,
   patchWallPerson,
@@ -27,7 +28,12 @@ import {
   wallPersonPhotoUrl,
   wallUnknownImageUrl,
 } from '../../api/wall';
-import type { WallPerson, WallProbeResult, WallUnknown } from '../../api/wall';
+import type {
+  PersonReadiness,
+  WallPerson,
+  WallProbeResult,
+  WallUnknown,
+} from '../../api/wall';
 
 export function WallPersonsPage() {
   const [persons, setPersons] = useState<WallPerson[]>([]);
@@ -36,6 +42,8 @@ export function WallPersonsPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [thumbBust, setThumbBust] = useState<number>(Date.now());
+  const [readiness, setReadiness] = useState<Record<number, PersonReadiness>>({});
+  const [openReadiness, setOpenReadiness] = useState<PersonReadiness | null>(null);
 
   async function refresh() {
     try {
@@ -43,6 +51,17 @@ export function WallPersonsPage() {
       setPersons(p);
       setUnknowns(u);
       setError(null);
+      // Fan out readiness fetches in parallel; one failure doesn't
+      // stall the others. Fast (~50 ms each) on the typical 1-5
+      // person catalogue; we don't gate the page render on it.
+      void Promise.all(
+        p.map(async (person) => {
+          try {
+            const r = await fetchPersonReadiness(person.id);
+            setReadiness((prev) => ({ ...prev, [person.id]: r }));
+          } catch {/* leave entry unset; pill renders as `…` */}
+        }),
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -295,6 +314,10 @@ export function WallPersonsPage() {
                       {p.sighting_count} avvistament{p.sighting_count === 1 ? 'o' : 'i'}
                     </div>
                   </div>
+                  <ReadinessPill
+                    readiness={readiness[p.id] ?? null}
+                    onClick={() => readiness[p.id] && setOpenReadiness(readiness[p.id])}
+                  />
                   <div className="flex gap-1.5 flex-wrap">
                     <label
                       className={`px-2 py-1 rounded-md text-xs cursor-pointer transition ${
@@ -466,6 +489,223 @@ export function WallPersonsPage() {
           </ul>
         )}
       </section>
+
+      {openReadiness && (
+        <ReadinessModal
+          readiness={openReadiness}
+          onClose={() => setOpenReadiness(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+
+// ─── Readiness UI ──────────────────────────────────────────────────
+
+function readinessTone(score: number): {
+  bg: string; ring: string; text: string;
+} {
+  if (score >= 95) return {
+    bg: 'bg-emerald-500/15', ring: 'ring-emerald-500/40', text: 'text-emerald-300',
+  };
+  if (score >= 80) return {
+    bg: 'bg-sky-500/15', ring: 'ring-sky-500/40', text: 'text-sky-300',
+  };
+  if (score >= 60) return {
+    bg: 'bg-amber-500/15', ring: 'ring-amber-500/40', text: 'text-amber-300',
+  };
+  return {
+    bg: 'bg-rose-500/15', ring: 'ring-rose-500/40', text: 'text-rose-300',
+  };
+}
+
+function ReadinessPill({
+  readiness, onClick,
+}: { readiness: PersonReadiness | null; onClick: () => void }) {
+  if (!readiness) {
+    return (
+      <div className="px-2 py-1 rounded-md text-xs bg-bg/60 text-fg-muted ring-1 ring-white/5 text-center">
+        Calcolo riconoscimento…
+      </div>
+    );
+  }
+  const tone = readinessTone(readiness.overall);
+  const icon =
+    readiness.overall >= 95 ? '🎯'
+    : readiness.overall >= 80 ? '✓'
+    : readiness.overall >= 60 ? '◐'
+    : '!';
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left px-2 py-1.5 rounded-md text-xs ring-1 transition cursor-pointer hover:brightness-125 ${tone.bg} ${tone.ring} ${tone.text}`}
+      title="Apri dettagli riconoscimento"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono font-semibold">
+          {icon} {readiness.overall}%
+        </span>
+        <span className="text-[10px] opacity-80">
+          {readiness.metrics.reference_count} foto
+        </span>
+      </div>
+      <div className="text-[10px] opacity-90 mt-0.5 truncate">
+        {readiness.verdict}
+      </div>
+    </button>
+  );
+}
+
+function ReadinessModal({
+  readiness, onClose,
+}: { readiness: PersonReadiness; onClose: () => void }) {
+  const tone = readinessTone(readiness.overall);
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="rounded-2xl bg-bg-elevated ring-1 ring-white/10 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-fg-muted text-xs uppercase tracking-wide">
+              Riconoscimento facciale
+            </div>
+            <div className="text-xl font-semibold">{readiness.name}</div>
+          </div>
+          <button
+            onClick={onClose}
+            className="px-2 py-1 text-fg-muted hover:text-fg"
+            aria-label="Chiudi"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Big overall gauge */}
+        <div className={`rounded-xl ${tone.bg} ring-1 ${tone.ring} px-5 py-4 flex items-center gap-4`}>
+          <div className="relative w-20 h-20 shrink-0">
+            <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+              <circle
+                cx="18" cy="18" r="15.9155"
+                fill="none" stroke="currentColor" strokeOpacity="0.2"
+                strokeWidth="3"
+              />
+              <circle
+                cx="18" cy="18" r="15.9155"
+                fill="none" stroke="currentColor"
+                strokeWidth="3" strokeLinecap="round"
+                strokeDasharray={`${readiness.overall} 100`}
+                className={tone.text}
+              />
+            </svg>
+            <div className={`absolute inset-0 flex items-center justify-center font-mono font-bold text-lg ${tone.text}`}>
+              {readiness.overall}%
+            </div>
+          </div>
+          <div>
+            <div className={`font-medium ${tone.text}`}>{readiness.verdict}</div>
+            <div className="text-xs text-fg-muted mt-1">
+              {readiness.metrics.reference_count} foto di riferimento
+              {readiness.metrics.sampled_for_pairs < readiness.metrics.reference_count &&
+                ` · ${readiness.metrics.sampled_for_pairs} campionate per la diversità`}
+            </div>
+          </div>
+        </div>
+
+        {/* Sub-scores */}
+        <div className="grid grid-cols-3 gap-2">
+          <SubScoreCell
+            label="Copertura"
+            score={readiness.scores.coverage}
+            hint="quante foto"
+          />
+          <SubScoreCell
+            label="Diversità"
+            score={readiness.scores.diversity}
+            hint="varietà angoli/luce"
+          />
+          <SubScoreCell
+            label="Distinzione"
+            score={readiness.scores.discriminability}
+            hint="vs altre persone"
+          />
+        </div>
+
+        {/* Suggestions */}
+        {readiness.suggestions.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-fg-muted text-xs uppercase tracking-wide">
+              Per migliorare
+            </div>
+            {readiness.suggestions.map((s, i) => (
+              <div
+                key={i}
+                className={`rounded-lg px-3 py-2 text-sm ring-1 ${
+                  s.priority === 'high'
+                    ? 'bg-amber-500/10 ring-amber-500/30 text-amber-100'
+                    : s.priority === 'medium'
+                      ? 'bg-sky-500/10 ring-sky-500/30 text-sky-100'
+                      : 'bg-emerald-500/10 ring-emerald-500/30 text-emerald-100'
+                }`}
+              >
+                <div className="font-medium">{s.text}</div>
+                {s.detail && (
+                  <div className="text-xs opacity-80 mt-0.5">{s.detail}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Raw metrics — small + dev-friendly */}
+        <details className="text-xs text-fg-muted">
+          <summary className="cursor-pointer hover:text-fg">
+            Dettagli numerici
+          </summary>
+          <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 font-mono">
+            <dt className="opacity-70">tolleranza match</dt>
+            <dd>{readiness.metrics.match_tolerance.toFixed(2)}</dd>
+            {readiness.metrics.intra_mean_distance !== null && (
+              <>
+                <dt className="opacity-70">distanza media intra-classe</dt>
+                <dd>{readiness.metrics.intra_mean_distance.toFixed(3)}</dd>
+              </>
+            )}
+            {readiness.metrics.intra_max_distance !== null && (
+              <>
+                <dt className="opacity-70">distanza max intra-classe</dt>
+                <dd>{readiness.metrics.intra_max_distance.toFixed(3)}</dd>
+              </>
+            )}
+            {readiness.metrics.closest_other_distance !== null && (
+              <>
+                <dt className="opacity-70">
+                  distanza min vs {readiness.metrics.closest_other_name ?? '—'}
+                </dt>
+                <dd>{readiness.metrics.closest_other_distance.toFixed(3)}</dd>
+              </>
+            )}
+          </dl>
+        </details>
+      </div>
+    </div>
+  );
+}
+
+function SubScoreCell({
+  label, score, hint,
+}: { label: string; score: number; hint: string }) {
+  const tone = readinessTone(score);
+  return (
+    <div className={`rounded-lg ${tone.bg} ring-1 ${tone.ring} px-3 py-2`}>
+      <div className={`font-mono font-semibold ${tone.text}`}>{score}%</div>
+      <div className="text-fg text-xs mt-0.5">{label}</div>
+      <div className="text-fg-muted text-[10px]">{hint}</div>
     </div>
   );
 }

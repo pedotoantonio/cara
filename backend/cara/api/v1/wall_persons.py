@@ -312,6 +312,35 @@ async def create_person(
     return _row_to_out(created)
 
 
+@router.get("/{person_id}/readiness")
+async def person_readiness(
+    person_id: int,
+    _lan: None = Depends(require_lan),  # noqa: B008
+) -> dict[str, Any]:
+    """Recognition readiness for an enrolled person.
+
+    Heavy lifting (pairwise distance matrix on 128-dim encodings) lives
+    in frigate-faces — it owns the encoding store and has numpy +
+    face_recognition already loaded. This route just proxies + LAN-gates.
+
+    Returns 404 if the person doesn't exist (frigate-faces says so),
+    503 if frigate-faces is unreachable. The body shape is documented
+    in `frigate-faces/app.py::compute_readiness`.
+    """
+    out = await ff.get_readiness(person_id)
+    if out is None:
+        # We can't distinguish 404 from network failure cleanly without
+        # changing the FF client signature; fall back to 404 since the
+        # vastly more common case is "person never created" and a
+        # missing recognition surface is a recoverable UX, not a fatal
+        # one.
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "persona non trovata o frigate-faces non raggiungibile",
+        )
+    return out
+
+
 @router.get("/{person_id}/photo")
 async def person_photo(
     person_id: int,
