@@ -44,6 +44,8 @@ celery_app = Celery(
         "cara.agents.files",
         "cara.agents.learn",
         "cara.agents.presence",
+        "cara.agents.watchdog",
+        "cara.agents.health",
     ],
 )
 
@@ -54,6 +56,8 @@ celery_app.conf.update(
         "cara.agents.files.*": {"queue": "files"},
         "cara.agents.learn.*": {"queue": "learn"},
         "cara.agents.presence.*": {"queue": "presence"},
+        "cara.agents.watchdog.*": {"queue": "learn"},  # docker socket mounted there
+        "cara.agents.health.*": {"queue": "learn"},     # functional probes share the learn worker
     },
     task_serializer="json",
     accept_content=["json"],
@@ -107,6 +111,21 @@ celery_app.conf.beat_schedule = {
     "reflective-batch-weekly": {
         "task": "cara.agents.learn.reflective_run",
         "schedule": crontab(hour=4, minute=0, day_of_week="sunday"),
+    },
+    # Watchdog — opt-in per `wall_watchdog_enabled` setting. Cheap
+    # (~14 docker inspect calls), runs on the learn worker which has
+    # the docker socket mounted.
+    "watchdog-tick-every-30-sec": {
+        "task": "cara.agents.watchdog.tick",
+        "schedule": 30,
+    },
+    # Health agent — functional probes against every dep + key feature.
+    # 5 minutes is a good cadence: cheap (~5 s total), and gives a fast
+    # signal when something silently breaks (e.g. Open-Meteo outage,
+    # token revoked, NPU stuck). Result is read by /wall/services/health.
+    "health-tick-every-5-min": {
+        "task": "cara.agents.health.tick",
+        "schedule": 5 * 60,
     },
 }
 

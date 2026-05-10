@@ -125,6 +125,7 @@ services:
       - ./data/tts:/app/tts                      # Piper voice ONNX files (auto-downloaded)
       - ./data/whisper-cache:/app/whisper-cache  # Whisper STT model cache
       - /home/apedo/cara-poc-rkllm/runtime-v1.1.0/lib/librkllmrt.so:/usr/lib/rkllm/librkllmrt.so:ro
+      - /var/run/docker.sock:/var/run/docker.sock  # /wall/services + watchdog
     environment:
       LD_LIBRARY_PATH: /usr/lib/rkllm
       LLM_MODEL_PATH: /app/models/qwen2.5-1.5b-instruct-w8a8.rkllm
@@ -239,6 +240,8 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       redis:    {condition: service_healthy}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # watchdog auto-recovery
     environment:
       LLM_ENABLED: "false"
     # Worker doesn't serve HTTP — drop the inherited backend healthcheck.

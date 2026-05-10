@@ -295,6 +295,108 @@ export interface WallFaceCheckResult {
   cooldown_sec: number;
 }
 
+// ─── Service board ─────────────────────────────────────────────────
+
+export type WallServiceColor = 'green' | 'yellow' | 'red' | 'gray';
+
+export interface WallService {
+  name: string;
+  label: string;
+  category: string;
+  role: 'stateless' | 'stateful';
+  exists: boolean;
+  color: WallServiceColor;
+  status: string;
+  running: boolean;
+  started_at: string | null;
+  finished_at: string | null;
+  exit_code: number | null;
+  restart_count: number;
+  image: string | null;
+}
+
+export interface WallServicesSnapshot {
+  items: WallService[];
+  summary: { green: number; yellow: number; red: number; gray: number };
+}
+
+export function fetchServices(): Promise<WallServicesSnapshot> {
+  return getJson<WallServicesSnapshot>('/services');
+}
+
+// ─── Health probes ────────────────────────────────────────────────
+
+export type HealthStatus = 'ok' | 'warn' | 'fail' | 'unknown';
+
+export interface HealthProbe {
+  name: string;
+  label: string;
+  status: HealthStatus;
+  last_check_at: string | null;
+  last_ok_at: string | null;
+  fail_streak: number;
+  duration_ms: number | null;
+  error: string;
+}
+
+export interface HealthSnapshot {
+  items: HealthProbe[];
+  summary: { ok: number; warn: number; fail: number; unknown: number };
+}
+
+export function fetchHealth(): Promise<HealthSnapshot> {
+  return getJson<HealthSnapshot>('/services/health');
+}
+
+export async function runHealthNow(): Promise<HealthSnapshot> {
+  const r = await fetch(`${API}/services/health/run`, {
+    method: 'POST',
+    credentials: 'omit',
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return await r.json();
+}
+
+export interface WallWatchdogStatus {
+  enabled: boolean;
+  min_bad_ticks: number;
+  escalate_bad_ticks: number;
+}
+
+export function fetchWatchdog(): Promise<WallWatchdogStatus> {
+  return getJson<WallWatchdogStatus>('/services/watchdog');
+}
+
+export async function setWatchdog(enabled: boolean): Promise<{ enabled: boolean }> {
+  const r = await fetch(`${API}/services/watchdog`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'omit',
+    body: JSON.stringify({ enabled }),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return await r.json();
+}
+
+export async function serviceAction(
+  name: string,
+  action: 'start' | 'stop' | 'restart',
+): Promise<{ name: string; action: string; ok: boolean; color: WallServiceColor; status: string }> {
+  const r = await fetch(`${API}/services/${encodeURIComponent(name)}/${action}`, {
+    method: 'POST',
+    credentials: 'omit',
+  });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try {
+      const j = await r.json();
+      detail = j.detail ?? detail;
+    } catch {/* ignore */}
+    throw new Error(detail);
+  }
+  return await r.json();
+}
+
 export async function checkFaceFromDevice(blob: Blob): Promise<WallFaceCheckResult> {
   const fd = new FormData();
   fd.append('image', blob, 'frame.jpg');

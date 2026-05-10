@@ -169,6 +169,20 @@ DEFAULTS: dict[str, Any] = {
     "wall_enabled": True,
     "wall_idle_carousel_enabled": False,
     "wall_silent_hours_dim": True,
+    # ── Watchdog auto-recovery (Wall → Servizi) ─────────────────────────
+    # `wall_watchdog_enabled=True` lets the learn worker auto-restart
+    # services that go red/yellow for ≥ `min_bad_ticks` consecutive
+    # 30 s ticks. Single-host: this is what stands in for "cluster mode"
+    # — there is no second physical node to fail over to.
+    "wall_watchdog_enabled": False,
+    "wall_watchdog_min_bad_ticks": 2,
+    "wall_watchdog_escalate_bad_ticks": 6,
+    # ── Health agent (functional probes) ────────────────────────────
+    # Runs 9 internal probes every 5 min: db, redis, chroma, minio,
+    # frigate, frigate-faces, telegram bot, wall summary loopback,
+    # open-meteo. Telegram alert when a probe fails N consecutive ticks.
+    "wall_health_enabled": True,
+    "wall_health_alert_streak": 2,
 }
 
 
