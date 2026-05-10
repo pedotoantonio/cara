@@ -144,6 +144,16 @@ async def broadcast_to_admins(
     from cara.models.user import User  # noqa: PLC0415
     from cara.store.db import get_sessionmaker  # noqa: PLC0415
 
+    if isinstance(payload, dict):
+        payload = PushPayload(
+            title=str(payload.get("title", "")),
+            body=str(payload.get("body", "")),
+            tag=payload.get("tag"),
+            url=payload.get("url"),
+            icon=payload.get("icon"),
+            badge=payload.get("badge"),
+        )
+
     sessionmaker = get_sessionmaker()
     delivered_total = 0
     async with sessionmaker() as s:

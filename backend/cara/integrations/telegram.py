@@ -148,11 +148,26 @@ async def _ensure_conversation(chat_id: int, user: User) -> uuid.UUID:
     from cara.services import telegram_mappings as tg_map  # noqa: PLC0415
 
     async with get_sessionmaker()() as session:
-        # Try the persisted pointer first.
+        # Try the persisted pointer first — but verify the Conversation
+        # row still exists. Cascading deletes from `users` (or manual
+        # admin cleanups) can leave the mapping pointing at a UUID that
+        # no longer exists, which would later trip the messages FK with
+        # `ForeignKeyViolationError`. Dangling pointers must be re-bound,
+        # not blindly re-used.
         row = await tg_map.get_by_chat_id(session, chat_id)
         if row is not None and row.conversation_id is not None:
-            _chat_to_convo[chat_id] = row.conversation_id
-            return row.conversation_id
+            existing = await convo_svc.get_conversation(
+                session, row.conversation_id, user_id=user.id,
+            )
+            if existing is not None:
+                _chat_to_convo[chat_id] = row.conversation_id
+                return row.conversation_id
+            logger.warning(
+                "telegram.conversation_orphan",
+                chat_id=chat_id,
+                stale_conversation_id=str(row.conversation_id),
+                user_id=user.id,
+            )
 
         # Create a new conversation + persist back to the mapping row.
         convo = await convo_svc.create_conversation(
@@ -1183,11 +1198,32 @@ async def send_message_to_owners(
         )
 
     bot = _application.bot
+    photo_blob: bytes | None = None
+    if image_url:
+        # Telegram servers cannot reach LAN/docker-internal hosts
+        # (e.g. http://frigate-faces:5051/...) — fetch the bytes here
+        # and upload them inline. python-telegram-bot v22 also rejects
+        # such URLs client-side with "Wrong http url specified".
+        import httpx  # noqa: PLC0415
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                r = await c.get(image_url)
+                r.raise_for_status()
+                photo_blob = r.content
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "telegram.image_fetch_failed",
+                image_url=image_url[:120], error=str(exc),
+            )
+            photo_blob = None
+
     for chat_id in _OWNERS:
         try:
-            if image_url:
+            if photo_blob:
+                from telegram import InputFile  # noqa: PLC0415
                 await bot.send_photo(
-                    chat_id=chat_id, photo=image_url,
+                    chat_id=chat_id,
+                    photo=InputFile(photo_blob, filename="photo.jpg"),
                     caption=text[:1000], parse_mode=parse_mode,
                     reply_markup=reply_markup,
                 )
