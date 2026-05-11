@@ -1,0 +1,31 @@
+[package]
+name = "cara-desktop"
+version = "0.1.0"
+description = "CARA native desktop wrapper"
+authors = ["Antonio Pedoto"]
+edition = "2021"
+
+[lib]
+name = "cara_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.1", features = ["tray-icon"] }
+tauri-plugin-shell = "2.0"
+tauri-plugin-process = "2.0"
+tauri-plugin-window-state = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+# Aggressive size optimisation for a "leggero" install. LTO + codegen-units=1
+# gives a ~30-40% smaller binary than the defaults at the cost of build time
+# (which we eat in CI, not on the user's machine).
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
