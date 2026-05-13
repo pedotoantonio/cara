@@ -24,7 +24,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { listDescriptors, listFaceProfiles } from '../../api/face';
+import { addDescriptors, listDescriptors, listFaceProfiles } from '../../api/face';
 
 import type {
   FaceDetection,
@@ -40,7 +40,6 @@ const MODELS_BASE_URL = '/models/face-api';
 const DOWNSCALE_WIDTH = 480;
 const DOWNSCALE_HEIGHT = 360;
 const DETECTOR_INPUT_SIZE = 320;
-const TARGET_FPS = 5;
 
 // Temporal smoothing: a person must be seen in this many consecutive
 // frames within `IDENTIFY_WINDOW_MS` before we fire `face.identified`.
@@ -54,6 +53,43 @@ const LOST_TIMEOUT_MS = 2000;
 // stays responsive and the avatar doesn't try to address a crowd. 4 is
 // enough for the household configurations we care about.
 const MAX_TRACKED_FACES = 4;
+
+// ── Adaptive frame loop ──────────────────────────────────────────────
+// We don't run on a fixed setInterval — instead we re-schedule each
+// frame based on the moving average of the last N worker durations.
+// On a slow device (Pi-class, heavy frigate load) we settle around
+// 3-4 FPS; on an M1 the loop tops out at MIN_INTERVAL_MS = 50 ms (20 FPS).
+const MIN_INTERVAL_MS = 50;           // hard ceiling at ~20 FPS
+const MAX_INTERVAL_MS = 1000;         // hard floor at 1 FPS
+const DEFAULT_INTERVAL_MS = 200;      // 5 FPS — the spec's "watch" mode
+const SLOW_THRESHOLD_MS = 200;        // average > this → slow down
+const FAST_THRESHOLD_MS = 80;         // average < this → speed up
+const DURATION_BUFFER_SIZE = 10;      // rolling window for the average
+
+// ── Idle mode ────────────────────────────────────────────────────────
+// After IDLE_AFTER_MS with no detected face we throttle to IDLE_INTERVAL_MS
+// (1 FPS). The first detection above the idle threshold snaps us back
+// to the adaptive rate so the user doesn't notice a lag on return.
+const IDLE_AFTER_MS = 30_000;
+const IDLE_INTERVAL_MS = 1000;        // 1 FPS while no one is around
+
+// ── Anti-spoofing (sec. 14) ──────────────────────────────────────────
+// A photo of a face has zero micro-movement. Real heads jitter at least
+// a few pixels per second from blinking + posture shift. We track the
+// centroid of the primary detection over a ~1 s window and require its
+// max - min to exceed STATIC_PIXEL_THRESHOLD on at least one axis. Below
+// that we suspect a printed photo and refuse to confirm an identity.
+const STATIC_SAMPLE_WINDOW_MS = 1000;
+const STATIC_PIXEL_THRESHOLD = 3;     // in source-frame px (480x360)
+
+// ── Continuous learning (sec. 11.3) ──────────────────────────────────
+// Every CONTINUOUS_CAPTURE_EVERY consecutive confirmed frames for the
+// same primary profile, we POST the latest descriptor as
+// source='continuous'. This widens the descriptor cluster over months
+// (haircut, beard, lighting). Throttled per-run so we don't hammer the
+// backend on a long conversation.
+const CONTINUOUS_CAPTURE_EVERY = 50;
+const CONTINUOUS_MIN_QUALITY = 0.7;
 
 interface ConfirmationTracker {
   /** Most recent N timestamps for the same identity. */
@@ -75,6 +111,14 @@ interface FaceApi {
   confirmedIdentity: FaceIdentity | null;
   /** Last frame processing time, ms. */
   lastDurationMs: number;
+  /** Current capture interval (ms). Surfaces use this to show the
+   *  effective FPS in a diagnostics panel. */
+  currentIntervalMs: number;
+  /** True while we're in 1-FPS power-save mode (no faces for >30 s). */
+  idle: boolean;
+  /** True when the primary face has been static for > 1 s — likely a
+   *  printed photo. We suppress identity confirmation in this state. */
+  spoofingSuspected: boolean;
   /** True once tinyFaceDetector finished loading. */
   modelsReady: boolean;
   /** True once landmark + recognition nets are loaded. */
@@ -116,11 +160,29 @@ export function FaceProvider({ children }: { children: ReactNode }) {
   const [lastError, setLastError] = useState<string | null>(null);
   const [primarySubject, setPrimarySubject] = useState<FaceIdentity | null>(null);
   const [companions, setCompanions] = useState<FaceIdentity[]>([]);
+  const [currentIntervalMs, setCurrentIntervalMs] = useState(DEFAULT_INTERVAL_MS);
+  const [idle, setIdle] = useState(false);
+  const [spoofingSuspected, setSpoofingSuspected] = useState(false);
 
   // Smoothing state, kept in refs so it doesn't re-render on every update.
   const trackersRef = useRef<Map<string, ConfirmationTracker>>(new Map());
   const lastSeenAtRef = useRef<Map<string, number>>(new Map());
   const lostTimerRef = useRef<number | null>(null);
+
+  // Performance + idle state — also refs so they don't trigger re-renders.
+  const durationBufferRef = useRef<number[]>([]);
+  const adaptiveIntervalRef = useRef(DEFAULT_INTERVAL_MS);
+  const idleRef = useRef(false);
+  const lastFaceSeenAtRef = useRef<number>(performance.now());
+
+  // Anti-spoofing: rolling centroid samples for the primary detection.
+  const centroidSamplesRef = useRef<{ t: number; cx: number; cy: number }[]>([]);
+  const spoofingRef = useRef(false);
+
+  // Continuous learning: per-profile consecutive-confirmed-frame counter.
+  // We POST a new descriptor every CONTINUOUS_CAPTURE_EVERY hits.
+  const continuousCounterRef = useRef<Map<string, number>>(new Map());
+  const continuousInflightRef = useRef<Set<string>>(new Set());
 
   // Local event bus — Set so handlers can be added/removed cheaply.
   const handlersRef = useRef<Set<FaceEventHandler>>(new Set());
@@ -164,6 +226,115 @@ export function FaceProvider({ children }: { children: ReactNode }) {
 
   const computeArea = (d: FaceDetection) => d.box.width * d.box.height;
 
+  /**
+   * Push the primary face centroid into the rolling sample buffer and
+   * decide whether the head is moving enough to count as a real person
+   * (vs. a photo held up to the camera).
+   */
+  const updateSpoofingSignal = useCallback(
+    (primary: FaceDetection | null, now: number): boolean => {
+      const samples = centroidSamplesRef.current;
+      // Drop samples older than the rolling window.
+      while (samples.length > 0 && now - samples[0].t > STATIC_SAMPLE_WINDOW_MS) {
+        samples.shift();
+      }
+      if (primary == null) {
+        // Without a primary we can't decide either way. Don't keep the
+        // last "static" verdict stuck — clear it. We won't confirm a new
+        // identity until we have fresh samples anyway.
+        if (spoofingRef.current) {
+          spoofingRef.current = false;
+          setSpoofingSuspected(false);
+        }
+        return false;
+      }
+      const cx = primary.box.x + primary.box.width / 2;
+      const cy = primary.box.y + primary.box.height / 2;
+      samples.push({ t: now, cx, cy });
+
+      // We need at least a few samples spread across the window before
+      // calling a face "static" — a fresh detection is always static.
+      if (samples.length < 4 || now - samples[0].t < STATIC_SAMPLE_WINDOW_MS * 0.7) {
+        return spoofingRef.current;
+      }
+      let minX = Infinity,
+        maxX = -Infinity,
+        minY = Infinity,
+        maxY = -Infinity;
+      for (const s of samples) {
+        if (s.cx < minX) minX = s.cx;
+        if (s.cx > maxX) maxX = s.cx;
+        if (s.cy < minY) minY = s.cy;
+        if (s.cy > maxY) maxY = s.cy;
+      }
+      const isStatic =
+        maxX - minX < STATIC_PIXEL_THRESHOLD &&
+        maxY - minY < STATIC_PIXEL_THRESHOLD;
+      if (isStatic !== spoofingRef.current) {
+        spoofingRef.current = isStatic;
+        setSpoofingSuspected(isStatic);
+      }
+      return isStatic;
+    },
+    [],
+  );
+
+  /**
+   * Continuous learning — every CONTINUOUS_CAPTURE_EVERY frames where the
+   * same profile is the *single confirmed primary*, capture the current
+   * descriptor as source='continuous'. Throttled per (profileId, run)
+   * with inflight tracking so a slow POST can't trigger a second one.
+   */
+  const maybeCaptureContinuous = useCallback(
+    (primary: FaceDetection | null) => {
+      if (!primary?.identity || !primary?.descriptor) {
+        // Reset all counters when the primary is absent or unknown — we
+        // don't want a long unknown stretch to accidentally tip the
+        // counter past the threshold once a profile reappears.
+        if (continuousCounterRef.current.size > 0) {
+          continuousCounterRef.current.clear();
+        }
+        return;
+      }
+      const pid = primary.identity.profileId;
+      const next = (continuousCounterRef.current.get(pid) ?? 0) + 1;
+      continuousCounterRef.current.set(pid, next);
+
+      if (next < CONTINUOUS_CAPTURE_EVERY) return;
+      if (continuousInflightRef.current.has(pid)) return;
+
+      // Compute a coarse quality from the detector score + a 1.0 bonus
+      // when the box is sufficiently large.
+      const areaRatio =
+        (primary.box.width * primary.box.height) /
+        (DOWNSCALE_WIDTH * DOWNSCALE_HEIGHT);
+      const quality = Math.min(
+        1,
+        primary.score * Math.min(1, areaRatio / 0.2),
+      );
+      if (quality < CONTINUOUS_MIN_QUALITY) {
+        // Quality too low — wait for a better frame, but don't fire.
+        // Reset the counter so we re-arm rather than spam on every frame.
+        continuousCounterRef.current.set(pid, 0);
+        return;
+      }
+
+      continuousInflightRef.current.add(pid);
+      continuousCounterRef.current.set(pid, 0);
+      const descriptor = Array.from(primary.descriptor);
+      void addDescriptors(pid, [
+        { descriptor, source: 'continuous', quality },
+      ])
+        .catch((err) => {
+          setLastError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          continuousInflightRef.current.delete(pid);
+        });
+    },
+    [],
+  );
+
   const onDetections = useCallback(
     (incoming: FaceDetection[]) => {
       const now = performance.now();
@@ -174,14 +345,29 @@ export function FaceProvider({ children }: { children: ReactNode }) {
         .sort((a, b) => computeArea(b) - computeArea(a))
         .slice(0, MAX_TRACKED_FACES);
 
-      if (ordered.length === 0) {
+      // Update last-face-seen + flip out of idle on first detection.
+      if (ordered.length > 0) {
+        lastFaceSeenAtRef.current = now;
+        if (idleRef.current) {
+          idleRef.current = false;
+          setIdle(false);
+        }
+      } else {
         scheduleLostCheck();
       }
 
-      for (const d of ordered) {
+      // Anti-spoofing: only the primary's centroid feeds the variance.
+      // Companions can't spoof — we never confirm them as the addressee.
+      const isStatic = updateSpoofingSignal(ordered[0] ?? null, now);
+
+      for (let i = 0; i < ordered.length; i++) {
+        const d = ordered[i];
         emit({ kind: 'face.detected', trackId: d.trackId, score: d.score });
 
         if (d.identity) {
+          // If the *primary* face is static, treat the identity as
+          // unconfirmed — likely a printed photo of a known person.
+          if (i === 0 && isStatic) continue;
           const pid = d.identity.profileId;
           lastSeenAtRef.current.set(pid, now);
 
@@ -255,9 +441,21 @@ export function FaceProvider({ children }: { children: ReactNode }) {
         return sameOrder ? prev : newCompanions;
       });
 
+      // Continuous learning — only when the primary is confirmed, not
+      // static, and is actually the one we treat as confirmed primary.
+      const primaryDetection = ordered[0] ?? null;
+      const primaryConfirmed =
+        primaryDetection?.identity &&
+        trackersRef.current.get(primaryDetection.identity.profileId)?.confirmed;
+      if (primaryConfirmed && !isStatic) {
+        maybeCaptureContinuous(primaryDetection);
+      } else {
+        maybeCaptureContinuous(null);
+      }
+
       scheduleLostCheck();
     },
-    [emit, scheduleLostCheck],
+    [emit, scheduleLostCheck, updateSpoofingSignal, maybeCaptureContinuous],
   );
 
   const ensureWorker = useCallback(() => {
@@ -284,6 +482,28 @@ export function FaceProvider({ children }: { children: ReactNode }) {
       } else if (msg.type === 'detections') {
         onDetections(msg.detections);
         setLastDurationMs(msg.durationMs);
+        // Feed the adaptive throttle: keep the last DURATION_BUFFER_SIZE
+        // samples, average, and nudge the interval up or down once we
+        // have a full window. The next scheduleNextFrame() will pick up
+        // the new value.
+        const buf = durationBufferRef.current;
+        buf.push(msg.durationMs);
+        if (buf.length > DURATION_BUFFER_SIZE) buf.shift();
+        if (buf.length === DURATION_BUFFER_SIZE) {
+          const avg = buf.reduce((a, b) => a + b, 0) / buf.length;
+          let next = adaptiveIntervalRef.current;
+          if (avg > SLOW_THRESHOLD_MS) {
+            next = Math.min(MAX_INTERVAL_MS, next * 1.3);
+          } else if (avg < FAST_THRESHOLD_MS) {
+            next = Math.max(MIN_INTERVAL_MS, next * 0.85);
+          }
+          if (Math.abs(next - adaptiveIntervalRef.current) > 1) {
+            adaptiveIntervalRef.current = next;
+            if (!idleRef.current) {
+              setCurrentIntervalMs(Math.round(next));
+            }
+          }
+        }
         inflightRef.current = false;
       } else if (msg.type === 'error') {
         setLastError(msg.message);
@@ -369,19 +589,53 @@ export function FaceProvider({ children }: { children: ReactNode }) {
     }
   }, [recognitionReady]);
 
+  /**
+   * Tick = grab a frame, post it, schedule the next tick. The interval
+   * comes from `adaptiveIntervalRef` (auto-tuned) clamped to
+   * `IDLE_INTERVAL_MS` while idle. Recursive setTimeout instead of a
+   * fixed setInterval so changes take effect on the very next tick.
+   */
+  const scheduleNextFrame = useCallback(() => {
+    if (videoRef.current == null) return;
+    const now = performance.now();
+    if (
+      !idleRef.current &&
+      now - lastFaceSeenAtRef.current > IDLE_AFTER_MS
+    ) {
+      idleRef.current = true;
+      setIdle(true);
+      setCurrentIntervalMs(IDLE_INTERVAL_MS);
+    }
+    const intervalMs = idleRef.current
+      ? IDLE_INTERVAL_MS
+      : adaptiveIntervalRef.current;
+    frameTimerRef.current = window.setTimeout(() => {
+      void captureAndPost();
+      scheduleNextFrame();
+    }, intervalMs);
+  }, [captureAndPost]);
+
   const start = useCallback(
     (video: HTMLVideoElement) => {
       videoRef.current = video;
       ensureWorker();
       if (frameTimerRef.current != null) return;
-      frameTimerRef.current = window.setInterval(captureAndPost, 1000 / TARGET_FPS);
+      // Reset adaptive + idle state when (re-)starting so a previous
+      // run's slow timings don't carry over.
+      durationBufferRef.current = [];
+      adaptiveIntervalRef.current = DEFAULT_INTERVAL_MS;
+      idleRef.current = false;
+      lastFaceSeenAtRef.current = performance.now();
+      setIdle(false);
+      setCurrentIntervalMs(DEFAULT_INTERVAL_MS);
+      scheduleNextFrame();
     },
-    [ensureWorker, captureAndPost],
+    [ensureWorker, scheduleNextFrame],
   );
 
   const stop = useCallback(() => {
     if (frameTimerRef.current != null) {
-      window.clearInterval(frameTimerRef.current);
+      window.clearTimeout(frameTimerRef.current);
       frameTimerRef.current = null;
     }
     if (lostTimerRef.current != null) {
@@ -391,9 +645,19 @@ export function FaceProvider({ children }: { children: ReactNode }) {
     videoRef.current = null;
     trackersRef.current.clear();
     lastSeenAtRef.current.clear();
+    centroidSamplesRef.current = [];
+    continuousCounterRef.current.clear();
+    continuousInflightRef.current.clear();
+    spoofingRef.current = false;
+    idleRef.current = false;
+    durationBufferRef.current = [];
+    adaptiveIntervalRef.current = DEFAULT_INTERVAL_MS;
     setDetections([]);
     setPrimarySubject(null);
     setCompanions([]);
+    setSpoofingSuspected(false);
+    setIdle(false);
+    setCurrentIntervalMs(DEFAULT_INTERVAL_MS);
     if (workerRef.current) {
       const msg: FaceWorkerIn = { type: 'shutdown' };
       workerRef.current.postMessage(msg);
@@ -415,7 +679,7 @@ export function FaceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     return () => {
-      if (frameTimerRef.current != null) window.clearInterval(frameTimerRef.current);
+      if (frameTimerRef.current != null) window.clearTimeout(frameTimerRef.current);
       if (lostTimerRef.current != null) window.clearTimeout(lostTimerRef.current);
       if (workerRef.current) workerRef.current.terminate();
     };
@@ -428,6 +692,9 @@ export function FaceProvider({ children }: { children: ReactNode }) {
       companions,
       confirmedIdentity: primarySubject,
       lastDurationMs,
+      currentIntervalMs,
+      idle,
+      spoofingSuspected,
       modelsReady,
       recognitionReady,
       profilesCount,
@@ -443,6 +710,9 @@ export function FaceProvider({ children }: { children: ReactNode }) {
       primarySubject,
       companions,
       lastDurationMs,
+      currentIntervalMs,
+      idle,
+      spoofingSuspected,
       modelsReady,
       recognitionReady,
       profilesCount,
