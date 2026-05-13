@@ -412,24 +412,6 @@ _RULES: list[tuple[re.Pattern[str], str, str, Callable[[re.Match[str]], dict[str
         "Nota salvata.",
         lambda m: {"body": m.group("body").strip()},
     ),
-    # ---- Who is home ------------------------------------------------------
-    (
-        re.compile(
-            r"^(?:cara,?\s*)?"
-            r"(?:chi\s+(?:c'?\s*è|sta|è)\s+"
-            r"(?:in\s+casa(?:\s+(?:adesso|ora|in\s+questo\s+momento))?"
-            r"|adesso\s+in\s+casa|a\s+casa)|"
-            r"c['’]?\s*[èe]\s+qualcuno\s+(?:in\s+casa|a\s+casa)|"
-            r"chi\s+vedi\s+(?:in\s+casa|a\s+casa)|"
-            r"chi\s+è\s+presente|"
-            r"famiglia\s+in\s+casa)"
-            r"\s*[?!.]*$",
-            re.IGNORECASE,
-        ),
-        "who_is_home",
-        "Guardo subito.",
-        lambda m: {},
-    ),
     # ---- Date / time / month / year — answered from runtime context -------
     (
         re.compile(

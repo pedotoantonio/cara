@@ -9,7 +9,6 @@ import { fetchSummary } from '../../api/wall';
 import type { WallSummary } from '../../api/wall';
 import { WallAvatarPanel } from '../../components/wall/WallAvatarPanel';
 import { WallClock } from '../../components/wall/WallClock';
-import { WallDeviceCam } from '../../components/wall/WallDeviceCam';
 import { WallMic } from '../../components/wall/WallMic';
 import { WeatherIcon } from '../../components/wall/WeatherIcon';
 
@@ -19,7 +18,6 @@ const TABS = [
   { to: '/wall/calendar', label: 'Mese', end: false },
   { to: '/wall/shopping', label: 'Spesa', end: false },
   { to: '/wall/services', label: 'Servizi', end: false },
-  { to: '/wall/persons', label: 'Famiglia', end: false },
 ];
 
 function HeaderMeta({ summary }: { summary: WallSummary | null }) {
@@ -103,7 +101,6 @@ export function WallShell() {
         <div className="flex flex-col items-center gap-3">
           <WallAvatarPanel size={156} />
           <WallMic />
-          <WallDeviceCam />
         </div>
         <div className="flex justify-end">
           <HeaderMeta summary={summary} />

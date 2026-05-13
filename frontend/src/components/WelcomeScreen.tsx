@@ -1,8 +1,5 @@
-import { useEffect, useState } from 'react';
-
-import { whoIsHome, type PersonAtHome } from '../api/family';
 import { useReactions } from '../lib/reactions';
-import { Badge, Icon, cn } from '../design';
+import { Icon, cn } from '../design';
 import { CaraFaceFX } from './CaraFaceFX';
 
 interface WelcomeScreenProps {
@@ -14,7 +11,6 @@ const SUGGESTIONS = [
   { label: 'Chi sei?',          prompt: 'Ciao Cara, chi sei?',                        icon: 'mood'    as const },
   { label: 'Cosa puoi fare?',   prompt: 'Cosa sai fare? Dimmi tutte le tue funzionalità.', icon: 'sparkle' as const },
   { label: 'Aggiungi una task', prompt: 'Ricordami di comprare il pane domani.',        icon: 'task'    as const },
-  { label: 'Chi è in casa?',    prompt: 'Chi è in casa adesso?',                        icon: 'family'  as const },
   { label: 'Le news di oggi',   prompt: 'Quali sono le notizie principali del mondo oggi?', icon: 'news' as const },
   { label: 'Memoria',           prompt: 'Riesci a ricordare le cose che ti dico durante la conversazione? Fammi un esempio.', icon: 'spark' as const },
   { label: 'Roadmap',           prompt: 'Quali funzionalità arriveranno in futuro? Cosa avrai presto?', icon: 'calendar' as const },
@@ -23,34 +19,8 @@ const SUGGESTIONS = [
 const HINTS = [
   { icon: 'chat'   as const, text: 'Chiacchiera in italiano, con memoria della conversazione.' },
   { icon: 'task'   as const, text: 'Crea task, lista spesa, note rapide con la voce o il testo.' },
-  { icon: 'family' as const, text: 'Sa chi è in casa e si adatta al ruolo di chi le parla.' },
+  { icon: 'family' as const, text: 'Riconosce chi è davanti alla camera e adatta il profilo.' },
 ];
-
-function PresenceBadge() {
-  const [people, setPeople] = useState<PersonAtHome[] | null>(null);
-  const [available, setAvailable] = useState(true);
-
-  useEffect(() => {
-    whoIsHome(15)
-      .then((r) => setPeople(r.people))
-      .catch(() => setAvailable(false));
-  }, []);
-
-  if (!available || people === null) return null;
-  if (people.length === 0) {
-    return (
-      <Badge tone="muted" dot size="sm">
-        nessuno in casa al momento
-      </Badge>
-    );
-  }
-  const names = people.map((p) => p.name).join(', ');
-  return (
-    <Badge tone="ok" dot size="sm">
-      in casa: {names}
-    </Badge>
-  );
-}
 
 export function WelcomeScreen({ userName, onPick }: WelcomeScreenProps) {
   const reactions = useReactions();
@@ -84,9 +54,6 @@ export function WelcomeScreen({ userName, onPick }: WelcomeScreenProps) {
             casa. Posso aiutarti a coordinare la giornata, ricordare quello che conta, e
             ascoltare quando hai bisogno.
           </p>
-          <div className="flex justify-center pt-1">
-            <PresenceBadge />
-          </div>
         </div>
 
         <ul className="text-left text-sm text-fg space-y-2 inline-block">

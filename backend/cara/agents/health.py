@@ -6,9 +6,6 @@ container is up — that's the watchdog's job). Examples:
 
 - `db.select_1` confirms Postgres can take a query end-to-end.
 - `redis.ping` confirms cache + bus are reachable from the worker.
-- `chroma.heartbeat` exercises the vector store HTTP API.
-- `frigate_faces.api_people` confirms the face-recognition service
-  returns the people list (the upstream of presence).
 - `wall.summary` is a loopback probe through nginx-proxy → frontend
   → backend, catching reverse-proxy + auth wiring breakage.
 - `open_meteo.external` proves outbound internet still works.
@@ -106,16 +103,6 @@ async def _probe_minio() -> tuple[str, str]:
         return _FAIL, f"HTTP {r.status_code}"
 
 
-async def _probe_frigate_faces() -> tuple[str, str]:
-    from cara.config import settings  # noqa: PLC0415
-    url = (settings.frigate_faces_url or "http://frigate-faces:5051").rstrip("/")
-    async with httpx.AsyncClient(timeout=5.0) as c:
-        r = await c.get(f"{url}/api/people")
-        if r.status_code == 200:
-            return _OK, ""
-        return _FAIL, f"HTTP {r.status_code}"
-
-
 async def _probe_frigate() -> tuple[str, str]:
     async with httpx.AsyncClient(timeout=5.0) as c:
         r = await c.get("http://frigate:5000/api/stats")
@@ -170,7 +157,6 @@ _PROBES: list[tuple[str, str, ProbeFn]] = [
     ("db",            "PostgreSQL · SELECT 1",     _probe_db),
     ("redis",         "Redis · PING",              _probe_redis),
     ("minio",         "MinIO · /health/live",      _probe_minio),
-    ("frigate_faces", "Frigate Faces · /api/people", _probe_frigate_faces),
     ("frigate",       "Frigate · /api/stats",      _probe_frigate),
     ("wall_summary",  "Backend · /wall/summary",   _probe_wall_summary),
     ("telegram_bot",  "Telegram · getMe",          _probe_telegram_bot),

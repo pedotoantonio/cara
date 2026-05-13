@@ -18,7 +18,6 @@ from cara.api.v1 import (
     diagnostics,
     events,
     face,
-    family,
     family_ws,
     files,
     integrations,
@@ -26,7 +25,6 @@ from cara.api.v1 import (
     news,
     notes,
     oauth,
-    persons,
     proactivity,
     proposals,
     push,
@@ -38,7 +36,6 @@ from cara.api.v1 import (
     tools,
     voice,
     wall,
-    wall_persons,
     wall_services,
     wallet,
     weather,
@@ -62,7 +59,6 @@ router.include_router(devices.router)
 router.include_router(diagnostics.router)
 router.include_router(events.router)
 router.include_router(face.router)
-router.include_router(family.router)
 router.include_router(family_ws.router)
 router.include_router(files.router)
 router.include_router(integrations.router)
@@ -70,7 +66,6 @@ router.include_router(memory.router)
 router.include_router(news.router)
 router.include_router(notes.router)
 router.include_router(oauth.router)
-router.include_router(persons.router)
 router.include_router(proactivity.router)
 router.include_router(proposals.router)
 router.include_router(push.router)
@@ -82,7 +77,6 @@ router.include_router(tasks.router)
 router.include_router(tools.router)
 router.include_router(voice.router)
 router.include_router(wall.router)
-router.include_router(wall_persons.router)
 router.include_router(wall_services.router)
 router.include_router(wallet.router)
 router.include_router(weather.router)

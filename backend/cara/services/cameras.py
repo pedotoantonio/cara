@@ -1,20 +1,16 @@
-"""Camera service — wraps Frigate NVR for the admin UI and the family
-presence pipeline.
+"""Camera service — wraps Frigate NVR for the admin UI.
 
 Frigate is the source of truth for the camera list (defined in its own
 YAML config). CARA only stores per-camera overrides — display label,
 area binding, "presence_relevant" flag, motion-notification flag — in
 `admin_settings["cameras"]`.
 
-Two read paths:
-- `list_cameras()` — admin "Telecamere" panel: Frigate camera ids merged
-  with CARA's overrides + last-frame snapshot URLs.
-- `recent_person_events()` — used by `family/who-is-home` as a fallback
-  when no face match was seen recently: "vedo movimento ma non riconosco
-  il volto".
+Read path: `list_cameras()` powers the admin "Telecamere" panel by
+merging Frigate camera ids with CARA's overrides and last-frame
+snapshot URLs.
 
-All HTTP calls swallow errors and return empty / sensible defaults — the
-chat layer must never 500 because Frigate is down.
+All HTTP calls swallow errors and return empty / sensible defaults —
+the admin panel must never 500 because Frigate is down.
 """
 
 from __future__ import annotations
@@ -176,55 +172,3 @@ async def update_camera_override(
     return current
 
 
-async def recent_person_events(
-    session: AsyncSession,
-    *,
-    window_minutes: int,
-) -> list[PersonEvent]:
-    """Query Frigate /api/events for `person` detections in the last
-    `window_minutes`. Used as a "movement seen but no face matched"
-    fallback by the family presence service.
-    """
-    base = await _frigate_url(session)
-    if not base:
-        return []
-    cutoff = datetime.now(UTC).timestamp() - (window_minutes * 60)
-    params = {
-        "label": "person",
-        "after": cutoff,
-        "limit": 50,
-        "include_thumbnails": 0,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
-            r = await client.get(f"{base}/api/events", params=params)
-            r.raise_for_status()
-            rows = r.json() or []
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("cameras.frigate_events_unreachable", error=str(exc))
-        return []
-
-    overrides = await _camera_overrides(session)
-    out: list[PersonEvent] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        cam_id = row.get("camera")
-        if not cam_id:
-            continue
-        # Skip cameras the admin marked as not presence-relevant.
-        ovr = overrides.get(cam_id)
-        if ovr and ovr.get("presence_relevant") is False:
-            continue
-        try:
-            start = datetime.fromtimestamp(float(row["start_time"]), tz=UTC)
-        except (KeyError, TypeError, ValueError):
-            continue
-        end_ts = row.get("end_time")
-        end = (
-            datetime.fromtimestamp(float(end_ts), tz=UTC)
-            if isinstance(end_ts, (int, float)) else None
-        )
-        out.append(PersonEvent(camera=cam_id, start_time=start, end_time=end))
-    out.sort(key=lambda e: e.start_time, reverse=True)
-    return out

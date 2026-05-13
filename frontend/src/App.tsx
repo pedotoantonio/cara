@@ -53,7 +53,6 @@ function BirthdayWatcher({ user }: { user: User }) {
 import AdminFaceDebugPage from './routes/AdminFaceDebugPage';
 import AdminFacePage from './routes/AdminFacePage';
 import { AdminMemoryPage } from './routes/AdminMemoryPage';
-import { AdminPersonsPage } from './routes/AdminPersonsPage';
 import { AdminTelegramPage } from './routes/AdminTelegramPage';
 import { AdminPage } from './routes/AdminPage';
 import { AdminDevicesPage } from './routes/AdminDevicesPage';
@@ -85,7 +84,6 @@ import { WallCalendarPage } from './routes/wall/WallCalendarPage';
 import { WallWeekPage } from './routes/wall/WallWeekPage';
 import { WallShoppingPage } from './routes/wall/WallShoppingPage';
 import { WallServicesPage } from './routes/wall/WallServicesPage';
-import { WallPersonsPage } from './routes/wall/WallPersonsPage';
 
 type AuthState = { kind: 'loading' } | { kind: 'anonymous' } | { kind: 'authenticated'; user: User };
 
@@ -185,7 +183,6 @@ export default function App() {
                 <Route path="calendar" element={<WallCalendarPage />} />
                 <Route path="shopping" element={<WallShoppingPage />} />
                 <Route path="services" element={<WallServicesPage />} />
-                <Route path="persons" element={<WallPersonsPage />} />
               </Route>
             </Routes>
           </BrowserRouter>
@@ -268,7 +265,6 @@ export default function App() {
           <Route path="admin" element={<AdminPage />} />
           <Route path="admin/diagnostics" element={<DiagnosticsPage />} />
           <Route path="admin/memory" element={<AdminMemoryPage />} />
-          <Route path="admin/persone" element={<AdminPersonsPage />} />
           <Route path="admin/face" element={<AdminFacePage />} />
           <Route path="admin/face/debug" element={<AdminFaceDebugPage />} />
           <Route path="admin/telegram" element={<AdminTelegramPage />} />

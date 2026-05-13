@@ -144,13 +144,8 @@ class Settings(BaseSettings):
         validation_alias="LLM_VALIDATION_PROMPT",
     )
 
-    # frigate-faces integration (face recognition from house cameras).
-    # Empty disables the integration; the family endpoints will return 503.
-    frigate_faces_url: str = Field(
-        default="http://frigate-faces:5051", validation_alias="FRIGATE_FACES_URL"
-    )
-    # Frigate NVR — used for camera discovery and recent-motion fallback when
-    # no face match is available. Same proxy-net DNS, default port 5000.
+    # Frigate NVR — used for camera discovery. Same proxy-net DNS,
+    # default port 5000.
     frigate_url: str = Field(
         default="http://frigate:5000", validation_alias="FRIGATE_URL"
     )
@@ -282,7 +277,6 @@ class Settings(BaseSettings):
             "- [TOOL: list_tasks]                           — lista cose da fare\n"
             "- [TOOL: add_shopping title=\"...\"]             — aggiungi alla spesa\n"
             "- [TOOL: add_note title=\"...\" body=\"...\"]      — salva nota\n"
-            "- [TOOL: who_is_home]                          — chi è in casa\n"
             "- [TOOL: discover query=\"...\" kind=\"...\"]      — cerca su internet "
             "(kind: article|audio_stream|video|podcast|image|document)\n\n"
 
@@ -301,8 +295,6 @@ class Settings(BaseSettings):
             "A: [TOOL: add_shopping title=\"pane\"]\n"
             "[TOOL: add_shopping title=\"latte\"]\n"
             "[TOOL: add_shopping title=\"uova\"]\nFatto.\n\n"
-            "U: chi è in casa?\n"
-            "A: [TOOL: who_is_home]\nGuardo subito.\n\n"
             "U: che tempo fa domani a Ferrara?\n"
             "A: [TOOL: discover query=\"meteo Ferrara domani\" kind=\"article\"]\nVado a vedere.\n\n"
             "U: cos'è la fusione fredda?\n"

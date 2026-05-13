@@ -24,7 +24,7 @@ const FEATURE_FLAGS: Array<{ key: string; label: string; help: string }> = [
   { key: 'habit_learning_enabled', label: 'Autoapprendimento abitudini', help: 'Riservato (Estensione 1)' },
   { key: 'proactive_suggestions_enabled', label: 'Suggerimenti proattivi', help: 'Riservato' },
   { key: 'telegram_bot_enabled', label: 'Telegram bot', help: 'Richiede CARA_TELEGRAM_BOT_TOKEN' },
-  { key: 'facial_recognition_enabled', label: 'Riconoscimento facciale', help: 'Integrazione frigate-faces' },
+  { key: 'facial_recognition_enabled', label: 'Riconoscimento facciale', help: 'Pipeline on-device (face-api.js)' },
   { key: 'voice_recognition_enabled', label: 'Riconoscimento vocale', help: 'STT browser-side' },
   { key: 'smart_home_enabled', label: 'Smart home', help: 'Riservato' },
   { key: 'push_notifications_enabled', label: 'Notifiche push PWA', help: 'Riservato' },
@@ -266,6 +266,7 @@ export function AdminPage() {
         {/* Quick nav to deep admin pages */}
         <nav className="flex flex-wrap gap-2 text-xs">
           {[
+            { to: '/admin/face',        label: 'Volti' },
             { to: '/admin/skills',      label: 'Skill Factory' },
             { to: '/admin/memory',      label: 'Memoria' },
             { to: '/admin/smart-home',  label: 'Smart Home' },

@@ -312,7 +312,7 @@ async def _on_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         f"Ciao {name}, sono CARA 🤖\n\n"
         "Scrivimi qualunque cosa (es. \"che tempo fa\", \"appuntamenti settimana prossima\", "
         "\"aggiungi pane alla spesa\") e ti rispondo come dal web.\n\n"
-        "Comandi rapidi: /oggi /domani /spesa /note /meteo /casa /cam /help\n",
+        "Comandi rapidi: /oggi /domani /spesa /note /meteo /cam /help\n",
     )
 
 
@@ -742,10 +742,6 @@ async def _on_meteo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_phrase(update, phrase)
 
 
-async def _on_casa(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await _run_phrase(update, "chi è in casa")
-
-
 async def _on_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     args = ctx.args or []
     cat = " ".join(args).strip() if args else ""
@@ -884,8 +880,7 @@ async def _on_cam(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     args = ctx.args or []
     if not args:
         await chat.send_message(
-            "Uso: /cam <id>  (es. /cam cam_194 oppure /cam ingresso)\n"
-            "Usa /casa per vedere chi è in casa."
+            "Uso: /cam <id>  (es. /cam cam_194 oppure /cam ingresso)"
         )
         return
     raw = " ".join(args).strip()
@@ -1029,7 +1024,6 @@ async def _on_help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "/task &lt;descrizione&gt; — nuovo task\n\n"
         "🌤️ <b>Casa</b>\n"
         "/meteo [città] — meteo (Ferrara di default)\n"
-        "/casa — chi è in casa\n"
         "/cam &lt;id&gt; — foto camera (es. /cam cam_194)\n\n"
         "💬 <b>Chat libera</b>\n"
         "Scrivimi qualsiasi cosa — userò CARA come dal web\n\n"
@@ -1078,35 +1072,14 @@ async def _edit_resolved(query, suffix: str) -> None:  # type: ignore[no-untyped
 
 
 async def _cb_presence_ignore(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
-    if not args:
-        await _edit_resolved(query, "⚠ Argomento mancante")
-        return
-    sighting_id = int(args[0])
-    from cara.services import frigate_faces_admin as ff  # noqa: PLC0415
-    ok = await ff.ignore_sighting(sighting_id)
-    await _edit_resolved(
-        query,
-        "🚫 Ignorato" if ok else "⚠ Impossibile ignorare (frigate-faces non risponde)",
-    )
+    # The old frigate-faces sighting backend is gone; presence is now
+    # client-side in the browser via face-api.js. The inline buttons on
+    # legacy notifications are inert.
+    await _edit_resolved(query, "⚠ Funzione non più disponibile")
 
 
 async def _cb_presence_assign(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
-    if len(args) < 2:
-        await _edit_resolved(query, "⚠ Argomenti mancanti")
-        return
-    sighting_id = int(args[0])
-    person_id = int(args[1])
-    from cara.services import frigate_faces_admin as ff  # noqa: PLC0415
-    person = await ff.get_person(person_id)
-    name = (person or {}).get("name") if person else None
-    if not name:
-        await _edit_resolved(query, "⚠ Persona non trovata")
-        return
-    ok = await ff.identify_sighting_with_name(sighting_id, str(name))
-    await _edit_resolved(
-        query,
-        f"👤 Riconosciuto come <b>{name}</b>" if ok else "⚠ Riconoscimento fallito",
-    )
+    await _edit_resolved(query, "⚠ Funzione non più disponibile")
 
 
 async def _cb_task_done(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
@@ -1224,7 +1197,6 @@ async def start_telegram_bot() -> None:
     app.add_handler(CommandHandler("settimana", _on_settimana))
     app.add_handler(CommandHandler("appuntamenti", _on_appuntamenti))
     app.add_handler(CommandHandler("meteo", _on_meteo))
-    app.add_handler(CommandHandler("casa", _on_casa))
     app.add_handler(CommandHandler("news", _on_news))
     app.add_handler(CommandHandler(["spesa", "lista"], _on_spesa_v2))
     app.add_handler(CommandHandler(["note", "nota"], _on_note))

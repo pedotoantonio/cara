@@ -121,11 +121,9 @@ DEFAULTS: dict[str, Any] = {
     # HomeAssistant adapter (used when smart_home_enabled=True).
     "ha_url": None,
     "ha_token": None,
-    # Frigate NVR + frigate-faces (referenced by widgets + presence).
-    # When None, the runtime falls back to `cara.config.settings`
-    # (`http://frigate:5000`, `http://frigate-faces:5051`).
+    # Frigate NVR. When None the runtime falls back to
+    # `cara.config.settings.frigate_url` (`http://frigate:5000`).
     "frigate_url": None,
-    "frigate_faces_url": None,
     # Per-camera overrides, keyed by Frigate camera id (e.g. "cam_194").
     # Each entry: {"label": "Ingresso", "area": "ingresso",
     #              "presence_relevant": True, "notify_motion": False}.
@@ -146,12 +144,6 @@ DEFAULTS: dict[str, Any] = {
     # access (Cloudflare Tunnel, port forward) is unaffected. Flip to
     # False if you later want to enforce credential auth even at home.
     "lan_auto_login_enabled": True,
-    # Presence agent — face arrivals via frigate-faces poll.
-    "presence_greeting_enabled": True,
-    "presence_greeting_cooldown_min_known": 30,
-    "presence_greeting_cooldown_min_unknown": 5,
-    "presence_greeting_silent_hours": [22, 8],     # local Europe/Rome
-    "presence_push_enabled": True,
     # Notification dispatcher — per-channel master switches.
     "notify_telegram_enabled": True,
     "notify_push_enabled": True,
@@ -178,9 +170,9 @@ DEFAULTS: dict[str, Any] = {
     "wall_watchdog_min_bad_ticks": 2,
     "wall_watchdog_escalate_bad_ticks": 6,
     # ── Health agent (functional probes) ────────────────────────────
-    # Runs 8 internal probes every 5 min: db, redis, minio, frigate,
-    # frigate-faces, telegram bot, wall summary loopback, open-meteo.
-    # Telegram alert when a probe fails N consecutive ticks.
+    # Runs 7 internal probes every 5 min: db, redis, minio, frigate,
+    # telegram bot, wall summary loopback, open-meteo. Telegram alert
+    # when a probe fails N consecutive ticks.
     "wall_health_enabled": True,
     "wall_health_alert_streak": 2,
     # ── Chat web-search fallback ────────────────────────────────────

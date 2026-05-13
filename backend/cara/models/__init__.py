@@ -18,7 +18,6 @@ from cara.models.file import UploadedFile
 from cara.models.habit import HabitCandidate
 from cara.models.note import Note
 from cara.models.oauth_credentials import OAuthCredentials
-from cara.models.presence_event import PresenceEvent
 from cara.models.push_subscription import PushSubscription
 from cara.models.shopping import ShoppingItem
 from cara.models.skill import Skill
@@ -55,7 +54,6 @@ __all__ = [
     "Message",
     "Note",
     "OAuthCredentials",
-    "PresenceEvent",
     "PushSubscription",
     "ShoppingItem",
     "Skill",
