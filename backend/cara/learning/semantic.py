@@ -382,3 +382,55 @@ async def deactivate_fact(session: AsyncSession, fact_id: int, *, commit: bool =
     if commit:
         await session.commit()
     return (result.rowcount or 0) > 0
+
+
+# ---------------------------------------------------------------------------
+# Fire-and-forget extraction from the chat hot path
+# ---------------------------------------------------------------------------
+
+
+async def extract_facts_async(
+    *,
+    user_id: int | None,
+    message: str,
+    source_ref: str | None = None,
+) -> None:
+    """Run pattern detection on `message` and persist hits in a new session.
+
+    Designed to be scheduled with `asyncio.create_task(...)` right after the
+    chat layer commits an incoming user message — see `chat.py`. Failures
+    are logged but swallowed: extraction must never break the chat reply.
+
+    Facts are saved with `embedding=NULL`; `list_facts` (used by the system
+    prompt builder) returns them anyway. `top_k_for_query` will skip them
+    until a backfill job indexes them — fine for the <20 facts/user regime
+    where a flat list is plenty.
+    """
+    if not message or len(message.strip()) < 8:
+        return
+    try:
+        from cara.store.db import get_sessionmaker  # local import: avoid cycle at module load
+
+        sessionmaker = get_sessionmaker()
+        async with sessionmaker() as session:
+            saved = await save_facts_from_message(
+                session,
+                user_id=user_id,
+                message=message,
+                embedder=None,
+                source_ref=source_ref,
+                commit=True,
+            )
+        if saved:
+            log.info(
+                "semantic.extract_async.saved",
+                user_id=user_id,
+                count=len(saved),
+                types=[f.type for f in saved],
+            )
+    except Exception as exc:  # noqa: BLE001 — fire-and-forget by design
+        log.warning(
+            "semantic.extract_async.failed",
+            user_id=user_id,
+            error=str(exc),
+        )

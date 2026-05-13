@@ -22,6 +22,7 @@ with the same `conversation_id` get context.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -38,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cara.ai import LLMService, get_llm_service
 from cara.ai import kv_cache
 from cara.ai.llm import LLMUnavailableError
-from cara.learning import episodic
+from cara.learning import episodic, semantic
 from cara.api.deps import get_current_user
 from cara.api.v1._chat_grounding import (
     has_discover_tool as _has_discover_tool,
@@ -199,6 +200,21 @@ async def chat(
         )
 
     await session.commit()
+
+    # Fire-and-forget fact extraction on the LAST user message. Uses its
+    # own session, never blocks the chat reply, never raises into the hot
+    # path (errors are logged inside the helper). See feedback memory
+    # `feedback_lazy_global_imports` — extract_facts_async resolves the
+    # sessionmaker via `get_sessionmaker()`, not the lifespan global.
+    if user_msgs:
+        _last_user_content = user_msgs[-1].content
+        asyncio.create_task(
+            semantic.extract_facts_async(
+                user_id=user.id,
+                message=_last_user_content,
+                source_ref=f"conversation:{convo.id}",
+            )
+        )
 
     if attached_files:
         logger.info(

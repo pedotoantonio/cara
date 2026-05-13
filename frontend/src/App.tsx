@@ -59,6 +59,7 @@ import { AdminDevicesPage } from './routes/AdminDevicesPage';
 import { AdminProactivityPage } from './routes/AdminProactivityPage';
 import { AdminSkillsPage } from './routes/AdminSkillsPage';
 import { AdminSmartHomePage } from './routes/AdminSmartHomePage';
+import { AdminUsersPage } from './routes/AdminUsersPage';
 import { PairPage } from './routes/PairPage';
 import { SetupPage } from './routes/SetupPage';
 import { ChatPage } from './routes/ChatPage';
@@ -272,6 +273,7 @@ export default function App() {
           <Route path="admin/proactivity" element={<AdminProactivityPage />} />
           <Route path="admin/skills" element={<AdminSkillsPage />} />
           <Route path="admin/devices" element={<AdminDevicesPage />} />
+          <Route path="admin/users" element={<AdminUsersPage />} />
           <Route path="admin/setup" element={<SetupPage />} />
           <Route path="setup" element={<SetupPage />} />
           <Route path="pair" element={<PairPage />} />

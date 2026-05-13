@@ -266,6 +266,7 @@ export function AdminPage() {
         {/* Quick nav to deep admin pages */}
         <nav className="flex flex-wrap gap-2 text-xs">
           {[
+            { to: '/admin/users',       label: 'Famiglia' },
             { to: '/admin/face',        label: 'Volti' },
             { to: '/admin/skills',      label: 'Skill Factory' },
             { to: '/admin/memory',      label: 'Memoria' },
