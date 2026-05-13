@@ -52,6 +52,7 @@ function BirthdayWatcher({ user }: { user: User }) {
 }
 import { AdminMemoryPage } from './routes/AdminMemoryPage';
 import { AdminPersonsPage } from './routes/AdminPersonsPage';
+import { AdminUsersPage } from './routes/AdminUsersPage';
 import { AdminTelegramPage } from './routes/AdminTelegramPage';
 import { AdminPage } from './routes/AdminPage';
 import { AdminDevicesPage } from './routes/AdminDevicesPage';
@@ -63,6 +64,8 @@ import { SetupPage } from './routes/SetupPage';
 import { ChatPage } from './routes/ChatPage';
 import { DiagnosticsPage } from './routes/DiagnosticsPage';
 import { DiscoveriesPage } from './routes/DiscoveriesPage';
+import FaceEnrollDonePage from './routes/FaceEnrollDonePage';
+import FaceEnrollPage from './routes/FaceEnrollPage';
 import { FaceLabPage } from './routes/FaceLabPage';
 import { HomePage } from './routes/HomePage';
 import { IntegrationsPage } from './routes/IntegrationsPage';
@@ -265,6 +268,7 @@ export default function App() {
           <Route path="admin/diagnostics" element={<DiagnosticsPage />} />
           <Route path="admin/memory" element={<AdminMemoryPage />} />
           <Route path="admin/persone" element={<AdminPersonsPage />} />
+          <Route path="admin/famiglia" element={<AdminUsersPage />} />
           <Route path="admin/telegram" element={<AdminTelegramPage />} />
           <Route path="admin/smart-home" element={<AdminSmartHomePage />} />
           <Route path="admin/proactivity" element={<AdminProactivityPage />} />
@@ -274,6 +278,8 @@ export default function App() {
           <Route path="setup" element={<SetupPage />} />
           <Route path="pair" element={<PairPage />} />
           <Route path="face-lab" element={<FaceLabPage />} />
+          <Route path="face/enroll" element={<FaceEnrollPage />} />
+          <Route path="face/enroll/done" element={<FaceEnrollDonePage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="me/memory" element={<MemoryPage />} />
           <Route path="me/integrazioni" element={<IntegrationsPage />} />
