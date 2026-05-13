@@ -5,6 +5,68 @@ numbering follows the v1.0 development plan in
 `docs/HANDOFF-v1.0-epic-0-1.md`. Day-by-day historic notes for the
 pre-v1.0 period are in `~/CARA-CHANGELOG.md`.
 
+## [Unreleased]
+
+### Added — Face Recognition (privacy-first, on-device)
+
+A complete face recognition stack mounted at `/face/enroll` (wizard)
+and `/admin/face` (governance). All inference happens in a Web Worker
+inside the browser via `@vladmandic/face-api`; the backend only stores
+128-D descriptors (`pgvector` `vector(128)`). No raw images cross the
+wire. The feature defaults to **disabled**; admin opt-in required.
+
+Delivered across 7 phases:
+
+- **Phase 1 — Foundations.** `@vladmandic/face-api` + `idb-keyval`
+  deps; same-origin model weights in `public/models/face-api/` (7.1
+  MB, cache-first SW); `tinyFaceDetector` Web Worker scaffold;
+  `FaceProvider` + `useFaceDetection` hook + `FaceOverlay` SVG;
+  backend tables `face_profiles`, `face_descriptors`, `face_settings`
+  with HNSW cosine index; admin-only REST CRUD at `/api/v1/face/`.
+- **Phase 2 — Recognition.** Lazy `landmark68` + `recognition`
+  model load (~6.8 MB); 128-D descriptor per detection; local match
+  against an in-memory profile cache; ambiguity guard drops the
+  match when second-best is within 0.05; temporal smoothing (3
+  frames / 1 s → confirm; 2 s → lost); new endpoints
+  `POST/GET /face/profiles/{id}/descriptors` + `POST /face/match`;
+  retention cap of 30 descriptors per profile.
+- **Phase 3 — Enrollment wizard.** 6-step user flow with live
+  quality scoring, auto-capture on 3 consecutive frames ≥ 0.8, and
+  a 4/5-pass save gate.
+- **Phase 4 — Admin panel.** `/admin/face` with stats, global
+  settings, profile table (rename / threshold / child / active),
+  and 2-click delete confirm.
+- **Phase 5 — Multi-face + child mode hooks.** Cap of 4 tracked
+  faces; `primarySubject` + `companions`; new `ActiveProfileContext`
+  with sessionStorage persistence; `data-cara-child-mode` on
+  `<html>`; client-side smart-home permission gate blocking
+  dangerous actions in child mode.
+- **Phase 6 — Performance + robustness.** Adaptive throttle
+  (rolling 10-sample latency average, clamped 50–1000 ms); idle
+  mode (30 s no face → 1 FPS); anti-spoofing (centroid variance
+  < 3 px / 1 s → likely photo); continuous learning (every 50
+  confirmed frames → POST a `continuous` descriptor).
+- **Phase 7 — Tests, debug, docs.** Backend smoke suite
+  (`tests/smoke/test_face_api.py`, 7 tests); Vitest unit suites
+  (10 tests) wired into `npm test`; live diagnostics at
+  `/admin/face/debug`; IT user docs + developer docs.
+
+### Removed
+
+- `chroma` references that lingered after the container itself was
+  retired: probe in `cara/agents/health.py` (was failing every 5 min
+  with `ConnectError`); `chroma_host` + `chroma_port` settings; stale
+  "9 probes" comment in `admin_settings.py`; CLAUDE.md table entries.
+  Health tick is now 8/8 ok on a clean stack.
+
+### Fixed
+
+- Schema drift between SQLAlchemy models and the live Postgres: the
+  `tasks.calendar_external_id` column, the `skills_name_uniq` /
+  `skills_status_idx` indexes, and the three `cda_*` performance
+  indexes are now declared in the ORM models. `alembic check`
+  reports "No new upgrade operations detected".
+
 ## [1.0.0] — 2026-05-05
 
 First public release. Replaces the Step-66 working tree with a

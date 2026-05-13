@@ -12,6 +12,7 @@ from cara.models.device_alias import DeviceAlias
 from cara.models.device_permission import DevicePermission
 from cara.models.email_proposal import EmailLearningSignal, EmailProposal
 from cara.models.event import Event
+from cara.models.face import FaceDescriptor, FaceProfile, FaceSettings
 from cara.models.fact import Fact
 from cara.models.file import UploadedFile
 from cara.models.habit import HabitCandidate
@@ -46,6 +47,9 @@ __all__ = [
     "EmailProposal",
     "Event",
     "Expense",
+    "FaceDescriptor",
+    "FaceProfile",
+    "FaceSettings",
     "Fact",
     "HabitCandidate",
     "Message",

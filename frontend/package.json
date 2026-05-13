@@ -8,11 +8,15 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
     "lint": "eslint src --ext ts,tsx",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:e2e": "playwright test --config e2e/playwright.config.ts",
     "test:e2e:headed": "playwright test --config e2e/playwright.config.ts --headed"
   },
   "dependencies": {
+    "@vladmandic/face-api": "^1.7.15",
     "hls.js": "^1.6.16",
+    "idb-keyval": "^6.2.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0"
@@ -27,6 +31,7 @@
     "tailwindcss": "^3.4.16",
     "typescript": "^5.7.2",
     "vite": "^5.4.11",
+    "vitest": "^2.1.8",
     "vite-plugin-pwa": "^0.21.1",
     "workbox-precaching": "^7.4.1",
     "workbox-routing": "^7.4.1",

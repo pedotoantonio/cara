@@ -41,6 +41,7 @@ dependencies = [
                                    # + smarthome NLU + semantic memory + reflective batch
   "torch>=2.0",                    # BSD-3, CPU inference for sentence-transformers
   "celery[redis]>=5.4",           # BSD-3, agent task queue (mail/files/learn workers)
+  "pgvector>=0.3",                # PostgreSQL pgvector binding for face_descriptors (Phase 1)
 ]
 
 [project.optional-dependencies]

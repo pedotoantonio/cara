@@ -178,9 +178,9 @@ DEFAULTS: dict[str, Any] = {
     "wall_watchdog_min_bad_ticks": 2,
     "wall_watchdog_escalate_bad_ticks": 6,
     # ── Health agent (functional probes) ────────────────────────────
-    # Runs 9 internal probes every 5 min: db, redis, chroma, minio,
-    # frigate, frigate-faces, telegram bot, wall summary loopback,
-    # open-meteo. Telegram alert when a probe fails N consecutive ticks.
+    # Runs 8 internal probes every 5 min: db, redis, minio, frigate,
+    # frigate-faces, telegram bot, wall summary loopback, open-meteo.
+    # Telegram alert when a probe fails N consecutive ticks.
     "wall_health_enabled": True,
     "wall_health_alert_streak": 2,
     # ── Chat web-search fallback ────────────────────────────────────

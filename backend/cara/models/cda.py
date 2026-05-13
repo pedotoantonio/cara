@@ -18,11 +18,13 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -63,11 +65,20 @@ class CdaContentItem(Base):
 
     __table_args__ = (
         UniqueConstraint("query_normalized", "url", name="uq_cda_items_query_url"),
+        Index(
+            "idx_cda_query_active",
+            "query_normalized",
+            postgresql_where=text("is_active"),
+        ),
+        Index("idx_cda_type_query", "content_type", "query_normalized"),
     )
 
 
 class CdaQueryLog(Base):
     __tablename__ = "cda_query_log"
+    __table_args__ = (
+        Index("idx_cda_log_user_time", "user_id", text("created_at DESC")),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
