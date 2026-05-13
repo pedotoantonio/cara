@@ -7,7 +7,7 @@
 
 import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
 import { setDefaultHandler, registerRoute } from 'workbox-routing';
-import { NetworkOnly } from 'workbox-strategies';
+import { CacheFirst, NetworkOnly } from 'workbox-strategies';
 
 declare let self: ServiceWorkerGlobalScope;
 
@@ -20,6 +20,19 @@ registerRoute(
   ({ url }) => url.pathname.startsWith('/api/'),
   new NetworkOnly(),
 );
+
+// face-api.js weights (≈7 MB total): cache-first, runtime. Not in the
+// precache manifest because (a) they're heavy and shouldn't block first
+// install, (b) they're only fetched when the user enables face
+// recognition. Versioning is implicit: the URL includes the file name
+// and the build redeploys to a new path if the model bundle changes.
+registerRoute(
+  ({ url }) => url.pathname.startsWith('/models/face-api/'),
+  new CacheFirst({
+    cacheName: 'face-api-models-v1',
+  }),
+);
+
 setDefaultHandler(new NetworkOnly());
 
 // ── Web Push handler ───────────────────────────────────────
