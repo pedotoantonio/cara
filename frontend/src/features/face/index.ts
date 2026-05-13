@@ -6,13 +6,21 @@
  */
 
 export { FaceProvider, useFaceContext } from './FaceContext';
+export {
+  ActiveProfileProvider,
+  useActiveProfile,
+  type ActiveProfile,
+} from './ActiveProfileContext';
+export { ActiveProfileBadge } from './components/ActiveProfileBadge';
 export { FaceOverlay } from './components/FaceOverlay';
 export { useFaceDetection } from './hooks/useFaceDetection';
+export { canPerformAction, useChildSafe } from './permissions';
 export type {
   FaceBox,
   FaceDetection,
   FaceEvent,
   FaceEventHandler,
+  FaceIdentity,
   FaceProfile,
   FaceSettings,
   StoredDescriptor,

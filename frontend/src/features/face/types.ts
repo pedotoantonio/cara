@@ -100,6 +100,14 @@ export interface FaceSettings {
   ageGenderEnabled: boolean;
 }
 
+/** Identity payload as carried by detection results and events. */
+export interface FaceIdentity {
+  profileId: string;
+  displayName: string;
+  isChild: boolean;
+  distance: number;
+}
+
 /** Lifecycle events emitted on the FaceContext local bus. */
 export type FaceEvent =
   | { kind: 'face.detected'; trackId: number; score: number }
@@ -109,6 +117,8 @@ export type FaceEvent =
       displayName: string;
       isChild: boolean;
       distance: number;
+      /** Other identified faces also in the scene at the moment. */
+      companions: FaceIdentity[];
     }
   | { kind: 'face.unknown_present'; trackId: number }
   | { kind: 'face.lost'; profileId: string | null };

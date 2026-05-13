@@ -22,6 +22,7 @@ import {
   updateFaceSettings,
 } from '../api/face';
 import { Badge, Button, Card, CardSubtitle, CardTitle, IconButton, cn, useToast } from '../design';
+import { ActiveProfileBadge } from '../features/face';
 import type { FaceProfile, FaceSettings } from '../features/face/types';
 
 
@@ -118,11 +119,14 @@ export function AdminFacePage() {
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Riconoscimento facciale</h1>
-          <p className="text-sm text-slate-500">
-            Profili enrolled, soglie di match e impostazioni globali.
-          </p>
+        <div className="flex items-start gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold">Riconoscimento facciale</h1>
+            <p className="text-sm text-slate-500">
+              Profili enrolled, soglie di match e impostazioni globali.
+            </p>
+          </div>
+          <ActiveProfileBadge />
         </div>
         <Button onClick={() => navigate('/face/enroll')} variant="primary" iconLeft="plus">
           Registra nuovo volto

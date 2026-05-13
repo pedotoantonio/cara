@@ -30,6 +30,7 @@ import type {
   FaceDetection,
   FaceEvent,
   FaceEventHandler,
+  FaceIdentity,
   FaceWorkerIn,
   FaceWorkerOut,
   WorkerProfile,
@@ -49,6 +50,11 @@ const IDENTIFY_MIN_FRAMES = 3;
 const IDENTIFY_WINDOW_MS = 1000;
 const LOST_TIMEOUT_MS = 2000;
 
+// Multi-face cap. Beyond this we drop the smallest boxes so the worker
+// stays responsive and the avatar doesn't try to address a crowd. 4 is
+// enough for the household configurations we care about.
+const MAX_TRACKED_FACES = 4;
+
 interface ConfirmationTracker {
   /** Most recent N timestamps for the same identity. */
   timestamps: number[];
@@ -57,10 +63,16 @@ interface ConfirmationTracker {
 }
 
 interface FaceApi {
-  /** Latest detections from the worker (smoothed `identity` field). */
+  /** Latest detections from the worker (smoothed `identity` field).
+   *  Capped at MAX_TRACKED_FACES, sorted by area descending. */
   detections: FaceDetection[];
-  /** Currently confirmed identity, or null. */
-  confirmedIdentity: FaceDetection['identity'] | null;
+  /** The biggest (= closest) identified face. The avatar should address
+   *  this one by name. Null until smoothing confirms an identity. */
+  primarySubject: FaceIdentity | null;
+  /** Other identified faces in the scene, ordered by area descending. */
+  companions: FaceIdentity[];
+  /** Backwards-compat alias for primarySubject — same value. */
+  confirmedIdentity: FaceIdentity | null;
   /** Last frame processing time, ms. */
   lastDurationMs: number;
   /** True once tinyFaceDetector finished loading. */
@@ -102,9 +114,8 @@ export function FaceProvider({ children }: { children: ReactNode }) {
   const [recognitionReady, setRecognitionReady] = useState(false);
   const [profilesCount, setProfilesCount] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
-  const [confirmedIdentity, setConfirmedIdentity] = useState<
-    FaceDetection['identity'] | null
-  >(null);
+  const [primarySubject, setPrimarySubject] = useState<FaceIdentity | null>(null);
+  const [companions, setCompanions] = useState<FaceIdentity[]>([]);
 
   // Smoothing state, kept in refs so it doesn't re-render on every update.
   const trackersRef = useRef<Map<string, ConfirmationTracker>>(new Map());
@@ -143,23 +154,31 @@ export function FaceProvider({ children }: { children: ReactNode }) {
         emit({ kind: 'face.lost', profileId: pid });
       }
       if (!stillThere) {
-        setConfirmedIdentity(null);
+        setPrimarySubject(null);
+        setCompanions([]);
       } else {
         scheduleLostCheck();
       }
     }, LOST_TIMEOUT_MS);
   }, [emit]);
 
+  const computeArea = (d: FaceDetection) => d.box.width * d.box.height;
+
   const onDetections = useCallback(
     (incoming: FaceDetection[]) => {
       const now = performance.now();
 
-      // Pass 1: emit raw detection events for any visible face.
-      if (incoming.length === 0) {
+      // Sort by area descending, then cap to the multi-face limit. The
+      // biggest box is the closest face: that's who CARA addresses.
+      const ordered = [...incoming]
+        .sort((a, b) => computeArea(b) - computeArea(a))
+        .slice(0, MAX_TRACKED_FACES);
+
+      if (ordered.length === 0) {
         scheduleLostCheck();
       }
 
-      for (const d of incoming) {
+      for (const d of ordered) {
         emit({ kind: 'face.detected', trackId: d.trackId, score: d.score });
 
         if (d.identity) {
@@ -171,38 +190,70 @@ export function FaceProvider({ children }: { children: ReactNode }) {
             tracker = { timestamps: [], confirmed: false };
             trackersRef.current.set(pid, tracker);
           }
-          // Trim timestamps outside the rolling window.
           tracker.timestamps = [
             ...tracker.timestamps.filter((t) => now - t <= IDENTIFY_WINDOW_MS),
             now,
           ];
-
-          if (!tracker.confirmed && tracker.timestamps.length >= IDENTIFY_MIN_FRAMES) {
-            tracker.confirmed = true;
-            setConfirmedIdentity(d.identity);
-            emit({
-              kind: 'face.identified',
-              profileId: pid,
-              displayName: d.identity.displayName,
-              isChild: d.identity.isChild,
-              distance: d.identity.distance,
-            });
-          }
         } else if (d.descriptor) {
-          // Descriptor present but no match → genuine unknown.
           emit({ kind: 'face.unknown_present', trackId: d.trackId });
         }
       }
 
-      // Suppress un-confirmed identities in the public state so the
-      // overlay doesn't flicker between a tentative match and the real
-      // confirmation.
-      const smoothed = incoming.map((d) => {
+      // Smoothed detections: drop tentative identities so the overlay
+      // doesn't flicker between {unknown, identified, unknown}.
+      const smoothed = ordered.map((d) => {
         if (!d.identity) return d;
         const tracker = trackersRef.current.get(d.identity.profileId);
         return tracker?.confirmed ? d : { ...d, identity: undefined };
       });
       setDetections(smoothed);
+
+      // Resolve primary + companions from the *confirmed* identities in
+      // the ordered set. Primary is the biggest confirmed; companions are
+      // the rest of the confirmed identities, area-descending.
+      const confirmed: FaceIdentity[] = [];
+      for (const d of ordered) {
+        if (!d.identity) continue;
+        const tracker = trackersRef.current.get(d.identity.profileId);
+        if (tracker?.confirmed) confirmed.push(d.identity);
+      }
+      const newPrimary = confirmed[0] ?? null;
+      const newCompanions = confirmed.slice(1);
+
+      // Detect *new* confirmations and a primary swap so we can fire
+      // face.identified exactly once per (profile, run).
+      for (const d of ordered) {
+        if (!d.identity) continue;
+        const tracker = trackersRef.current.get(d.identity.profileId);
+        if (!tracker || tracker.confirmed) continue;
+        if (tracker.timestamps.length >= IDENTIFY_MIN_FRAMES) {
+          tracker.confirmed = true;
+          // Build the companion list for the event payload at firing time
+          // — same logic as primary but excluding the firing profile.
+          const others = confirmed
+            .filter((c) => c.profileId !== d.identity!.profileId);
+          emit({
+            kind: 'face.identified',
+            profileId: d.identity.profileId,
+            displayName: d.identity.displayName,
+            isChild: d.identity.isChild,
+            distance: d.identity.distance,
+            companions: others,
+          });
+        }
+      }
+
+      setPrimarySubject((prev) => {
+        // Avoid pointless re-renders if the identity stayed the same.
+        if (prev?.profileId === newPrimary?.profileId) return prev;
+        return newPrimary;
+      });
+      setCompanions((prev) => {
+        const sameLength = prev.length === newCompanions.length;
+        const sameOrder =
+          sameLength && prev.every((p, i) => p.profileId === newCompanions[i].profileId);
+        return sameOrder ? prev : newCompanions;
+      });
 
       scheduleLostCheck();
     },
@@ -341,7 +392,8 @@ export function FaceProvider({ children }: { children: ReactNode }) {
     trackersRef.current.clear();
     lastSeenAtRef.current.clear();
     setDetections([]);
-    setConfirmedIdentity(null);
+    setPrimarySubject(null);
+    setCompanions([]);
     if (workerRef.current) {
       const msg: FaceWorkerIn = { type: 'shutdown' };
       workerRef.current.postMessage(msg);
@@ -372,7 +424,9 @@ export function FaceProvider({ children }: { children: ReactNode }) {
   const api = useMemo<FaceApi>(
     () => ({
       detections,
-      confirmedIdentity,
+      primarySubject,
+      companions,
+      confirmedIdentity: primarySubject,
       lastDurationMs,
       modelsReady,
       recognitionReady,
@@ -386,7 +440,8 @@ export function FaceProvider({ children }: { children: ReactNode }) {
     }),
     [
       detections,
-      confirmedIdentity,
+      primarySubject,
+      companions,
       lastDurationMs,
       modelsReady,
       recognitionReady,
