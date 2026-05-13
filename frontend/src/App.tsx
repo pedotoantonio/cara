@@ -52,7 +52,6 @@ function BirthdayWatcher({ user }: { user: User }) {
 }
 import { AdminMemoryPage } from './routes/AdminMemoryPage';
 import { AdminPersonsPage } from './routes/AdminPersonsPage';
-import { AdminUsersPage } from './routes/AdminUsersPage';
 import { AdminTelegramPage } from './routes/AdminTelegramPage';
 import { AdminPage } from './routes/AdminPage';
 import { AdminDevicesPage } from './routes/AdminDevicesPage';
@@ -268,7 +267,6 @@ export default function App() {
           <Route path="admin/diagnostics" element={<DiagnosticsPage />} />
           <Route path="admin/memory" element={<AdminMemoryPage />} />
           <Route path="admin/persone" element={<AdminPersonsPage />} />
-          <Route path="admin/famiglia" element={<AdminUsersPage />} />
           <Route path="admin/telegram" element={<AdminTelegramPage />} />
           <Route path="admin/smart-home" element={<AdminSmartHomePage />} />
           <Route path="admin/proactivity" element={<AdminProactivityPage />} />
