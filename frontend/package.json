@@ -8,6 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
     "lint": "eslint src --ext ts,tsx",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:e2e": "playwright test --config e2e/playwright.config.ts",
     "test:e2e:headed": "playwright test --config e2e/playwright.config.ts --headed"
   },
@@ -29,6 +31,7 @@
     "tailwindcss": "^3.4.16",
     "typescript": "^5.7.2",
     "vite": "^5.4.11",
+    "vitest": "^2.1.8",
     "vite-plugin-pwa": "^0.21.1",
     "workbox-precaching": "^7.4.1",
     "workbox-routing": "^7.4.1",
