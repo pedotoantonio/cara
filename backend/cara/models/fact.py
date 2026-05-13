@@ -45,7 +45,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import Mapped, mapped_column
 
 from cara.store.db import Base
@@ -87,9 +87,12 @@ class Fact(Base):
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0,
                                               server_default="1.0")
 
-    # 384-d embedding stored as JSONB array. None until the embedding
-    # service has run on this row (we index lazily in a background job).
-    embedding: Mapped[list[float] | None] = mapped_column(JSONB, nullable=True)
+    # 384-d MiniLM-L12-v2 embedding stored as pgvector with an HNSW cosine
+    # index (see migration d3e4a92f17c8). Lazily populated: the chat hot
+    # path inserts rows with embedding=NULL and the `ingest_recent_facts`
+    # Celery job backfills them. Retrieval uses the `<=>` operator —
+    # missing-embedding rows are filtered out at query time.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(384), nullable=True)
 
     # Audit + lifecycle
     first_seen: Mapped[datetime] = mapped_column(

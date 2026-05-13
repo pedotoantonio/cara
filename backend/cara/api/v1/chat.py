@@ -412,6 +412,42 @@ async def chat(
     if tone_directive:
         sysprompt_active = sysprompt_active + tone_directive
 
+    # RAG: top-k facts for THIS user vs THIS question. Off in privacy
+    # mode (the whole point of privacy is to not leak stored facts back
+    # into the prompt) and off when the message is empty or only an
+    # attachment. Failures are swallowed — retrieval is best-effort and
+    # must never break a chat reply.
+    if tone_preset != "privacy" and last_user_q and len(last_user_q.strip()) >= 4:
+        try:
+            from cara.ai.embeddings import EmbeddingService as _EmbeddingService
+            from cara.api.v1._chat_system_prompt import build_facts_block
+            from cara.learning import semantic as _semantic_mod
+
+            _embedder = _EmbeddingService()
+            hits = await _semantic_mod.top_k_for_query(
+                session,
+                query=last_user_q,
+                user_id=user.id,
+                embedder=_embedder,
+                k=3,
+                min_score=0.5,
+            )
+            if hits:
+                facts_block = build_facts_block(
+                    [f.text for f, _score in hits],
+                    user_name=(user.full_name or user.email.split("@")[0]).split()[0],
+                )
+                if facts_block:
+                    sysprompt_active = f"{sysprompt_active}\n\n{facts_block}"
+                logger.info(
+                    "chat.rag.facts_injected",
+                    user_id=user.id,
+                    count=len(hits),
+                    top_score=round(hits[0][1], 3),
+                )
+        except Exception as exc:  # noqa: BLE001 — RAG is best-effort
+            logger.warning("chat.rag.failed", error=str(exc))
+
     # Privacy mode: drop ALL prior messages so the model can't echo back
     # personal context. Keep only the persona prompt + last user turn.
     if tone_preset == "privacy":

@@ -100,6 +100,13 @@ celery_app.conf.beat_schedule = {
         "task": "cara.agents.learn.detect_habits",
         "schedule": crontab(hour=3, minute=0),
     },
+    # Backfill fact embeddings every 15 min — cheap (NULLs only, MiniLM
+    # batches of 64), and tight enough that a fact remembered at 18:00
+    # is retrievable in the same chat session.
+    "ingest-recent-facts": {
+        "task": "cara.agents.learn.ingest_recent_facts",
+        "schedule": 15 * 60,
+    },
     "reflective-batch-weekly": {
         "task": "cara.agents.learn.reflective_run",
         "schedule": crontab(hour=4, minute=0, day_of_week="sunday"),
