@@ -98,14 +98,6 @@ async def _probe_redis() -> tuple[str, str]:
         await r.aclose()
 
 
-async def _probe_chroma() -> tuple[str, str]:
-    async with httpx.AsyncClient(timeout=5.0) as c:
-        r = await c.get("http://chroma:8000/api/v1/heartbeat")
-        if r.status_code == 200:
-            return _OK, ""
-        return _FAIL, f"HTTP {r.status_code}"
-
-
 async def _probe_minio() -> tuple[str, str]:
     async with httpx.AsyncClient(timeout=5.0) as c:
         r = await c.get("http://minio:9000/minio/health/live")
@@ -177,7 +169,6 @@ async def _probe_telegram_bot() -> tuple[str, str]:
 _PROBES: list[tuple[str, str, ProbeFn]] = [
     ("db",            "PostgreSQL · SELECT 1",     _probe_db),
     ("redis",         "Redis · PING",              _probe_redis),
-    ("chroma",        "ChromaDB · heartbeat",      _probe_chroma),
     ("minio",         "MinIO · /health/live",      _probe_minio),
     ("frigate_faces", "Frigate Faces · /api/people", _probe_frigate_faces),
     ("frigate",       "Frigate · /api/stats",      _probe_frigate),

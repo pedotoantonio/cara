@@ -44,3 +44,8 @@ class Task(Base):
     wall_visible: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
+    # Google Calendar event id, set when this task has been pushed to the
+    # user's calendar via the outbound sync. Read by `calendar_push.py`.
+    calendar_external_id: Mapped[str | None] = mapped_column(
+        String(120), nullable=True
+    )

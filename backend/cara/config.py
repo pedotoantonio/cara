@@ -62,9 +62,6 @@ class Settings(BaseSettings):
     minio_bucket: str = Field(default="cara", validation_alias="MINIO_BUCKET")
     minio_secure: bool = Field(default=False, validation_alias="MINIO_SECURE")
 
-    chroma_host: str = Field(default="chroma", validation_alias="CHROMA_HOST")
-    chroma_port: int = Field(default=8000, validation_alias="CHROMA_PORT")
-
     jwt_secret: str = Field(validation_alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", validation_alias="JWT_ALGORITHM")
     jwt_access_ttl_minutes: int = Field(default=60, validation_alias="JWT_ACCESS_TTL_MINUTES")

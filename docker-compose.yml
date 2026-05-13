@@ -7,12 +7,12 @@ name: cara
 # daemon 20.10.5 on this host does not support multi-network in a single
 # container create, which Compose v5 requires. See CLAUDE.md "Manutenzione
 # 2026-04-30 / Container compose: workaround multi-network".
-# Postgres/Redis/MinIO/Chroma do NOT publish ports — they remain unreachable
+# Postgres/Redis/MinIO do NOT publish ports — they remain unreachable
 # from outside the docker bridge. The shared network is functional, not a
 # security boundary.
 #
 # Profiles:
-#   default profile: postgres, redis, minio, chroma  (infrastructure only)
+#   default profile: postgres, redis, minio          (infrastructure only)
 #   profile "app":   backend, celery, frontend       (application code)
 #
 # Usage:
@@ -24,7 +24,7 @@ x-app-env: &app-env
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: cara-postgres-pgvector:16-0.8.0
     container_name: cara-postgres
     restart: unless-stopped
     environment:
@@ -80,24 +80,6 @@ services:
       retries: 5
       start_period: 30s
 
-  chroma:
-    image: chromadb/chroma:0.5.23
-    container_name: cara-chroma
-    restart: unless-stopped
-    environment:
-      IS_PERSISTENT: "TRUE"
-      ANONYMIZED_TELEMETRY: "FALSE"
-    volumes:
-      - ./data/chroma:/chroma/chroma
-    networks:
-      - proxy-net
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/heartbeat', timeout=3).status==200 else 1)"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
   backend:
     <<: *app-env
     build:
@@ -111,7 +93,6 @@ services:
       postgres: {condition: service_healthy}
       redis:    {condition: service_healthy}
       minio:    {condition: service_healthy}
-      chroma:   {condition: service_healthy}
     # NPU access: librkllmrt opens /dev/dri/card0 (DRM ioctl, video group).
     # Verified by tracing the POC: no /dev/rknpu node on this kernel; access
     # routes through DRM. The container needs the device + the video group.
@@ -124,7 +105,8 @@ services:
       - ./data/models:/app/models:ro
       - ./data/tts:/app/tts                      # Piper voice ONNX files (auto-downloaded)
       - ./data/whisper-cache:/app/whisper-cache  # Whisper STT model cache
-      - /home/apedo/cara-poc-rkllm/runtime-v1.1.0/lib/librkllmrt.so:/usr/lib/rkllm/librkllmrt.so:ro
+      - ./data/kv_cache:/app/cache/kv            # RKLLM KV cache (TTFT savings across restarts)
+      - /home/apedo/cara-poc-rkllm/runtime-v1.1.1/librkllmrt.so:/usr/lib/rkllm/librkllmrt.so:ro
       - /var/run/docker.sock:/var/run/docker.sock  # /wall/services + watchdog
     environment:
       LD_LIBRARY_PATH: /usr/lib/rkllm
