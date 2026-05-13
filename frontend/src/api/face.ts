@@ -1,11 +1,15 @@
 /**
  * Face recognition REST client.
  *
- * Phase 1: profile CRUD + global settings. Descriptor endpoints arrive
- * with Phase 2 (recognition pipeline).
+ * Phase 2: profile CRUD + global settings + descriptor upload/list +
+ * server-side match (fallback for devices without a local cache).
  */
 
-import type { FaceProfile, FaceSettings } from '../features/face/types';
+import type {
+  FaceProfile,
+  FaceSettings,
+  StoredDescriptor,
+} from '../features/face/types';
 
 import { authFetch } from './auth';
 
@@ -77,4 +81,49 @@ export async function updateFaceSettings(s: Partial<FaceSettings>): Promise<Face
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(s),
   }).then(asJson<FaceSettings>);
+}
+
+// ─── Descriptors ──────────────────────────────────────────────────────
+
+export interface DescriptorPayload {
+  descriptor: number[];
+  source: 'enrollment' | 'continuous';
+  quality?: number;
+}
+
+export async function addDescriptors(
+  profileId: string,
+  items: DescriptorPayload[],
+): Promise<StoredDescriptor[]> {
+  return authFetch(`${API}/profiles/${encodeURIComponent(profileId)}/descriptors`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  }).then(asJson<StoredDescriptor[]>);
+}
+
+export async function listDescriptors(profileId: string): Promise<StoredDescriptor[]> {
+  return authFetch(
+    `${API}/profiles/${encodeURIComponent(profileId)}/descriptors`,
+  ).then(asJson<StoredDescriptor[]>);
+}
+
+// ─── Server-side match (fallback for fresh devices) ───────────────────
+
+export interface MatchHit {
+  profileId: string;
+  displayName: string;
+  isChild: boolean;
+  distance: number;
+  matchedDescriptorId: string;
+}
+
+export async function serverMatch(descriptor: number[]): Promise<MatchHit | null> {
+  const r = await authFetch(`${API}/match`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ descriptor }),
+  });
+  const data = await asJson<{ match: MatchHit | null }>(r);
+  return data.match;
 }

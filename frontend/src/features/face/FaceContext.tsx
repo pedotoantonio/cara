@@ -1,13 +1,16 @@
 /**
- * Face recognition provider — orchestrates the worker + per-frame loop.
+ * Face recognition provider — orchestrates the worker, profile cache,
+ * per-frame loop, temporal smoothing, and a local event bus.
  *
- * Phase 1: detection only. The provider mounts the worker lazily (first
- * time a consumer asks for detection), throttles frame capture, and
- * exposes the latest `FaceDetection[]` to consumers via `useFaceContext`.
+ * Surfaces consume the context for two things:
+ *   1. Live detection state via `useFaceContext()` (e.g. the FaceOverlay).
+ *   2. Lifecycle events via `onEvent(...)` (e.g. CARA Core firing a
+ *      "Ciao Sara" line on `face.identified`).
  *
- * Mounting strategy: the provider sits near the app root but does NOT
- * start the worker on mount — only when `start(video)` is called by a
- * surface that has a real <video> stream (Wall, settings preview, etc.).
+ * The worker is spawned lazily on the first `start(video)` call to keep
+ * the cold start cheap for users who never use the feature. The profile
+ * cache is fetched once per provider lifetime — call `refreshProfiles()`
+ * after an enrollment to pick up new descriptors.
  */
 
 import {
@@ -21,27 +24,65 @@ import {
   type ReactNode,
 } from 'react';
 
-import type { FaceDetection, FaceWorkerIn, FaceWorkerOut } from './types';
+import { listDescriptors, listFaceProfiles } from '../../api/face';
+
+import type {
+  FaceDetection,
+  FaceEvent,
+  FaceEventHandler,
+  FaceWorkerIn,
+  FaceWorkerOut,
+  WorkerProfile,
+} from './types';
 
 const MODELS_BASE_URL = '/models/face-api';
 const DOWNSCALE_WIDTH = 480;
 const DOWNSCALE_HEIGHT = 360;
-const DETECTOR_INPUT_SIZE = 320; // tinyFaceDetector — 224|320|416|512|608
+const DETECTOR_INPUT_SIZE = 320;
 const TARGET_FPS = 5;
 
+// Temporal smoothing: a person must be seen in this many consecutive
+// frames within `IDENTIFY_WINDOW_MS` before we fire `face.identified`.
+// And once we've identified someone, we hold the state for
+// `LOST_TIMEOUT_MS` after the last sighting before firing `face.lost`.
+const IDENTIFY_MIN_FRAMES = 3;
+const IDENTIFY_WINDOW_MS = 1000;
+const LOST_TIMEOUT_MS = 2000;
+
+interface ConfirmationTracker {
+  /** Most recent N timestamps for the same identity. */
+  timestamps: number[];
+  /** True once we've fired `face.identified` for this run. */
+  confirmed: boolean;
+}
+
 interface FaceApi {
-  /** Latest detections from the worker. */
+  /** Latest detections from the worker (smoothed `identity` field). */
   detections: FaceDetection[];
-  /** Last frame processing time, ms. Useful for adaptive throttling. */
+  /** Currently confirmed identity, or null. */
+  confirmedIdentity: FaceDetection['identity'] | null;
+  /** Last frame processing time, ms. */
   lastDurationMs: number;
   /** True once tinyFaceDetector finished loading. */
   modelsReady: boolean;
+  /** True once landmark + recognition nets are loaded. */
+  recognitionReady: boolean;
+  /** Number of profiles uploaded to the worker. */
+  profilesCount: number;
   /** Last init / detect error message. */
   lastError: string | null;
+
   /** Start the detection loop on the given video element. */
   start: (video: HTMLVideoElement) => void;
   /** Stop the loop, free the worker, drop detections. */
   stop: () => void;
+  /** Fetch profiles + descriptors and push them into the worker cache. */
+  refreshProfiles: () => Promise<void>;
+  /** Ask the worker to load landmark + recognition nets (~6.8 MB). */
+  enableRecognition: () => void;
+
+  /** Subscribe to face lifecycle events. Returns an unsubscribe fn. */
+  onEvent: (handler: FaceEventHandler) => () => void;
 }
 
 const FaceCtx = createContext<FaceApi | null>(null);
@@ -53,11 +94,120 @@ export function FaceProvider({ children }: { children: ReactNode }) {
   const frameCounterRef = useRef(0);
   const offscreenRef = useRef<OffscreenCanvas | null>(null);
   const inflightRef = useRef(false);
+  const recognitionRequestedRef = useRef(false);
 
   const [detections, setDetections] = useState<FaceDetection[]>([]);
   const [lastDurationMs, setLastDurationMs] = useState(0);
   const [modelsReady, setModelsReady] = useState(false);
+  const [recognitionReady, setRecognitionReady] = useState(false);
+  const [profilesCount, setProfilesCount] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [confirmedIdentity, setConfirmedIdentity] = useState<
+    FaceDetection['identity'] | null
+  >(null);
+
+  // Smoothing state, kept in refs so it doesn't re-render on every update.
+  const trackersRef = useRef<Map<string, ConfirmationTracker>>(new Map());
+  const lastSeenAtRef = useRef<Map<string, number>>(new Map());
+  const lostTimerRef = useRef<number | null>(null);
+
+  // Local event bus — Set so handlers can be added/removed cheaply.
+  const handlersRef = useRef<Set<FaceEventHandler>>(new Set());
+
+  const emit = useCallback((event: FaceEvent) => {
+    for (const h of handlersRef.current) {
+      try {
+        h(event);
+      } catch (err) {
+        // A bad subscriber must not poison the bus.
+        // eslint-disable-next-line no-console
+        console.error('face event handler threw', err);
+      }
+    }
+  }, []);
+
+  const scheduleLostCheck = useCallback(() => {
+    if (lostTimerRef.current != null) return;
+    lostTimerRef.current = window.setTimeout(() => {
+      lostTimerRef.current = null;
+      const now = performance.now();
+      let stillThere = false;
+      for (const [pid, lastSeen] of lastSeenAtRef.current.entries()) {
+        if (now - lastSeen <= LOST_TIMEOUT_MS) {
+          stillThere = true;
+          continue;
+        }
+        // Lost: forget the tracker and emit.
+        lastSeenAtRef.current.delete(pid);
+        trackersRef.current.delete(pid);
+        emit({ kind: 'face.lost', profileId: pid });
+      }
+      if (!stillThere) {
+        setConfirmedIdentity(null);
+      } else {
+        scheduleLostCheck();
+      }
+    }, LOST_TIMEOUT_MS);
+  }, [emit]);
+
+  const onDetections = useCallback(
+    (incoming: FaceDetection[]) => {
+      const now = performance.now();
+
+      // Pass 1: emit raw detection events for any visible face.
+      if (incoming.length === 0) {
+        scheduleLostCheck();
+      }
+
+      for (const d of incoming) {
+        emit({ kind: 'face.detected', trackId: d.trackId, score: d.score });
+
+        if (d.identity) {
+          const pid = d.identity.profileId;
+          lastSeenAtRef.current.set(pid, now);
+
+          let tracker = trackersRef.current.get(pid);
+          if (!tracker) {
+            tracker = { timestamps: [], confirmed: false };
+            trackersRef.current.set(pid, tracker);
+          }
+          // Trim timestamps outside the rolling window.
+          tracker.timestamps = [
+            ...tracker.timestamps.filter((t) => now - t <= IDENTIFY_WINDOW_MS),
+            now,
+          ];
+
+          if (!tracker.confirmed && tracker.timestamps.length >= IDENTIFY_MIN_FRAMES) {
+            tracker.confirmed = true;
+            setConfirmedIdentity(d.identity);
+            emit({
+              kind: 'face.identified',
+              profileId: pid,
+              displayName: d.identity.displayName,
+              isChild: d.identity.isChild,
+              distance: d.identity.distance,
+            });
+          }
+        } else if (d.descriptor) {
+          // Descriptor present but no match → genuine unknown.
+          emit({ kind: 'face.unknown_present', trackId: d.trackId });
+        }
+      }
+
+      // Suppress un-confirmed identities in the public state so the
+      // overlay doesn't flicker between a tentative match and the real
+      // confirmation.
+      const smoothed = incoming.map((d) => {
+        if (!d.identity) return d;
+        const tracker = trackersRef.current.get(d.identity.profileId);
+        return tracker?.confirmed ? d : { ...d, identity: undefined };
+      });
+      setDetections(smoothed);
+
+      scheduleLostCheck();
+    },
+    [emit, scheduleLostCheck],
+  );
 
   const ensureWorker = useCallback(() => {
     if (workerRef.current) return workerRef.current;
@@ -72,8 +222,16 @@ export function FaceProvider({ children }: { children: ReactNode }) {
       if (msg.type === 'ready') {
         setModelsReady(true);
         setLastError(null);
+        if (recognitionRequestedRef.current) {
+          const m: FaceWorkerIn = { type: 'loadRecognition' };
+          w.postMessage(m);
+        }
+      } else if (msg.type === 'recognitionReady') {
+        setRecognitionReady(true);
+      } else if (msg.type === 'profilesLoaded') {
+        setProfilesCount(msg.count);
       } else if (msg.type === 'detections') {
-        setDetections(msg.detections);
+        onDetections(msg.detections);
         setLastDurationMs(msg.durationMs);
         inflightRef.current = false;
       } else if (msg.type === 'error') {
@@ -87,7 +245,44 @@ export function FaceProvider({ children }: { children: ReactNode }) {
 
     workerRef.current = w;
     return w;
-  }, []);
+  }, [onDetections]);
+
+  const enableRecognition = useCallback(() => {
+    recognitionRequestedRef.current = true;
+    const worker = ensureWorker();
+    if (modelsReady) {
+      const m: FaceWorkerIn = { type: 'loadRecognition' };
+      worker.postMessage(m);
+    }
+  }, [ensureWorker, modelsReady]);
+
+  const refreshProfiles = useCallback(async () => {
+    try {
+      const profiles = await listFaceProfiles();
+      const active = profiles.filter((p) => p.active);
+      const out: WorkerProfile[] = [];
+
+      for (const p of active) {
+        if (p.descriptorCount === 0) continue;
+        const rows = await listDescriptors(p.id);
+        if (rows.length === 0) continue;
+        out.push({
+          profileId: p.id,
+          displayName: p.displayName,
+          isChild: p.isChild,
+          matchThreshold: p.matchThreshold,
+          descriptors: rows.map((r) => Float32Array.from(r.descriptor)),
+        });
+      }
+
+      const worker = ensureWorker();
+      const transfer = out.flatMap((p) => p.descriptors.map((d) => d.buffer));
+      const m: FaceWorkerIn = { type: 'setProfiles', profiles: out };
+      worker.postMessage(m, transfer);
+    } catch (err) {
+      setLastError(err instanceof Error ? err.message : String(err));
+    }
+  }, [ensureWorker]);
 
   const captureAndPost = useCallback(async () => {
     const video = videoRef.current;
@@ -114,13 +309,14 @@ export function FaceProvider({ children }: { children: ReactNode }) {
         frameId: frameCounterRef.current++,
         bitmap,
         inputSize: DETECTOR_INPUT_SIZE,
+        withDescriptor: recognitionReady,
       };
       worker.postMessage(msg, [bitmap]);
     } catch (err) {
       inflightRef.current = false;
       setLastError(err instanceof Error ? err.message : String(err));
     }
-  }, []);
+  }, [recognitionReady]);
 
   const start = useCallback(
     (video: HTMLVideoElement) => {
@@ -137,27 +333,71 @@ export function FaceProvider({ children }: { children: ReactNode }) {
       window.clearInterval(frameTimerRef.current);
       frameTimerRef.current = null;
     }
+    if (lostTimerRef.current != null) {
+      window.clearTimeout(lostTimerRef.current);
+      lostTimerRef.current = null;
+    }
     videoRef.current = null;
+    trackersRef.current.clear();
+    lastSeenAtRef.current.clear();
     setDetections([]);
+    setConfirmedIdentity(null);
     if (workerRef.current) {
       const msg: FaceWorkerIn = { type: 'shutdown' };
       workerRef.current.postMessage(msg);
       workerRef.current.terminate();
       workerRef.current = null;
       setModelsReady(false);
+      setRecognitionReady(false);
+      setProfilesCount(0);
+      recognitionRequestedRef.current = false;
     }
+  }, []);
+
+  const onEvent = useCallback((handler: FaceEventHandler) => {
+    handlersRef.current.add(handler);
+    return () => {
+      handlersRef.current.delete(handler);
+    };
   }, []);
 
   useEffect(() => {
     return () => {
       if (frameTimerRef.current != null) window.clearInterval(frameTimerRef.current);
+      if (lostTimerRef.current != null) window.clearTimeout(lostTimerRef.current);
       if (workerRef.current) workerRef.current.terminate();
     };
   }, []);
 
   const api = useMemo<FaceApi>(
-    () => ({ detections, lastDurationMs, modelsReady, lastError, start, stop }),
-    [detections, lastDurationMs, modelsReady, lastError, start, stop],
+    () => ({
+      detections,
+      confirmedIdentity,
+      lastDurationMs,
+      modelsReady,
+      recognitionReady,
+      profilesCount,
+      lastError,
+      start,
+      stop,
+      refreshProfiles,
+      enableRecognition,
+      onEvent,
+    }),
+    [
+      detections,
+      confirmedIdentity,
+      lastDurationMs,
+      modelsReady,
+      recognitionReady,
+      profilesCount,
+      lastError,
+      start,
+      stop,
+      refreshProfiles,
+      enableRecognition,
+      onEvent,
+    ],
   );
 
   return <FaceCtx.Provider value={api}>{children}</FaceCtx.Provider>;

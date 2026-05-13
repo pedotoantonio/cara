@@ -11,6 +11,9 @@ export { useFaceDetection } from './hooks/useFaceDetection';
 export type {
   FaceBox,
   FaceDetection,
+  FaceEvent,
+  FaceEventHandler,
   FaceProfile,
   FaceSettings,
+  StoredDescriptor,
 } from './types';

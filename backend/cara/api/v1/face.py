@@ -1,12 +1,16 @@
-"""Face recognition REST endpoints (Phase 1).
+"""Face recognition REST endpoints.
 
-CRUD for `face_profiles` and the global `face_settings` singleton.
-Descriptor endpoints (`POST /face/profiles/{id}/descriptors`, `POST
-/face/match`) land in Phase 2 together with the recognition pipeline.
+Profiles + descriptors + global settings. The browser computes 128-D
+descriptors via face-api.js and ships them here; the backend stores
+them and serves them back to new devices for offline local matching.
 
 All mutating endpoints write an audit log entry. Admin-only — the
 feature is opt-in family-wide and only the household admin manages
 identities.
+
+Retention: max 30 descriptors per profile. When the cap is exceeded the
+oldest `source='continuous'` rows are pruned first; `source='enrollment'`
+rows (the 5 wizard captures) are never auto-deleted.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cara.api.deps import require_admin
@@ -24,6 +28,9 @@ from cara.models.face import FaceDescriptor, FaceProfile, FaceSettings
 from cara.models.user import User
 from cara.services import audit as audit_svc
 from cara.store import get_session
+
+
+MAX_DESCRIPTORS_PER_PROFILE = 30
 
 
 router = APIRouter(prefix="/face", tags=["face"])
@@ -76,6 +83,29 @@ class FaceSettingsUpdate(BaseModel):
     default_threshold: float | None = Field(default=None, ge=0.1, le=1.0)
     expression_enabled: bool | None = None
     age_gender_enabled: bool | None = None
+
+
+class DescriptorIn(BaseModel):
+    """One descriptor to persist for a profile."""
+
+    descriptor: list[float] = Field(min_length=128, max_length=128)
+    source: str = Field(pattern="^(enrollment|continuous)$")
+    quality: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class DescriptorsBulkIn(BaseModel):
+    items: list[DescriptorIn] = Field(min_length=1, max_length=10)
+
+
+class DescriptorOut(BaseModel):
+    id: UUID
+    profileId: UUID = Field(alias="profile_id")
+    descriptor: list[float]
+    source: str
+    quality: float | None = None
+    createdAt: datetime = Field(alias="created_at")
+
+    model_config = {"populate_by_name": True, "from_attributes": True}
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────
@@ -352,3 +382,251 @@ async def update_settings(
     await session.commit()
     await session.refresh(s)
     return FaceSettingsOut.model_validate(s, from_attributes=True)
+
+
+# ─── Descriptors ──────────────────────────────────────────────────────
+
+
+async def _prune_excess_descriptors(
+    session: AsyncSession, profile_id: UUID, keep_recent: int
+) -> int:
+    """Trim continuous descriptors so the profile stays under the cap.
+
+    Returns the number of rows deleted. Enrollment descriptors are
+    preserved unconditionally — they are the user-curated baseline.
+    """
+    total = (
+        await session.execute(
+            select(func.count(FaceDescriptor.id)).where(
+                FaceDescriptor.profile_id == profile_id
+            )
+        )
+    ).scalar_one()
+    if total <= keep_recent:
+        return 0
+
+    excess = total - keep_recent
+
+    # Find the `excess` oldest continuous rows.
+    to_drop = (
+        (
+            await session.execute(
+                select(FaceDescriptor.id)
+                .where(
+                    FaceDescriptor.profile_id == profile_id,
+                    FaceDescriptor.source == "continuous",
+                )
+                .order_by(FaceDescriptor.created_at.asc())
+                .limit(excess)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not to_drop:
+        return 0
+
+    await session.execute(
+        delete(FaceDescriptor).where(FaceDescriptor.id.in_(to_drop))
+    )
+    return len(to_drop)
+
+
+@router.post(
+    "/profiles/{profile_id}/descriptors",
+    response_model=list[DescriptorOut],
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_descriptors(
+    profile_id: UUID,
+    body: DescriptorsBulkIn,
+    request: Request,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[DescriptorOut]:
+    profile = (
+        await session.execute(select(FaceProfile).where(FaceProfile.id == profile_id))
+    ).scalar_one_or_none()
+    if profile is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    new_rows = [
+        FaceDescriptor(
+            profile_id=profile_id,
+            descriptor=item.descriptor,
+            source=item.source,
+            quality=item.quality,
+        )
+        for item in body.items
+    ]
+    for r in new_rows:
+        session.add(r)
+    await session.flush()
+
+    pruned = await _prune_excess_descriptors(
+        session, profile_id, MAX_DESCRIPTORS_PER_PROFILE
+    )
+
+    await audit_svc.record(
+        session,
+        actor=admin,
+        action="face.descriptor.add",
+        target_kind="face_profile",
+        target_id=str(profile_id),
+        detail={
+            "added": len(new_rows),
+            "sources": sorted({i.source for i in body.items}),
+            "pruned": pruned,
+        },
+        ip=_client_ip(request),
+    )
+    await session.commit()
+
+    out: list[DescriptorOut] = []
+    for r in new_rows:
+        await session.refresh(r)
+        out.append(
+            DescriptorOut.model_validate(
+                {
+                    "id": r.id,
+                    "profile_id": r.profile_id,
+                    "descriptor": list(r.descriptor),
+                    "source": r.source,
+                    "quality": r.quality,
+                    "created_at": r.created_at,
+                }
+            )
+        )
+    return out
+
+
+@router.get(
+    "/profiles/{profile_id}/descriptors",
+    response_model=list[DescriptorOut],
+)
+async def list_descriptors(
+    profile_id: UUID,
+    _: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[DescriptorOut]:
+    profile = (
+        await session.execute(select(FaceProfile).where(FaceProfile.id == profile_id))
+    ).scalar_one_or_none()
+    if profile is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    rows = (
+        (
+            await session.execute(
+                select(FaceDescriptor)
+                .where(FaceDescriptor.profile_id == profile_id)
+                .order_by(FaceDescriptor.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        DescriptorOut.model_validate(
+            {
+                "id": r.id,
+                "profile_id": r.profile_id,
+                "descriptor": list(r.descriptor),
+                "source": r.source,
+                "quality": r.quality,
+                "created_at": r.created_at,
+            }
+        )
+        for r in rows
+    ]
+
+
+# ─── Server-side match (optional, for new devices without a local cache) ──
+
+
+class MatchIn(BaseModel):
+    descriptor: list[float] = Field(min_length=128, max_length=128)
+
+
+class MatchHit(BaseModel):
+    profileId: UUID = Field(alias="profile_id")
+    displayName: str = Field(alias="display_name")
+    isChild: bool = Field(alias="is_child")
+    distance: float
+    matchedDescriptorId: UUID = Field(alias="matched_descriptor_id")
+
+    model_config = {"populate_by_name": True, "from_attributes": True}
+
+
+class MatchOut(BaseModel):
+    match: MatchHit | None
+
+
+@router.post("/match", response_model=MatchOut)
+async def server_match(
+    body: MatchIn,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MatchOut:
+    """Server-side nearest-neighbor over pgvector.
+
+    Useful for a fresh device that hasn't downloaded the descriptor cache
+    yet, or for double-checking a client-side match before triggering
+    high-stakes actions. Returns the closest profile that beats its own
+    threshold, or `None`.
+    """
+    # The L2 (euclidean) distance operator in pgvector is `<->`. We use
+    # the cosine HNSW index for `<=>` but for face descriptors trained
+    # on euclidean the right metric is L2; query unindexed for now.
+    sql = (
+        select(
+            FaceDescriptor.id,
+            FaceDescriptor.profile_id,
+            FaceProfile.display_name,
+            FaceProfile.is_child,
+            FaceProfile.match_threshold,
+            FaceDescriptor.descriptor.l2_distance(body.descriptor).label("distance"),
+        )
+        .join(FaceProfile, FaceProfile.id == FaceDescriptor.profile_id)
+        .where(FaceProfile.active.is_(True))
+        .order_by("distance")
+        .limit(2)
+    )
+    rows = (await session.execute(sql)).all()
+    if not rows:
+        return MatchOut(match=None)
+
+    best = rows[0]
+    second_dist = rows[1].distance if len(rows) > 1 else float("inf")
+
+    # Same ambiguity guard the client uses.
+    if best.distance > best.match_threshold:
+        return MatchOut(match=None)
+    if second_dist - best.distance < 0.05 and second_dist < float("inf"):
+        # Second-best is from a different profile? Then it's ambiguous.
+        second_pid = rows[1].profile_id if len(rows) > 1 else None
+        if second_pid is not None and second_pid != best.profile_id:
+            return MatchOut(match=None)
+
+    # Bump usage stats — non-blocking, audit-free since this isn't a mod.
+    await session.execute(
+        FaceProfile.__table__.update()
+        .where(FaceProfile.id == best.profile_id)
+        .values(
+            recognition_count=FaceProfile.recognition_count + 1,
+            last_recognized_at=datetime.now(timezone.utc),
+        )
+    )
+    await session.commit()
+
+    return MatchOut(
+        match=MatchHit.model_validate(
+            {
+                "profile_id": best.profile_id,
+                "display_name": best.display_name,
+                "is_child": best.is_child,
+                "distance": float(best.distance),
+                "matched_descriptor_id": best.id,
+            }
+        )
+    )

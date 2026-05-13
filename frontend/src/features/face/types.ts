@@ -1,9 +1,8 @@
 /**
  * Face recognition feature — shared types.
  *
- * Phase 1: detection only (bounding boxes + score). No descriptors, no
- * identity match yet. Types for descriptors / profiles are declared now
- * to keep the contract stable across phases.
+ * Phase 2: detection + 128-D descriptor + local identity match against
+ * a profile cache uploaded once from the backend.
  */
 
 export interface FaceBox {
@@ -16,31 +15,57 @@ export interface FaceBox {
 
 /** One face as returned by the worker after a single frame. */
 export interface FaceDetection {
-  /** Stable per-frame index; useful for temporal smoothing later. */
+  /** Stable per-frame index; combined with temporal smoothing for tracking. */
   trackId: number;
   box: FaceBox;
   /** Detector confidence 0..1. */
   score: number;
-  /** Optional 128-D descriptor (filled from Phase 2 onward). */
+  /** 128-D descriptor (only when recognition nets have been loaded). */
   descriptor?: Float32Array;
-  /** Best identity match (filled from Phase 2 onward). */
+  /** Best identity match (only when a profile is below its threshold). */
   identity?: {
     profileId: string;
     displayName: string;
+    isChild: boolean;
     distance: number;
   };
+}
+
+/** Profile cache row uploaded once to the worker for local matching. */
+export interface WorkerProfile {
+  profileId: string;
+  displayName: string;
+  isChild: boolean;
+  matchThreshold: number;
+  /** All known descriptors for this profile, packed for fast distance loops. */
+  descriptors: Float32Array[];
 }
 
 /** Worker → main message. */
 export type FaceWorkerOut =
   | { type: 'ready'; modelsLoaded: string[] }
-  | { type: 'detections'; frameId: number; detections: FaceDetection[]; durationMs: number }
+  | { type: 'recognitionReady' }
+  | { type: 'profilesLoaded'; count: number }
+  | {
+      type: 'detections';
+      frameId: number;
+      detections: FaceDetection[];
+      durationMs: number;
+    }
   | { type: 'error'; message: string };
 
 /** Main → worker message. */
 export type FaceWorkerIn =
   | { type: 'init'; modelsBaseUrl: string }
-  | { type: 'detect'; frameId: number; bitmap: ImageBitmap; inputSize: number }
+  | { type: 'loadRecognition' }
+  | { type: 'setProfiles'; profiles: WorkerProfile[] }
+  | {
+      type: 'detect';
+      frameId: number;
+      bitmap: ImageBitmap;
+      inputSize: number;
+      withDescriptor: boolean;
+    }
   | { type: 'shutdown' };
 
 /** Persisted face profile (backend-side shape). */
@@ -58,9 +83,34 @@ export interface FaceProfile {
   createdAt: string;
 }
 
+/** Stored descriptor as returned by `GET /face/profiles/{id}/descriptors`. */
+export interface StoredDescriptor {
+  id: string;
+  profileId: string;
+  descriptor: number[];
+  source: 'enrollment' | 'continuous';
+  quality: number | null;
+  createdAt: string;
+}
+
 export interface FaceSettings {
   enabled: boolean;
   defaultThreshold: number;
   expressionEnabled: boolean;
   ageGenderEnabled: boolean;
 }
+
+/** Lifecycle events emitted on the FaceContext local bus. */
+export type FaceEvent =
+  | { kind: 'face.detected'; trackId: number; score: number }
+  | {
+      kind: 'face.identified';
+      profileId: string;
+      displayName: string;
+      isChild: boolean;
+      distance: number;
+    }
+  | { kind: 'face.unknown_present'; trackId: number }
+  | { kind: 'face.lost'; profileId: string | null };
+
+export type FaceEventHandler = (event: FaceEvent) => void;
