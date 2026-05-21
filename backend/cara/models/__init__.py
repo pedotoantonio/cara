@@ -18,6 +18,7 @@ from cara.models.file import UploadedFile
 from cara.models.habit import HabitCandidate
 from cara.models.note import Note
 from cara.models.oauth_credentials import OAuthCredentials
+from cara.models.persona_profile import PersonaProfile
 from cara.models.push_subscription import PushSubscription
 from cara.models.reminder import Reminder, ReminderNotification, ReminderTemplate
 from cara.models.shopping import ShoppingItem
@@ -55,6 +56,7 @@ __all__ = [
     "Message",
     "Note",
     "OAuthCredentials",
+    "PersonaProfile",
     "PushSubscription",
     "Reminder",
     "ReminderNotification",

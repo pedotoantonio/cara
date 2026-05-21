@@ -420,6 +420,32 @@ async def chat(
     if tone_directive:
         sysprompt_active = sysprompt_active + tone_directive
 
+    # Persona profile injection (Ondata β) — Lumo-inspired longitudinal
+    # memory. Append the user's profile Markdown to the system prompt
+    # BEFORE the volatile facts block so it lives in the KV-cache-stable
+    # prefix. Off in privacy mode (whole point is no profile). Skipped
+    # automatically when confidence is low or no profile exists yet.
+    if tone_preset != "privacy":
+        try:
+            from cara.learning import persona_profiler as _persona  # noqa: PLC0415
+            from cara.api.v1._chat_system_prompt import build_persona_block  # noqa: PLC0415
+
+            persona_md = await _persona.get_for_prompt_injection(session, user.id)
+            if persona_md:
+                persona_block = build_persona_block(
+                    persona_md,
+                    user_name=(user.full_name or user.email.split("@")[0]).split()[0],
+                )
+                if persona_block:
+                    sysprompt_active = f"{sysprompt_active}\n\n{persona_block}"
+                    logger.info(
+                        "chat.persona.injected",
+                        user_id=user.id,
+                        markdown_chars=len(persona_md),
+                    )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning("chat.persona.failed", error=str(exc))
+
     # RAG: top-k facts for THIS user vs THIS question. Off in privacy
     # mode (the whole point of privacy is to not leak stored facts back
     # into the prompt) and off when the message is empty or only an
