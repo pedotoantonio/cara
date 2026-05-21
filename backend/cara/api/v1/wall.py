@@ -304,6 +304,41 @@ async def wall_ask(
     if not text:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty text")
 
+    # Sanity check (Ondata α #2) — drop YouTube-outro hallucinations
+    # and obvious garbage BEFORE we light up the NPU. The /wall/asr
+    # endpoint already runs this and includes `sanity` in the response,
+    # but a misbehaving client could still POST raw "Grazie." here.
+    # ~50µs, no LLM round-trip.
+    try:
+        from cara.services.asr_sanity import sanity_check  # noqa: PLC0415
+
+        sanity = sanity_check({"text": text})
+        if not sanity.ok:
+            reply = sanity.canned_reply or "Non ti ho capita, ripeti?"
+            audio_b64 = audio_mime = None
+            sr = None
+            if body.voice:
+                try:
+                    from cara.ai.tts import get_tts_service  # noqa: PLC0415
+
+                    tts = get_tts_service()
+                    audio_bytes, sr = await tts.synthesize(reply)
+                    import base64
+                    audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
+                    audio_mime = "audio/wav"
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("wall.ask.sanity_tts_failed", error=str(exc))
+            log.info("wall.ask.short_circuited",
+                     reason=sanity.reason, text=text)
+            return WallAskOut(
+                text=reply,
+                audio_base64=audio_b64,
+                audio_mime=audio_mime,
+                sample_rate=sr,
+            )
+    except Exception as exc:  # noqa: BLE001 — sanity must not break /ask
+        log.warning("wall.ask.sanity_failed", error=str(exc))
+
     # Run the deterministic pipeline (intent_router → skills → recipe).
     # If every stage misses, fall through to the LLM.
     from cara.api.v1._chat_pipeline import execute_pipeline_collect  # noqa: PLC0415

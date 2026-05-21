@@ -395,13 +395,27 @@ async def _on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # notes are OGG/Opus, audio files vary; faster-whisper handles
     # both via libsndfile.
     text: str | None = None
+    asr_result: dict | None = None
     try:
         from cara.services.asr import transcribe_bytes  # noqa: PLC0415
-        result = await transcribe_bytes(bytes(blob_bytes), language="it")
-        if isinstance(result, dict):
-            text = result.get("text")
+        asr_result = await transcribe_bytes(bytes(blob_bytes), language="it")
+        if isinstance(asr_result, dict):
+            text = asr_result.get("text")
     except Exception as exc:  # noqa: BLE001
         logger.warning("telegram.voice.transcribe_failed", error=str(exc))
+
+    # Sanity check (Ondata α #2). If transcribe_bytes ran the check
+    # (recent path) we reuse its decision; otherwise fall through to
+    # the legacy emptiness test.
+    sanity = (asr_result or {}).get("sanity") if isinstance(asr_result, dict) else None
+    if sanity and not sanity.get("ok", True):
+        canned = sanity.get("canned_reply") or (
+            "Non ho capito il vocale. Riprova in un posto silenzioso o "
+            "scrivi il messaggio."
+        )
+        await chat.send_message(canned)
+        logger.info("telegram.voice.rejected", reason=sanity.get("reason"))
+        return
 
     if not text or not text.strip():
         await chat.send_message(

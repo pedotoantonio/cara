@@ -158,6 +158,22 @@ async def transcribe_bytes(audio_bytes: bytes, language: str | None = "it") -> d
             pass
 
     result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+
+    # Sanity check (Ondata α #2). Pure function over the result dict;
+    # doesn't touch the model. Result is added as `sanity` so callers
+    # can opt-in: legacy callers reading only `text` keep working.
+    try:
+        from cara.services.asr_sanity import sanity_check
+        sanity = sanity_check(result)
+        result["sanity"] = {
+            "ok": sanity.ok,
+            "reason": sanity.reason,
+            "canned_reply": sanity.canned_reply,
+        }
+    except Exception as exc:  # noqa: BLE001 — sanity is best-effort
+        log.warning("asr.sanity.failed", error=str(exc))
+        result["sanity"] = {"ok": True, "reason": None, "canned_reply": None}
+
     log.info(
         "asr.whisper.transcribe.done",
         elapsed_ms=result["elapsed_ms"],
@@ -166,6 +182,8 @@ async def transcribe_bytes(audio_bytes: bytes, language: str | None = "it") -> d
         confidence=result.get("confidence_label"),
         avg_logprob=result.get("avg_logprob"),
         no_speech_prob=result.get("no_speech_prob"),
+        sanity_ok=result["sanity"]["ok"],
+        sanity_reason=result["sanity"].get("reason"),
     )
     # Mirror to the in-memory event log so the admin diagnostics page
     # can show recent ASR activity without requiring `docker logs`.
@@ -177,6 +195,8 @@ async def transcribe_bytes(audio_bytes: bytes, language: str | None = "it") -> d
             text_chars=len(result["text"]),
             audio_duration_s=round(result["duration_s"], 2),
             language=result.get("language"),
+            sanity_ok=result["sanity"]["ok"],
+            sanity_reason=result["sanity"].get("reason"),
         )
     except Exception:  # noqa: BLE001
         pass
