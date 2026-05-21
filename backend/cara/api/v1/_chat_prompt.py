@@ -36,26 +36,56 @@ def render_qwen_prompt(messages: list[ChatMessage]) -> str:
 
 
 # Persona tone presets — appended to the system prompt and (in privacy mode)
-# also drop the historical messages from the prompt, mirroring Lumo's three
-# tones (normale / neutro / sarcastico). Reset on every restart of the
-# backend container is fine: this is intentionally non-persistent at the
-# message layer (the key is in admin_settings, but no per-conversation
-# override).
+# also drop the historical messages from the prompt. Inspired by Lumo's
+# three-tone selector (normale/neutro/sarcastico), adapted for a family
+# household: no sarcastico (kids), no formale-rigido (this is casa not bank).
+#
+# Resolution order at request time:
+#   user.tone_preference  →  admin_settings.tone_preset  →  "default"
+#
+# "default" is the baseline; "calmo"/"energico"/"formale" are subtle vibe
+# shifts that share the same base persona; "playful" is a stronger flavour
+# (ironia leggera); "privacy" is a MODE (not a tone) that also strips
+# history — it's kept here for backwards compatibility but logically
+# separate.
 TONE_DIRECTIVE: dict[str, str] = {
     "default": "",
+    "calmo": (
+        "\n\n## TONO: CALMO\n"
+        "Parla in modo tranquillo e misurato. Frasi brevi, pause naturali. "
+        "Niente esclamazioni. Voce di una persona che ha tempo. "
+        "Usa parole come 'tranquillo', 'piano', 'con calma' quando aiutano."
+    ),
+    "energico": (
+        "\n\n## TONO: ENERGICO\n"
+        "Parla con vivacità e ritmo. Frasi propulsive, verbi forti. "
+        "Usa esclamazioni con moderazione (max 1 per risposta). "
+        "Sii incoraggiante: 'andiamo', 'forza', 'ottimo'. Resta concisa."
+    ),
+    "formale": (
+        "\n\n## TONO: FORMALE\n"
+        "Usa il 'lei' e un registro educato e professionale. "
+        "Frasi compiute, niente abbreviazioni, niente emoji. "
+        "Resta calda ma con distanza rispettosa — mai fredda."
+    ),
+    "playful": (
+        "\n\n## TONO: GIOCOSO\n"
+        "Aggiungi un tocco di leggerezza e ironia gentile alle risposte, ma "
+        "senza esagerare. Niente sarcasmo cattivo, niente prese in giro. "
+        "Pensa a una zia simpatica che racconta cose. Resta concisa."
+    ),
     "privacy": (
         "\n\n## MODALITÀ PRIVACY ATTIVA\n"
         "Non usare il nome dell'utente. Non fare riferimento alla cronologia. "
         "Rispondi al turno corrente con il minimo di informazioni necessarie. "
         "Niente domande personali, niente memorie."
     ),
-    "playful": (
-        "\n\n## MODALITÀ SCHERZOSA ATTIVA\n"
-        "Aggiungi un tocco di leggerezza e ironia gentile alle risposte, ma "
-        "senza esagerare. Niente sarcasmo cattivo, niente prese in giro. "
-        "Pensa a una zia simpatica che racconta cose. Resta concisa."
-    ),
 }
+
+# Tones the user can self-select (excludes 'privacy' which is a mode).
+USER_SELECTABLE_TONES: tuple[str, ...] = (
+    "default", "calmo", "energico", "formale", "playful",
+)
 
 
 WEEKDAYS_IT: list[str] = [

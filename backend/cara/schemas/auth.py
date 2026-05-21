@@ -31,6 +31,9 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+ToneKey = Literal["default", "calmo", "energico", "formale", "playful"]
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -41,6 +44,7 @@ class UserOut(BaseModel):
     is_active: bool
     role: FamilyRole
     birth_date: date | None = None
+    tone_preference: ToneKey | None = None
     created_at: datetime
 
 
@@ -50,6 +54,11 @@ class UserUpdate(BaseModel):
     # (parent ↔ guest); admin role + active flag are managed by admin endpoints.
     role: FamilyRole | None = None
     birth_date: date | None = None
+    # Per-user voice tone override. NULL clears the override → inherit
+    # admin_settings.tone_preset. "privacy" is intentionally NOT user-
+    # selectable: it's a mode, not a tone, and only admin can engage it
+    # system-wide.
+    tone_preference: ToneKey | None = None
 
 
 class PasswordChange(BaseModel):

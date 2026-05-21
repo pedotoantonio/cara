@@ -199,6 +199,14 @@ async def update_me(
             user.role = body.role
     if "birth_date" in fields:
         user.birth_date = body.birth_date  # may be None to clear
+    if "tone_preference" in fields:
+        # Pydantic Literal already validated the value is in
+        # USER_SELECTABLE_TONES (or None). "default" is treated as
+        # "no preference" → stored as NULL so the chat layer falls
+        # through to admin_settings.tone_preset.
+        user.tone_preference = (
+            body.tone_preference if body.tone_preference and body.tone_preference != "default" else None
+        )
     session.add(user)
     await session.flush()
     return UserOut.model_validate(user)

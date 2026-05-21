@@ -69,10 +69,14 @@ DEFAULTS: dict[str, Any] = {
     "cda_domain_blacklist": None,  # list[str] of always-blocked domains
     "cda_domain_whitelist_for_child": None,  # allowed domains for child role
     "cda_agent_loop_enabled": True,  # forced grounding on info-need queries
-    # Persona tone preset (Lumo-inspired). Layered ON TOP of llm_system_prompt:
-    #   "default"  → persona standard, contesto storico + profilo utente
-    #   "privacy"  → no profilo utente, no cronologia, solo turno corrente
-    #   "playful"  → persona più scherzosa, no profilo nel prompt
+    # Persona tone preset (Lumo-inspired). Layered ON TOP of llm_system_prompt.
+    # System-wide default; per-user override via `users.tone_preference`.
+    #   "default"  → persona standard
+    #   "calmo"    → tono tranquillo, frasi brevi, pause naturali
+    #   "energico" → tono vivace, ritmo, incoraggiante
+    #   "formale"  → uso del "lei", registro educato
+    #   "playful"  → leggerezza e ironia gentile
+    #   "privacy"  → MODE (non tono): no profilo, no cronologia
     "tone_preset": "default",
     # Hot-swappable LLM size variant. "fast" = 1.5B (~9 tok/s), "quality" =
     # 3B (~4 tok/s, less hallucination). Switch is destroy+load (~10 s).

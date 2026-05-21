@@ -404,10 +404,18 @@ async def chat(
         session, "llm_system_prompt", settings.llm_system_prompt
     )
 
-    # Tone preset — appends a directive and, in "privacy" mode, also strips
-    # the conversation history so the model only sees the current turn.
-    tone_preset = await setting_svc.get(session, "tone_preset")
-    tone_preset = tone_preset if tone_preset in _TONE_DIRECTIVE else "default"
+    # Tone resolution order (Lumo-inspired, Ondata α #1):
+    #   1. user.tone_preference  (per-user override, NULL = inherit)
+    #   2. admin_settings.tone_preset  (family default)
+    #   3. "default"  (no overlay)
+    # Privacy is admin-only — it strips history + facts, which is a mode
+    # we don't expose as a self-service user choice.
+    user_tone = getattr(user, "tone_preference", None)
+    if user_tone and user_tone in _TONE_DIRECTIVE and user_tone != "privacy":
+        tone_preset = user_tone
+    else:
+        admin_tone = await setting_svc.get(session, "tone_preset")
+        tone_preset = admin_tone if admin_tone in _TONE_DIRECTIVE else "default"
     tone_directive = _TONE_DIRECTIVE.get(tone_preset, "")
     if tone_directive:
         sysprompt_active = sysprompt_active + tone_directive
