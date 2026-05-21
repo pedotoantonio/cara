@@ -32,7 +32,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cara.ai.embeddings import EmbeddingService, top_k as topk_helper
+from cara.ai.embeddings import EmbeddingService
 from cara.models.fact import (
     FACT_SOURCE_EXPLICIT,
     FACT_SOURCE_PATTERN,
@@ -333,26 +333,35 @@ async def top_k_for_query(
 ) -> list[tuple[Fact, float]]:
     """Cosine top-k over (active, embedding-populated) facts for `user_id`.
 
-    Skips facts without an embedding (those will get backfilled by the
-    indexer). Family-wide facts (`user_id IS NULL`) are always included.
+    Uses pgvector's `<=>` cosine-distance operator (HNSW-indexed; see
+    migration d3e4a92f17c8) — the DB returns at most `k` rows already
+    sorted, so we don't pull the full table back into Python.
+
+    Facts without an embedding are skipped (the indexer backfills them).
+    Family-wide facts (`user_id IS NULL`) are always included.
+
+    `min_score` is a cosine-*similarity* threshold (1 − distance) — values
+    closer to 1 mean tighter matches; 0.5 ≈ "loosely related".
     """
+    q = await embedder.encode(query)
+
+    # pgvector: distance = 1 - cos(θ), so similarity = 1 - distance.
+    distance_expr = Fact.embedding.cosine_distance(q.vector)
     stmt = (
-        select(Fact)
+        select(Fact, distance_expr.label("distance"))
         .where(Fact.active.is_(True))
         .where(Fact.embedding.is_not(None))
+        .order_by(distance_expr)
+        .limit(k)
     )
     if user_id is not None:
         from sqlalchemy import or_
 
         stmt = stmt.where(or_(Fact.user_id == user_id, Fact.user_id.is_(None)))
-    facts: list[Fact] = list((await session.execute(stmt)).scalars().all())
-    if not facts:
-        return []
-    q = await embedder.encode(query)
-    pairs: list[tuple[Fact, list[float]]] = [
-        (f, list(f.embedding) if f.embedding else []) for f in facts if f.embedding
-    ]
-    return topk_helper(q.vector, pairs, k=k, min_score=min_score)
+
+    rows = (await session.execute(stmt)).all()
+    max_distance = 1.0 - min_score
+    return [(f, 1.0 - float(d)) for f, d in rows if d is not None and d <= max_distance]
 
 
 async def confirm_fact(session: AsyncSession, fact_id: int, *, commit: bool = False) -> Fact | None:
@@ -382,3 +391,55 @@ async def deactivate_fact(session: AsyncSession, fact_id: int, *, commit: bool =
     if commit:
         await session.commit()
     return (result.rowcount or 0) > 0
+
+
+# ---------------------------------------------------------------------------
+# Fire-and-forget extraction from the chat hot path
+# ---------------------------------------------------------------------------
+
+
+async def extract_facts_async(
+    *,
+    user_id: int | None,
+    message: str,
+    source_ref: str | None = None,
+) -> None:
+    """Run pattern detection on `message` and persist hits in a new session.
+
+    Designed to be scheduled with `asyncio.create_task(...)` right after the
+    chat layer commits an incoming user message — see `chat.py`. Failures
+    are logged but swallowed: extraction must never break the chat reply.
+
+    Facts are saved with `embedding=NULL`; `list_facts` (used by the system
+    prompt builder) returns them anyway. `top_k_for_query` will skip them
+    until a backfill job indexes them — fine for the <20 facts/user regime
+    where a flat list is plenty.
+    """
+    if not message or len(message.strip()) < 8:
+        return
+    try:
+        from cara.store.db import get_sessionmaker  # local import: avoid cycle at module load
+
+        sessionmaker = get_sessionmaker()
+        async with sessionmaker() as session:
+            saved = await save_facts_from_message(
+                session,
+                user_id=user_id,
+                message=message,
+                embedder=None,
+                source_ref=source_ref,
+                commit=True,
+            )
+        if saved:
+            log.info(
+                "semantic.extract_async.saved",
+                user_id=user_id,
+                count=len(saved),
+                types=[f.type for f in saved],
+            )
+    except Exception as exc:  # noqa: BLE001 — fire-and-forget by design
+        log.warning(
+            "semantic.extract_async.failed",
+            user_id=user_id,
+            error=str(exc),
+        )

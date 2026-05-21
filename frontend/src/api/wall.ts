@@ -152,7 +152,16 @@ export function snapshotUrl(camId: string, bust: number): string {
 
 // ─── ASR fallback (Whisper) ──────────────────────────────────────
 
-export async function transcribeAudio(blob: Blob, language = 'it'): Promise<string> {
+export interface WallAsrResult {
+  text: string;
+  confidence_label?: 'high' | 'medium' | 'low' | 'empty';
+  avg_logprob?: number | null;
+  no_speech_prob?: number | null;
+  duration_s?: number;
+  elapsed_ms?: number;
+}
+
+export async function transcribeAudio(blob: Blob, language = 'it'): Promise<WallAsrResult> {
   const fd = new FormData();
   fd.append('audio', blob, 'recording.webm');
   fd.append('language', language);
@@ -165,7 +174,14 @@ export async function transcribeAudio(blob: Blob, language = 'it'): Promise<stri
     throw new Error(`Wall /asr → HTTP ${r.status}`);
   }
   const data = await r.json();
-  return (data.text || '').trim();
+  return {
+    text: (data.text || '').trim(),
+    confidence_label: data.confidence_label,
+    avg_logprob: data.avg_logprob,
+    no_speech_prob: data.no_speech_prob,
+    duration_s: data.duration_s,
+    elapsed_ms: data.elapsed_ms,
+  };
 }
 
 // ─── Tasks edit ──────────────────────────────────────────────────
@@ -653,6 +669,31 @@ export async function checkFaceFromDevice(blob: Blob): Promise<WallFaceCheckResu
     throw new Error(`Wall /face-check → HTTP ${r.status}`);
   }
   return (await r.json()) as WallFaceCheckResult;
+}
+
+export interface WallNewsItem {
+  title: string;
+  summary: string;
+  link: string;
+  source: string;
+  published: string | null;
+}
+
+export interface WallNewsResponse {
+  category: string;
+  count: number;
+  items: WallNewsItem[];
+}
+
+export function fetchWallNews(opts?: {
+  category?: string;
+  limit?: number;
+}): Promise<WallNewsResponse> {
+  const q = new URLSearchParams();
+  if (opts?.category) q.set('category', opts.category);
+  if (opts?.limit) q.set('limit', String(opts.limit));
+  const suffix = q.toString() ? `?${q.toString()}` : '';
+  return getJson<WallNewsResponse>(`/news${suffix}`);
 }
 
 export async function clearBoughtShopping(): Promise<void> {

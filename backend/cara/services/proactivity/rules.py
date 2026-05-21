@@ -525,68 +525,63 @@ async def budget_drift_warning(ctx: RuleContext) -> Suggestion | None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# 11) Documenti in scadenza — Memorial ondata
+# ---------------------------------------------------------------------------
+
+
 @rule(
-    "lights_on_nobody_home",
-    cooldown_hours=2.0,
+    "expiring_documents_30d",
+    cooldown_hours=72.0,  # 3 giorni — non sgridare ogni mattina
     description=(
-        "Se la presenza famiglia indica casa vuota e ci sono luci accese, "
-        "propone di spegnerle."
+        "Quando un promemoria della categoria 'documenti' scade entro "
+        "30 giorni e non è ancora stato chiuso, ricorda di rinnovarlo."
     ),
 )
-async def lights_on_nobody_home(ctx: RuleContext) -> Suggestion | None:
-    if ctx.smarthome is None or ctx.family is None:
+async def expiring_documents_30d(ctx: RuleContext) -> Suggestion | None:
+    if ctx.db_session is None:
         return None
-    # Don't fire at night when "nobody home" is normal (people sleeping).
-    if ctx.now.hour < 8 or ctx.now.hour >= 22:
-        return None
+    from datetime import timedelta as _td
+    from sqlalchemy import select
 
-    # Family presence: expect a list of present user names / count
+    from cara.models.reminder import (
+        CATEGORY_DOCUMENTS,
+        STATUS_ACTIVE,
+        STATUS_SNOOZED,
+        Reminder,
+    )
+
+    horizon = ctx.now + _td(days=30)
+    stmt = (
+        select(Reminder)
+        .where(
+            Reminder.category == CATEGORY_DOCUMENTS,
+            Reminder.status.in_([STATUS_ACTIVE, STATUS_SNOOZED]),
+            Reminder.due_at <= horizon,
+            Reminder.due_at >= ctx.now,
+        )
+        .order_by(Reminder.due_at.asc())
+        .limit(1)
+    )
     try:
-        present = await ctx.family.who_is_home() if callable(getattr(ctx.family, "who_is_home", None)) else None
+        row = (await ctx.db_session.execute(stmt)).scalar_one_or_none()
     except Exception as exc:  # noqa: BLE001
-        log.debug("lights_on.presence_failed", error=str(exc))
+        log.debug("expiring_documents.query_failed", error=str(exc))
         return None
 
-    if present is None:
-        return None
-    # Treat empty list / dict.count==0 / int 0 as "nobody"
-    if isinstance(present, (list, tuple, set)):
-        nobody = len(present) == 0
-    elif isinstance(present, dict):
-        nobody = (present.get("count", 0) or 0) == 0
-    else:
-        try:
-            nobody = int(present) == 0
-        except (TypeError, ValueError):
-            return None
-    if not nobody:
+    if row is None:
         return None
 
-    # Smart-home: count entities domain=light state=on
-    try:
-        entities = await ctx.smarthome.list_entities()
-    except Exception as exc:  # noqa: BLE001
-        log.debug("lights_on.smarthome_failed", error=str(exc))
-        return None
-
-    on_lights = [
-        e for e in (entities or [])
-        if getattr(e, "domain", "") == "light"
-        and (getattr(e, "state", "") or "").lower() == "on"
-    ]
-    if not on_lights:
-        return None
-
-    if len(on_lights) == 1:
-        nice = getattr(on_lights[0], "friendly_name", None) or on_lights[0].id
-        text = f"Casa vuota e \"{nice}\" è ancora accesa. Vuoi che la spenga?"
-    else:
-        text = f"Casa vuota e ci sono {len(on_lights)} luci accese. Vuoi che le spenga?"
+    days = max(1, (row.due_at - ctx.now).days)
     return Suggestion(
-        rule_id="lights_on_nobody_home",
-        text=text,
-        priority=Priority.HIGH,
-        action={"deep_link": "/casa", "tool": "lights_off_all"},
+        rule_id="expiring_documents_30d",
+        text=(
+            f"📄 {row.title} scade fra {days} "
+            f"{'giorno' if days == 1 else 'giorni'}. Vuoi pianificare il rinnovo?"
+        ),
+        priority=Priority.MEDIUM,
+        target_user_id=row.user_id,
+        action={"deep_link": f"/reminders/list?focus={row.id}"},
     )
 
 
@@ -607,5 +602,5 @@ def registered_rule_ids() -> tuple[str, ...]:
         "shopping_review_saturday",
         "task_overdue_24h",
         "budget_drift_warning",
-        "lights_on_nobody_home",
+        "expiring_documents_30d",
     )

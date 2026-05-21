@@ -38,6 +38,14 @@ export function startWakeWord(opts: WakeWordOptions): WakeWordHandle | null {
   let cancelled = false;
   let paused = false;
   let active: ListenHandle | null = null;
+  // Exponential backoff on consecutive errors. Resets when we get any
+  // successful transcript event from `onText` (or `onEnd` without an
+  // error in between). Web Speech routes through Google STT which can
+  // emit transient `network` errors when connectivity wobbles — we must
+  // not hammer the API and we must not surface user-visible toasts for
+  // each blip.
+  let consecutiveErrors = 0;
+  const BACKOFF_MS = [400, 2_000, 5_000, 15_000, 60_000];
 
   function loop() {
     if (cancelled || paused) return;
@@ -46,6 +54,7 @@ export function startWakeWord(opts: WakeWordOptions): WakeWordHandle | null {
       interim: true,
       continuous: false,   // wake-word: stop after each result, restart on onEnd
       onText: (text, isFinal) => {
+        consecutiveErrors = 0;
         const norm = text.toLowerCase();
         // Strip leading punctuation/whitespace so "cara, …" matches.
         const trimmed = norm.replace(/^[\s.,!?]+/, '');
@@ -78,11 +87,17 @@ export function startWakeWord(opts: WakeWordOptions): WakeWordHandle | null {
           setTimeout(loop, 300);
         }
       },
-      onError: () => {
+      onError: (err) => {
         active = null;
-        // After permission errors, "no-speech" timeouts, etc. — back off and retry.
+        const code = (err || '').toLowerCase();
+        const isSilent = code.includes('no-speech') || code.includes('aborted');
+        if (!isSilent) {
+          consecutiveErrors += 1;
+        }
+        const idx = Math.min(consecutiveErrors, BACKOFF_MS.length - 1);
+        const delay = isSilent ? 300 : BACKOFF_MS[idx];
         if (!cancelled && !paused) {
-          setTimeout(loop, 1500);
+          setTimeout(loop, delay);
         }
       },
     });

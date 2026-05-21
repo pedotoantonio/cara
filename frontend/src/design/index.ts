@@ -11,4 +11,7 @@ export { Input, Textarea, Field } from './components/Input';
 export { Badge } from './components/Badge';
 export { BottomSheet } from './components/BottomSheet';
 export { ToastProvider, useToast } from './components/Toast';
+export { CategoryCard, type CategoryTint } from './components/CategoryCard';
+export { CategoryHeader } from './components/CategoryHeader';
+export { ProgressRing } from './components/ProgressRing';
 export { cn } from './components/cn';

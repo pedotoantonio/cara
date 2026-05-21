@@ -59,11 +59,7 @@ CATALOG: list[dict[str, str]] = [
      "category": "Infra", "role": "stateful"},
     {"name": "cara-minio", "label": "MinIO (object storage)",
      "category": "Infra", "role": "stateful"},
-    {"name": "cara-chroma", "label": "ChromaDB (vector)",
-     "category": "Infra", "role": "stateful"},
     # ── Adjacent services CARA depends on ────────────────────────────
-    {"name": "frigate-faces", "label": "Frigate Faces (riconoscimento)",
-     "category": "Adiacenti", "role": "stateful"},
     {"name": "frigate", "label": "Frigate NVR",
      "category": "Adiacenti", "role": "stateful"},
     {"name": "nginx-proxy", "label": "Reverse proxy",

@@ -34,6 +34,13 @@ class User(Base):
     )
     wall_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
     wall_emoji: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # Per-user tone override for chat replies. NULL = inherit admin
+    # default (admin_settings.tone_preset → "default"). Values must be
+    # keys of `_chat_prompt.USER_SELECTABLE_TONES`; the chat layer
+    # validates and falls back to "default" on unknown values, so we
+    # don't enforce a CHECK constraint here (admin can add new tones
+    # without a migration). 24 chars is plenty for the longest key.
+    tone_preference: Mapped[str | None] = mapped_column(String(24), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

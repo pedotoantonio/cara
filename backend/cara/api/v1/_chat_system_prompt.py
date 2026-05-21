@@ -38,16 +38,31 @@ from cara.api.v1._chat_prompt import TONE_DIRECTIVE, runtime_context_message
 
 @dataclass
 class SystemPromptSegments:
-    """Three layers of the system prompt + the stable-prefix fingerprint."""
+    """Four layers of the system prompt + the stable-prefix fingerprint.
+
+    Ordered most-stable → least-stable so KV-cache prefill survives:
+
+      base      → admin system prompt (~monthly change)
+      tone      → tone directive (~per-role)
+      persona   → user's longitudinal profile (~nightly rebuild) ← Ondata β
+      facts     → top-k facts + runtime context (~per-turn)
+
+    `persona` is in the stable prefix because it changes once per night
+    per user; the first chat turn after a rebuild pays one full prefill
+    (~200ms TTFT), every subsequent turn that day is cached.
+    """
 
     base: str
     tone: str
     facts: str
+    persona: str = ""
 
     def assemble(self) -> str:
         parts = [self.base.rstrip()]
         if self.tone:
             parts.append(self.tone.rstrip())
+        if self.persona:
+            parts.append(self.persona.rstrip())
         if self.facts:
             parts.append(self.facts.rstrip())
         return "\n\n".join(p for p in parts if p)
@@ -56,7 +71,11 @@ class SystemPromptSegments:
         """Concatenation of the segments that survive across turns —
         what the KV cache effectively prefills on. `facts` is excluded
         because it's regenerated per turn."""
-        return f"{self.base.rstrip()}\n\n{self.tone.rstrip()}".rstrip()
+        return (
+            f"{self.base.rstrip()}\n\n"
+            f"{self.tone.rstrip()}\n\n"
+            f"{self.persona.rstrip()}"
+        ).rstrip()
 
     def fingerprint(self) -> str:
         """Short SHA-1 of the stable prefix; used by the chat layer to
@@ -64,6 +83,29 @@ class SystemPromptSegments:
         return hashlib.sha1(
             self.stable_prefix().encode("utf-8")
         ).hexdigest()[:16]
+
+
+def build_persona_block(persona_markdown: str | None, *, user_name: str | None = None) -> str:
+    """Wrap the persona markdown in a labelled section the model can spot.
+
+    Skipped (returns "") if `persona_markdown` is empty or None. Caller
+    is expected to have already passed the confidence / status filters
+    (see `learning.persona_profiler.get_for_prompt_injection`).
+    """
+    md = (persona_markdown or "").strip()
+    if not md:
+        return ""
+    header = (
+        f"## CHI È {user_name.upper()} (profilo longitudinale)"
+        if user_name
+        else "## CHI È L'UTENTE (profilo longitudinale)"
+    )
+    return (
+        f"{header}\n"
+        f"{md}\n"
+        "Usa questo profilo per dare risposte coerenti con la persona; "
+        "non riportarlo testualmente all'utente."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -110,9 +152,10 @@ def build_segments(
     tone_key: str = "default",
     user_facts: Iterable[str] | None = None,
     user_name: str | None = None,
+    persona_markdown: str | None = None,
     include_runtime_context: bool = True,
 ) -> SystemPromptSegments:
-    """Compose the three segments. Pure function — easily unit-testable.
+    """Compose the four segments. Pure function — easily unit-testable.
 
     `base_prompt`: the admin-configured system prompt
                    (`admin_settings.llm_system_prompt` or the env
@@ -125,11 +168,18 @@ def build_segments(
                    (top-k via embeddings). Empty iterable → no facts
                    block emitted.
 
+    `persona_markdown`: Ondata β — the longitudinal profile from
+                         `learning.persona_profiler`. Already validated
+                         (confidence ≥ threshold, status='ok') and
+                         truncated to PROFILE_MAX_CHARS by the caller.
+                         None / empty → no persona block emitted.
+
     `include_runtime_context`: append today's date / time / days-to-Xmas
                                 to the facts block. Default True.
     """
     base = base_prompt.strip()
     tone = TONE_DIRECTIVE.get(tone_key, "").strip()
+    persona = build_persona_block(persona_markdown, user_name=user_name)
 
     # Volatile tail.
     parts: list[str] = []
@@ -140,4 +190,4 @@ def build_segments(
         parts.append(runtime_context_message())
     facts = "\n\n".join(parts)
 
-    return SystemPromptSegments(base=base, tone=tone, facts=facts)
+    return SystemPromptSegments(base=base, tone=tone, facts=facts, persona=persona)

@@ -24,7 +24,7 @@ Resolution proceeds in four cascaded stages:
 
   4. **Presence disambiguation** — if multiple candidates remain after
      embedding, filter by the area where the user is currently
-     standing (frigate-faces presence). One candidate left → resolve.
+     standing (face recognition active profile). One candidate left → resolve.
      More than one → prompt the user for clarification.
 
 The resolver returns a `Resolution` carrying the chosen entity, the

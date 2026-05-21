@@ -66,14 +66,14 @@ export function WallCalendarPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4 mt-2">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+    <div className="flex flex-col gap-3 sm:gap-4 mt-2">
+      {/* Header — wraps on mobile so all elements fit. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-3">
           <button
             type="button"
             onClick={() => shift(-1)}
-            className="rounded-pill bg-surface2 px-4 py-2 text-fg-soft hover:bg-surface2/80"
+            className="rounded-pill bg-surface2 px-3 sm:px-4 py-1.5 sm:py-2 text-fg-soft hover:bg-surface2/80"
             aria-label="Mese precedente"
           >
             ‹
@@ -81,7 +81,7 @@ export function WallCalendarPage() {
           <button
             type="button"
             onClick={() => shift(+1)}
-            className="rounded-pill bg-surface2 px-4 py-2 text-fg-soft hover:bg-surface2/80"
+            className="rounded-pill bg-surface2 px-3 sm:px-4 py-1.5 sm:py-2 text-fg-soft hover:bg-surface2/80"
             aria-label="Mese successivo"
           >
             ›
@@ -89,24 +89,25 @@ export function WallCalendarPage() {
           <button
             type="button"
             onClick={jumpToToday}
-            className="rounded-pill bg-surface2 px-4 py-2 text-fg-soft hover:bg-surface2/80 text-sm"
+            className="rounded-pill bg-surface2 px-3 sm:px-4 py-1.5 sm:py-2 text-fg-soft hover:bg-surface2/80 text-xs sm:text-sm"
           >
             Oggi
           </button>
         </div>
         <h2
-          className="font-display text-fg first-letter:capitalize"
-          style={{ fontSize: 'clamp(28px, 3vw, 44px)', fontWeight: 300 }}
+          className="font-display text-fg first-letter:capitalize w-full sm:w-auto order-first sm:order-none text-center sm:text-left"
+          style={{ fontSize: 'clamp(22px, 3vw, 44px)', fontWeight: 300 }}
         >
           {MONTH_LABELS[month - 1]} {year}
         </h2>
-        <div className="w-32" /> {/* spacer for symmetry */}
+        <div className="hidden sm:block sm:w-32" /> {/* spacer for symmetry */}
       </div>
 
       {error && <div className="text-alert text-center py-2">⚠ {error}</div>}
 
-      {/* Weekday header */}
-      <div className="grid grid-cols-7 gap-2">
+      {/* Weekday header — single-letter on phones (L/M/M/G/V/S/D) so
+          the 7 columns fit at 360 px without overflowing. */}
+      <div className="grid grid-cols-7 gap-1 sm:gap-2">
         {HEADER_DAYS.map((d, i) => (
           <div
             key={d}
@@ -114,20 +115,22 @@ export function WallCalendarPage() {
               'text-center font-medium pb-1 border-b border-surface2',
               i >= 5 ? 'text-fg-muted' : 'text-fg-soft',
             ].join(' ')}
-            style={{ fontSize: 'clamp(13px, 1vw, 16px)' }}
+            style={{ fontSize: 'clamp(11px, 1vw, 16px)' }}
           >
-            {d}
+            <span className="sm:hidden">{d.charAt(0)}</span>
+            <span className="hidden sm:inline">{d}</span>
           </div>
         ))}
       </div>
 
-      {/* Grid */}
+      {/* Grid — tight gap + WallDayCell drops its 120-px min-h on
+          phones so 6 rows fit without obscene vertical scrolling. */}
       {!data ? (
         <div className="text-fg-muted text-center py-8 animate-breathe">
           Carico il calendario…
         </div>
       ) : (
-        <div className="grid grid-cols-7 gap-2">
+        <div className="grid grid-cols-7 gap-1 sm:gap-2">
           {data.days.map((day) => (
             <WallDayCell
               key={day.date}

@@ -8,7 +8,6 @@
  */
 
 import { discoverContent, type CdaKind } from '../api/cda';
-import { whoIsHome } from '../api/family';
 import { getNews, type NewsCategory } from '../api/news';
 import { createNote } from '../api/notes';
 import { getStation } from '../api/radio';
@@ -24,14 +23,13 @@ export type ToolCall =
   | { type: 'get_news'; category: NewsCategory }
   | { type: 'play_radio'; station: string }
   | { type: 'stop_radio' }
-  | { type: 'who_is_home' }
   | { type: 'discover'; query: string; kind: CdaKind }
   | { type: 'unknown'; raw: string };
 
 // Match any of our known tool names. The tolerant prefix absorbs the 1.5B's
 // occasional typos around "TOOL" / "TUPO" / "TU" / missing prefix.
 const TOOL_LINE_RE =
-  /\[\s*(?:[A-Z_]+\s*:?\s*)?(add_task|complete_task|list_tasks|add_shopping|add_note|get_news|play_radio|stop_radio|who_is_home|discover)\b\s*([^\]]*?)\]/gi;
+  /\[\s*(?:[A-Z_]+\s*:?\s*)?(add_task|complete_task|list_tasks|add_shopping|add_note|get_news|play_radio|stop_radio|discover)\b\s*([^\]]*?)\]/gi;
 
 const CDA_KINDS: ReadonlyArray<CdaKind> = [
   'audio_stream',
@@ -93,8 +91,6 @@ export function parseToolCalls(content: string): ParsedAssistantMessage {
       if (station) allCalls.push({ type: 'play_radio', station });
     } else if (lower === 'stop_radio') {
       allCalls.push({ type: 'stop_radio' });
-    } else if (lower === 'who_is_home') {
-      allCalls.push({ type: 'who_is_home' });
     } else if (lower === 'discover') {
       const query = (args.query ?? '').trim();
       const kindRaw = (args.kind ?? 'article').toLowerCase() as CdaKind;
@@ -147,7 +143,6 @@ const TOOL_FALLBACK_BY_KIND: Partial<Record<ToolCall['type'], string>> = {
   get_news: 'Ecco le ultime notizie:',
   play_radio: 'Accendo la radio.',
   stop_radio: 'Spengo la radio.',
-  who_is_home: 'Guardo subito chi vedo in casa…',
   discover: 'Cerco e te lo metto su…',
 };
 
@@ -318,22 +313,6 @@ export async function executeTools(
           });
         } catch (e) {
           results.push({ call: c, ok: false, detail: (e as Error).message });
-        }
-      } else if (c.type === 'who_is_home') {
-        const r = await whoIsHome(15);
-        if (r.count === 0) {
-          results.push({ call: c, ok: true, detail: 'In questo momento non vedo nessuno in casa.' });
-        } else {
-          const names = r.people
-            .map((p) =>
-              p.minutes_ago === 0 ? `${p.name} (ora)` : `${p.name} (${p.minutes_ago} min fa)`,
-            )
-            .join(', ');
-          results.push({
-            call: c,
-            ok: true,
-            detail: `In casa adesso (ultimi ${r.window_minutes} min): ${names}`,
-          });
         }
       } else {
         results.push({ call: c, ok: false, detail: `tool sconosciuto: ${c.raw}` });

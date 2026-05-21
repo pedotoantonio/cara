@@ -11,10 +11,22 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-title" content="Cara" />
     <title>Cara — la casa che ti parla</title>
+    <!-- Preconnect to Google Fonts so the Source Serif 4 request goes
+         out before the CSS @import is parsed — saves ~150-300 ms of
+         FOUT on cold loads. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <style>
       /* Pre-React paint: avoid the slate flash. Mirror tokens.ts day defaults. */
       :root { color-scheme: light; }
-      html, body { background-color: #FAF7F2; color: #2A2A2A; }
+      html, body {
+        background-color: #FAF7F2;
+        color: #2A2A2A;
+        /* Match the design-system stack so first-paint text doesn't
+           reflow once Source Serif 4 finishes loading. Georgia is the
+           ubiquitous serif fallback (system on every OS). */
+        font-family: 'Source Serif 4', 'Source Serif Pro', Georgia, 'Times New Roman', serif;
+      }
       @media (prefers-color-scheme: dark) {
         :root { color-scheme: dark; }
         html, body { background-color: #0F1B2D; color: #F1E9D8; }

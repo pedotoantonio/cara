@@ -54,7 +54,7 @@ from cara.models.shopping import ShoppingItem
 from cara.models.task import Task
 from cara.models.user import User
 from cara.services import admin_settings as admin_svc
-from cara.services import family_bus, wall as wall_svc
+from cara.services import family_bus, news as news_svc, wall as wall_svc
 from cara.store import get_session
 
 log = structlog.get_logger(__name__)
@@ -304,6 +304,41 @@ async def wall_ask(
     if not text:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty text")
 
+    # Sanity check (Ondata α #2) — drop YouTube-outro hallucinations
+    # and obvious garbage BEFORE we light up the NPU. The /wall/asr
+    # endpoint already runs this and includes `sanity` in the response,
+    # but a misbehaving client could still POST raw "Grazie." here.
+    # ~50µs, no LLM round-trip.
+    try:
+        from cara.services.asr_sanity import sanity_check  # noqa: PLC0415
+
+        sanity = sanity_check({"text": text})
+        if not sanity.ok:
+            reply = sanity.canned_reply or "Non ti ho capita, ripeti?"
+            audio_b64 = audio_mime = None
+            sr = None
+            if body.voice:
+                try:
+                    from cara.ai.tts import get_tts_service  # noqa: PLC0415
+
+                    tts = get_tts_service()
+                    audio_bytes, sr = await tts.synthesize(reply)
+                    import base64
+                    audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
+                    audio_mime = "audio/wav"
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("wall.ask.sanity_tts_failed", error=str(exc))
+            log.info("wall.ask.short_circuited",
+                     reason=sanity.reason, text=text)
+            return WallAskOut(
+                text=reply,
+                audio_base64=audio_b64,
+                audio_mime=audio_mime,
+                sample_rate=sr,
+            )
+    except Exception as exc:  # noqa: BLE001 — sanity must not break /ask
+        log.warning("wall.ask.sanity_failed", error=str(exc))
+
     # Run the deterministic pipeline (intent_router → skills → recipe).
     # If every stage misses, fall through to the LLM.
     from cara.api.v1._chat_pipeline import execute_pipeline_collect  # noqa: PLC0415
@@ -435,6 +470,44 @@ async def list_wall_cameras(
     session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> list[dict[str, Any]]:
     return await _list_wall_cameras_raw(session)
+
+
+@router.get("/news")
+async def wall_news(
+    category: str = "all",
+    limit: int = 20,
+    _lan: None = Depends(require_lan),  # noqa: B008
+    _enabled: None = Depends(require_wall_enabled),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, Any]:
+    """LAN-only news feed for the Wall.
+
+    Same source as /api/v1/news (RSS aggregator) but no auth, gated by
+    CIDR + wall_enabled. Returns a flat list of items the Wall ticker
+    and the dedicated /wall/news page consume.
+    """
+    if category not in ("all", "italia", "mondo", "economia", "tech", "sport"):
+        category = "all"
+    if limit < 1 or limit > 50:
+        limit = 20
+    news_on = await admin_svc.get(session, "news_enabled")
+    if not news_on:
+        return {"category": category, "count": 0, "items": []}
+    items = await news_svc.fetch_category(category, limit=limit)
+    return {
+        "category": category,
+        "count": len(items),
+        "items": [
+            {
+                "title": it.title,
+                "summary": it.summary,
+                "link": it.link,
+                "source": it.source,
+                "published": it.published,
+            }
+            for it in items
+        ],
+    }
 
 
 @router.get("/cameras/{cam_id}/snapshot.jpg")
@@ -915,115 +988,6 @@ async def wall_shopping_delete(
     await session.flush()
     await family_bus.publish("shopping.deleted", payload={"id": item_id})
     return None
-
-
-# ─── Face check from device camera (LAN, no-auth) ───────────────────
-
-
-_FACE_DEVICE_COOLDOWN_SEC = 90  # don't re-greet the same person more than every 90s
-
-
-@router.post("/face-check")
-async def wall_face_check(
-    image: UploadFile = File(...),  # noqa: B008
-    _lan: None = Depends(require_lan),  # noqa: B008
-    _enabled: None = Depends(require_wall_enabled),  # noqa: B008
-    session: AsyncSession = Depends(get_session),  # noqa: B008
-) -> dict[str, Any]:
-    """Recognize faces from the device camera.
-
-    The Wall frontend captures a frame from `getUserMedia` every ~30s
-    and POSTs it here. We forward to frigate-faces' `/api/recognize-image`
-    and (on a known match) publish a `presence.known.arrived` event on
-    the family bus so the avatar greets and the rest of the family-bus
-    consumers behave exactly like a Frigate camera sighting.
-
-    Cooldown via Redis keeps repeated arrivals from spamming the bus.
-    """
-    blob = await image.read()
-    if not blob:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty image")
-    if len(blob) > 4 * 1024 * 1024:
-        raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            "image too large (max 4 MB)",
-        )
-
-    base = await admin_svc.get(session, "frigate_faces_url")
-    base = (base or app_settings.frigate_faces_url or "").rstrip("/")
-    if not base:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "frigate-faces not configured",
-        )
-
-    try:
-        # 25 s total: face_recognition's HOG detector + encoding can
-        # take a few seconds on a busy box, plus the upload itself
-        # (~1-2 MB Antonio test images are slow on the proxy hop).
-        # 320×240 device-cam frames complete in well under 1 s.
-        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=3.0)) as c:
-            r = await c.post(
-                f"{base}/api/recognize-image",
-                files={"image": (image.filename or "frame.jpg", blob, image.content_type or "image/jpeg")},
-            )
-    except httpx.HTTPError as exc:
-        # Connection / timeout / DNS — upstream genuinely unreachable.
-        log.warning("wall.face_check.upstream_unreachable", error=str(exc) or type(exc).__name__)
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "frigate-faces unreachable") from exc
-
-    if r.status_code >= 500:
-        log.warning("wall.face_check.upstream_5xx", status=r.status_code, body=r.text[:200])
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "frigate-faces server error")
-    if r.status_code >= 400:
-        # Bad image, unsupported format, etc. — propagate upstream's complaint
-        # so the kiosk can show something useful instead of a misleading 502.
-        upstream_msg = ""
-        try:
-            upstream_msg = (r.json() or {}).get("error") or ""
-        except Exception:  # noqa: BLE001
-            upstream_msg = r.text[:200]
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"frigate-faces rejected image: {upstream_msg or r.status_code}",
-        )
-    try:
-        data = r.json()
-    except ValueError as exc:
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, "frigate-faces returned non-JSON"
-        ) from exc
-
-    match = data.get("match") if isinstance(data, dict) else None
-    found_face = bool(data.get("found_face")) if isinstance(data, dict) else False
-
-    # Publish a presence event when we have a known person, with a
-    # Redis-backed cooldown to avoid greeting the same person every
-    # 30s. The Wall avatar consumer dedupes by `name`.
-    if match and isinstance(match, dict) and match.get("name"):
-        name = str(match["name"])
-        try:
-            from cara.config import settings as _cfg  # noqa: PLC0415
-            import redis.asyncio as redis_asyncio  # noqa: PLC0415
-
-            r = redis_asyncio.from_url(_cfg.redis_url, decode_responses=True)
-            key = f"wall:device_face:{name.lower()}"
-            already = await r.get(key)
-            if not already:
-                await r.set(key, "1", ex=_FACE_DEVICE_COOLDOWN_SEC)
-                await family_bus.publish(
-                    "presence.known.arrived",
-                    payload={"name": name, "source": "wall_device_cam"},
-                )
-            await r.aclose()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("wall.face_check.bus_failed", error=str(exc))
-
-    return {
-        "found_face": found_face,
-        "match": match,
-        "cooldown_sec": _FACE_DEVICE_COOLDOWN_SEC,
-    }
 
 
 @router.post("/shopping/clear-bought", status_code=status.HTTP_204_NO_CONTENT)

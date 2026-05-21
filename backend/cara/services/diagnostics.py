@@ -147,24 +147,6 @@ async def check_cda_search() -> dict[str, Any]:
         return _err("cda_search", detail=f"{exc}")
 
 
-async def check_frigate_faces() -> dict[str, Any]:
-    if not settings.frigate_faces_url:
-        return _warn("frigate_faces", detail="non configurata")
-    try:
-        from cara.services.family import people_present
-
-        t0 = time.perf_counter()
-        seen = await people_present(window_minutes=60)
-        ms = int((time.perf_counter() - t0) * 1000)
-        return _ok(
-            "frigate_faces",
-            ms=ms,
-            detail=f"{len(seen)} persone viste nell'ultima ora",
-        )
-    except Exception as exc:  # noqa: BLE001
-        return _warn("frigate_faces", detail=f"{exc.__class__.__name__}: {exc}")
-
-
 async def check_intent_router() -> dict[str, Any]:
     try:
         from cara.services.event_log import stats
@@ -209,7 +191,6 @@ async def run_all() -> list[dict[str, Any]]:
         ("piper_tts", check_piper()),
         ("whisper_asr", check_whisper()),
         ("cda_search", check_cda_search()),
-        ("frigate_faces", check_frigate_faces()),
         ("intent_router", check_intent_router()),
         ("tts_synth", check_tts_piper_synth()),
     ]

@@ -277,6 +277,105 @@ async def purge_user_memory_admin(
     return {"deleted": deleted}
 
 
+# --- users CRUD (admin family editor) ----------------------------------
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+    full_name: str | None
+    role: str
+    birth_date: str | None
+    is_admin: bool
+    is_active: bool
+    wall_visible: bool
+    wall_color: str | None
+    wall_emoji: str | None
+    created_at: datetime
+
+
+class UserPatch(BaseModel):
+    """Fields safe to edit from the admin UI. Email and password are
+    intentionally NOT here — they require dedicated flows."""
+
+    full_name: str | None = None
+    role: str | None = None
+    birth_date: str | None = None  # ISO date or null to clear
+    is_active: bool | None = None
+    wall_visible: bool | None = None
+    wall_color: str | None = None
+    wall_emoji: str | None = None
+
+
+def _user_to_out(u: User) -> UserOut:
+    return UserOut(
+        id=u.id,
+        email=u.email,
+        full_name=u.full_name,
+        role=u.role,
+        birth_date=u.birth_date.isoformat() if u.birth_date else None,
+        is_admin=u.is_admin,
+        is_active=u.is_active,
+        wall_visible=u.wall_visible,
+        wall_color=u.wall_color,
+        wall_emoji=u.wall_emoji,
+        created_at=u.created_at,
+    )
+
+
+@router.get("/users", response_model=list[UserOut])
+async def list_users(
+    _admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> list[UserOut]:
+    rows = (await session.execute(select(User).order_by(User.id))).scalars().all()
+    return [_user_to_out(u) for u in rows]
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+async def patch_user(
+    user_id: int,
+    payload: UserPatch,
+    request: Request,
+    admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> UserOut:
+    target = await session.get(User, user_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+
+    # Self-protection: admin can't downgrade or deactivate themselves
+    # (avoids accidental lockout).
+    if target.id == admin.id and payload.is_active is False:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot deactivate self")
+
+    changed: dict[str, Any] = {}
+    for field in ("full_name", "role", "is_active", "wall_visible", "wall_color", "wall_emoji"):
+        v = getattr(payload, field)
+        if v is not None and getattr(target, field) != v:
+            setattr(target, field, v)
+            changed[field] = v
+
+    if payload.birth_date is not None:
+        from datetime import date as _date
+        try:
+            parsed = _date.fromisoformat(payload.birth_date) if payload.birth_date else None
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"birth_date: {exc}") from exc
+        if target.birth_date != parsed:
+            target.birth_date = parsed
+            changed["birth_date"] = payload.birth_date
+
+    if changed:
+        await audit_svc.record(
+            session, actor_user_id=admin.id, action="user.updated",
+            detail={"target_user_id": user_id, "changes": changed},
+        )
+        await session.commit()
+        await session.refresh(target)
+    return _user_to_out(target)
+
+
 # --- skills (Skill Factory v0.7 — Phase D) -----------------------------
 
 
@@ -923,3 +1022,75 @@ def sa_case_when_status_failed():
     from sqlalchemy import case
     from cara.models import AgentRun
     return case((AgentRun.status == "failed", 1), else_=0)
+
+
+# --- restart-backend ----------------------------------------------------
+#
+# Lumo-conversion Ondata α #3 — supervisor exit-code convention.
+# Some admin settings can't be hot-applied (e.g. anglicism dict file
+# changes, env-var-driven config). Today that needs a manual
+# `docker restart cara-backend` from the host. This endpoint lets the
+# admin trigger the same bounce from the UI: response 202, then
+# os._exit(42) so docker's `restart: unless-stopped` brings the
+# process back. Total downtime ~5s (NPU re-init dominates).
+
+
+class RestartRequest(BaseModel):
+    """Optional human-readable reason for the audit trail."""
+    reason: str | None = Field(default=None, max_length=200)
+
+
+@router.post(
+    "/restart-backend",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=dict,
+)
+async def restart_backend(
+    body: RestartRequest,
+    request: Request,
+    admin: User = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, Any]:
+    """Trigger an intentional restart of the backend container.
+
+    The response is sent FIRST (202 Accepted), then a background task
+    waits 250ms (enough for the TCP buffer to flush + the client to
+    receive the body) and calls `bootstrap.restart_self()`, which
+    `os._exit(42)`s. Docker's `restart: unless-stopped` picks it up.
+
+    Returns immediately with the audit-recorded reason; the client can
+    poll `/health` for the comeback (~5s on this hardware).
+    """
+    reason = (body.reason or "admin-triggered").strip() or "admin-triggered"
+
+    await audit_svc.record(
+        session,
+        actor=admin,
+        action="restart-backend",
+        target_kind="container",
+        detail={"reason": reason, "exit_code": 42},
+        ip=request.client.host if request.client else None,
+    )
+    # Commit the audit row BEFORE we exit — otherwise the row disappears
+    # with the process and we lose the trail.
+    await session.commit()
+
+    log.warning("admin.restart.initiated", actor=admin.email, reason=reason)
+
+    # Schedule the exit AFTER the response is sent. asyncio.create_task
+    # is enough: the task starts on the next loop iteration, by which
+    # time uvicorn has already started writing the response.
+    async def _delayed_exit() -> None:
+        await asyncio.sleep(0.25)
+        from cara.bootstrap import restart_self  # noqa: PLC0415
+        restart_self(reason=reason)
+
+    import asyncio  # noqa: PLC0415 — local import keeps top-level clean
+    asyncio.create_task(_delayed_exit())
+
+    return {
+        "status": "accepted",
+        "reason": reason,
+        "exit_code": 42,
+        "eta_seconds": 5,
+    }

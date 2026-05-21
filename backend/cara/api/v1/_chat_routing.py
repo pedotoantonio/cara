@@ -1034,47 +1034,6 @@ async def _resolve_routed_intent(
         s = await shop_svc.create_item(session, user_id=user_id, title=title)
         return f"Messo nella spesa: \"{s.title}\"."
 
-    if kind == "who_is_home":
-        from cara.services.family import FamilyPresenceUnavailable, people_present
-        from cara.services import admin_settings as admin_svc
-        from cara.services import cameras as cam_svc
-
-        try:
-            seen = await people_present(window_minutes=15)
-        except FamilyPresenceUnavailable as exc:
-            return f"Non riesco a controllare le telecamere: {exc}"
-        except Exception as exc:  # noqa: BLE001
-            log.warning("chat.routed.who_is_home_error", error=str(exc))
-            return "Non riesco a controllare le telecamere in questo momento."
-
-        if seen:
-            names = ", ".join(p.name for p in seen)
-            return f"In casa adesso: {names}."
-
-        # No face match — fall back to Frigate motion events: maybe
-        # someone IS in the house but the face wasn't recognised
-        # (back to the camera, hat on, low light, ...).
-        try:
-            motion_window = int(
-                await admin_svc.get(session, "presence_motion_window_minutes")
-                or 30
-            )
-            events = await cam_svc.recent_person_events(
-                session, window_minutes=motion_window
-            )
-        except Exception:  # noqa: BLE001
-            events = []
-        if events:
-            cams = sorted({e.camera for e in events})
-            n = len(events)
-            where = ", ".join(cams[:3])
-            return (
-                f"Vedo movimento ma nessun volto noto "
-                f"({n} avvistament{'i' if n != 1 else 'o'} su {where} "
-                f"negli ultimi {motion_window} minuti)."
-            )
-        return "In questo momento non vedo nessuno in casa."
-
     if kind == "get_news":
         from cara.services import news as news_svc
         cat = args.get("category", "all")

@@ -17,6 +17,7 @@ from cara.skills import primitives as _skill_primitives  # noqa: F401 — regist
 from cara.config import settings
 from cara.core import get_state_machine
 from cara.integrations.telegram import start_telegram_bot, stop_telegram_bot
+from cara.services.persona_scheduler import run_loop as persona_scheduler_loop
 from cara.services.proactivity_scheduler import run_loop as proactivity_scheduler_loop
 from cara.services.push import is_configured as push_is_configured
 from cara.services.push_scheduler import run_loop as push_scheduler_loop
@@ -88,6 +89,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     logger.info("cara.ha_events_started")
 
+    # Persona profile nightly rebuild (Ondata β). In-process for now
+    # because Celery workers can't use the LLM (one NPU handle, owned
+    # by this backend). Sleeps 99% of the time, runs at 03:15 local.
+    persona_scheduler_task: asyncio.Task = asyncio.create_task(
+        persona_scheduler_loop(get_sessionmaker()),
+        name="persona_scheduler",
+    )
+    logger.info("cara.persona_scheduler_started")
+
     # Notification bus consumer — workers (Celery) can't hit Telegram /
     # Web Push / WebSocket directly because those resources live in
     # this backend process. The agents enqueue Notifications on the
@@ -107,7 +117,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        for t in (push_task, proactivity_task, ha_events_task, notify_consumer_task):
+        for t in (push_task, proactivity_task, ha_events_task,
+                  notify_consumer_task, persona_scheduler_task):
             if t is None:
                 continue
             t.cancel()

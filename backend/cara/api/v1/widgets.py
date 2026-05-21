@@ -123,7 +123,9 @@ def _make_fetchers(session: AsyncSession) -> _Fetchers:
         )
 
     async def presence() -> list[PresenceBrief]:
-        # Wires to frigate-faces when its API is bridged into CARA.
+        # Presence is now driven by the in-browser face recognition stack
+        # (src/features/face) — server-side widgets don't know who is in
+        # front of which device, so the Wall presence widget stays empty.
         return []
 
     return _Fetchers(
@@ -270,6 +272,9 @@ def _register_for_request(session: AsyncSession):
     reg = get_default_registry()
     register_all(fetchers, registry=reg)
     register_extras(_make_extras(session), registry=reg)
+    # Reminders (Memorial) — pulls reminders directly via session.
+    from cara.widgets import reminders_widget as _rem  # noqa: PLC0415
+    _rem.register(session, reg)
     return reg
 
 

@@ -1,4 +1,14 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/*
+ * Font stack — switched to Source Serif 4 on 2026-05-20 per Tony's
+ * request ("carattere stile Utopia"). Source Serif 4 is Adobe's
+ * open-source serif and the closest free webfont to Utopia: same
+ * editorial / book-warm feel, variable optical-size axis so titles
+ * and body can share one font file. We keep JetBrains Mono for code
+ * blocks. Fraunces + Geist were dropped from the network round-trip
+ * (saves ~120 KB), but listed as in-CSS fallbacks below so legacy
+ * `font-display` / sans references degrade gracefully.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&family=JetBrains+Mono:wght@400;500&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -12,7 +22,8 @@
   }
 
   html {
-    font-family: 'Geist', 'Inter', system-ui, sans-serif;
+    font-family: 'Source Serif 4', 'Source Serif Pro', 'Georgia', 'Times New Roman', serif;
+    font-variation-settings: 'opsz' 14;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -41,14 +52,15 @@
                 color 640ms cubic-bezier(0.45, 0, 0.55, 1);
   }
 
-  /* Display family on display-class elements via Tailwind .font-display.
-     Also opt-in body→display for h1/h2 by default for "moments" feel. */
+  /* Display class — same family but with a higher optical size + a
+     touch more weight so titles read as "moments" without changing
+     typeface (single-family system, à la Utopia). */
   h1, h2, .font-display {
-    font-family: 'Fraunces', 'Times New Roman', serif;
-    font-weight: 500;
+    font-family: 'Source Serif 4', 'Source Serif Pro', 'Georgia', 'Times New Roman', serif;
+    font-weight: 600;
   }
-  h1 { font-variation-settings: 'opsz' 96, 'SOFT' 50; }
-  h2 { font-variation-settings: 'opsz' 48, 'SOFT' 50; }
+  h1 { font-variation-settings: 'opsz' 48, 'wght' 600; }
+  h2 { font-variation-settings: 'opsz' 32, 'wght' 600; }
 
   /* Scrollbar carini, mai grigio puro. */
   ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -107,4 +119,15 @@
   .animate-sway {
     animation: none !important;
   }
+}
+
+/* Hide native scrollbars on horizontally-scrolling strips (Wall tabs
+   on mobile, ticker, camera strip). Touch + swipe still work, but the
+   scrollbar shouldn't clutter the design. */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }

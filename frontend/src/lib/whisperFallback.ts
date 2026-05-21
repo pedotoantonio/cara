@@ -2,105 +2,135 @@
  * Server-side Whisper STT — used as a fallback when the browser
  * SpeechRecognition API doesn't produce a transcript.
  *
- * Records the user's mic via `MediaRecorder`, uploads the blob to the
- * backend, and returns the recognised text.
+ * v2 (2026-05-20): now backed by `micPipeline.ts` so callers get a
+ * live audio level + VAD auto-stop + structured diagnostics on every
+ * session. The legacy `WhisperRecorderHandle` shape is kept for
+ * backwards compatibility but new code should use `startMicSession`
+ * + `transcribeAudio` directly.
  */
 
 import { transcribeAudio } from '../api/asr';
+import {
+  diagnoseMicFailure,
+  micPipelineAvailable,
+  startMicSession,
+  type MicPipelineDiagnostics,
+  type MicPipelineOptions,
+} from './micPipeline';
 
 export interface WhisperRecorderHandle {
-  /** Stop the recording AND return the transcript. */
+  /** Stop the recording AND return the transcript text only.
+   *
+   *  Returns "" if nothing was recognised. Callers that want
+   *  diagnostics should use `stopWithDiag()` instead. */
   stop: () => Promise<string>;
+  /** Like stop() but also returns mic-pipeline diagnostics. */
+  stopWithDiag: () => Promise<{
+    text: string;
+    diag: MicPipelineDiagnostics;
+    elapsedMs?: number;
+    confidence?: string;
+    failureHint?: string | null;
+  }>;
   /** Stop without uploading (cancel). */
   abort: () => void;
 }
 
 export function whisperRecorderAvailable(): boolean {
-  if (typeof window === 'undefined') return false;
-  if (!('MediaRecorder' in window)) return false;
-  if (!navigator.mediaDevices?.getUserMedia) return false;
-  return true;
+  return micPipelineAvailable();
 }
 
-/**
- * Start recording from the default mic. The recorder runs until `stop()`
- * is called. Returns a handle whose `stop()` uploads the WebM blob to the
- * backend's `/api/v1/asr/transcribe` and resolves with the transcript.
- *
- * Throws if the user denies the microphone permission or if the browser
- * lacks `MediaRecorder` support.
- */
 export async function startWhisperRecording(opts: {
   /** Optional language hint passed to whisper. Defaults to "it". */
   language?: string;
   /** Hard cap on recording duration (ms). Default 30 s. */
   maxDurationMs?: number;
+  /**
+   * Forwarded to micPipeline — `auto` enables VAD silence stop.
+   * Default 'auto' on home page; pass 'manual' for push-to-talk.
+   */
+  vadMode?: MicPipelineOptions['vadMode'];
+  /** Live level callback (dBFS, normalised). */
+  onLevel?: MicPipelineOptions['onLevel'];
+  /** Fired the first time speech is detected this session. */
+  onSpeechStart?: MicPipelineOptions['onSpeechStart'];
+  /** Fired when VAD auto-stop triggers. */
+  onAutoStop?: MicPipelineOptions['onAutoStop'];
 } = {}): Promise<WhisperRecorderHandle> {
-  if (!whisperRecorderAvailable()) {
+  if (!micPipelineAvailable()) {
     throw new Error('MediaRecorder non supportato in questo browser');
   }
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true },
+  const session = await startMicSession({
+    maxDurationMs: opts.maxDurationMs ?? 30_000,
+    vadMode: opts.vadMode ?? 'auto',
+    onLevel: opts.onLevel,
+    onSpeechStart: opts.onSpeechStart,
+    onAutoStop: opts.onAutoStop,
   });
 
-  // Pick a MIME type the browser actually supports. Order: opus (preferred)
-  // then any audio/webm, then the browser default.
-  const mimeCandidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', ''];
-  let mimeType: string = '';
-  for (const m of mimeCandidates) {
-    if (m === '' || (window.MediaRecorder?.isTypeSupported?.(m) ?? false)) {
-      mimeType = m;
-      break;
+  let cachedResult: {
+    text: string;
+    diag: MicPipelineDiagnostics;
+    elapsedMs?: number;
+    confidence?: string;
+    failureHint?: string | null;
+  } | null = null;
+
+  async function _doStop() {
+    if (cachedResult) return cachedResult;
+    const { blob, diag } = await session.stop();
+    // Don't bother uploading <300 ms / <2 KB — that's the user
+    // tapping twice quickly with nothing said.
+    if (diag.recordedMs < 300 || blob.size < 2000) {
+      cachedResult = {
+        text: '',
+        diag,
+        failureHint: diagnoseMicFailure(diag, '', 'empty'),
+      };
+      _logSession(opts.language ?? 'it', cachedResult);
+      return cachedResult;
     }
-  }
-  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-  const chunks: BlobPart[] = [];
-  recorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) chunks.push(e.data);
-  };
-
-  recorder.start();
-  const startedAt = performance.now();
-
-  // Hard cap so a forgotten recording doesn't run forever.
-  const cap = opts.maxDurationMs ?? 30_000;
-  const capTimer = window.setTimeout(() => {
-    if (recorder.state === 'recording') recorder.stop();
-  }, cap);
-
-  function cleanup() {
-    window.clearTimeout(capTimer);
-    for (const t of stream.getTracks()) t.stop();
+    const result = await transcribeAudio(blob, opts.language ?? 'it');
+    const text = (result.text || '').trim();
+    const failureHint = diagnoseMicFailure(
+      diag, text, result.confidence_label,
+    );
+    cachedResult = {
+      text,
+      diag,
+      elapsedMs: result.elapsed_ms,
+      confidence: result.confidence_label,
+      failureHint,
+    };
+    _logSession(opts.language ?? 'it', cachedResult);
+    return cachedResult;
   }
 
   return {
-    stop: async (): Promise<string> => {
-      const finished = new Promise<Blob>((resolve, reject) => {
-        recorder.onstop = () => {
-          try {
-            const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
-            resolve(blob);
-          } catch (e) {
-            reject(e as Error);
-          }
-        };
-        recorder.onerror = (e) => reject(new Error(`MediaRecorder error: ${e}`));
-      });
-      if (recorder.state === 'recording') recorder.stop();
-      cleanup();
-      const elapsedMs = performance.now() - startedAt;
-      const blob = await finished;
-      // Don't bother uploading <300 ms recordings — that's the user
-      // tapping twice quickly with nothing said.
-      if (elapsedMs < 300 || blob.size < 2000) return '';
-      const result = await transcribeAudio(blob, opts.language ?? 'it');
-      return (result.text || '').trim();
-    },
-    abort: () => {
-      if (recorder.state === 'recording') recorder.stop();
-      chunks.length = 0;
-      cleanup();
-    },
+    stop: async () => (await _doStop()).text,
+    stopWithDiag: _doStop,
+    abort: () => session.abort(),
   };
+}
+
+function _logSession(language: string, r: {
+  text: string;
+  diag: MicPipelineDiagnostics;
+  elapsedMs?: number;
+  confidence?: string;
+  failureHint?: string | null;
+}) {
+  // Single console line per session — easy to copy/paste from a
+  // user's browser when troubleshooting "il microfono non funziona".
+  // eslint-disable-next-line no-console
+  console.info('[cara-mic]', {
+    lang: language,
+    text_chars: r.text.length,
+    text_preview: r.text.slice(0, 40),
+    confidence: r.confidence,
+    asr_ms: r.elapsedMs,
+    failure_hint: r.failureHint,
+    ...r.diag,
+  });
 }

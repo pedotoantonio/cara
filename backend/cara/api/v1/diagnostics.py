@@ -205,21 +205,3 @@ async def test_discover(
     }
 
 
-@router.post("/test/who_is_home")
-async def test_who_is_home(
-    _admin: User = Depends(require_admin),  # noqa: B008
-) -> dict[str, Any]:
-    from cara.services.family import FamilyPresenceUnavailable, people_present
-
-    t0 = time.perf_counter()
-    try:
-        seen = await people_present(window_minutes=60)
-    except FamilyPresenceUnavailable as exc:
-        elapsed = int((time.perf_counter() - t0) * 1000)
-        return {"ok": False, "error": str(exc), "elapsed_ms": elapsed}
-    elapsed = int((time.perf_counter() - t0) * 1000)
-    return {
-        "ok": True,
-        "people": [{"name": p.name, "last_seen": p.last_seen.isoformat()} for p in seen],
-        "elapsed_ms": elapsed,
-    }

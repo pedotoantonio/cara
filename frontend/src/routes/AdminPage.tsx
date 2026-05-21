@@ -12,7 +12,7 @@ import {
   patchAdminSettings,
   type AuditEntry,
 } from '../api/admin';
-import type { User } from '../api/auth';
+import { authFetch, type User } from '../api/auth';
 import { listVoices, setVoiceConfig, speak, ttsAvailable } from '../lib/speech';
 import { listPiperVoices, type PiperVoice } from '../lib/piperTts';
 
@@ -24,7 +24,7 @@ const FEATURE_FLAGS: Array<{ key: string; label: string; help: string }> = [
   { key: 'habit_learning_enabled', label: 'Autoapprendimento abitudini', help: 'Riservato (Estensione 1)' },
   { key: 'proactive_suggestions_enabled', label: 'Suggerimenti proattivi', help: 'Riservato' },
   { key: 'telegram_bot_enabled', label: 'Telegram bot', help: 'Richiede CARA_TELEGRAM_BOT_TOKEN' },
-  { key: 'facial_recognition_enabled', label: 'Riconoscimento facciale', help: 'Integrazione frigate-faces' },
+  { key: 'facial_recognition_enabled', label: 'Riconoscimento facciale', help: 'Pipeline on-device (face-api.js)' },
   { key: 'voice_recognition_enabled', label: 'Riconoscimento vocale', help: 'STT browser-side' },
   { key: 'smart_home_enabled', label: 'Smart home', help: 'Riservato' },
   { key: 'push_notifications_enabled', label: 'Notifiche push PWA', help: 'Riservato' },
@@ -100,6 +100,40 @@ export function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [restarting, setRestarting] = useState(false);
+
+  async function restartBackend() {
+    const reason = window.prompt(
+      'Motivo del riavvio (audit log):',
+      'aggiornamento config',
+    );
+    if (reason === null) return;  // user cancelled
+    if (
+      !window.confirm(
+        'Riavviare cara-backend?\n\n'
+        + 'La chat resterà offline per ~5 secondi mentre la NPU si ricarica.',
+      )
+    ) {
+      return;
+    }
+    setRestarting(true);
+    try {
+      const r = await authFetch('/api/v1/admin/restart-backend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() || 'admin-triggered' }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setMsg({
+        ok: true,
+        text: 'Riavvio richiesto. Torno disponibile in ~5s — ricarica la pagina se serve.',
+      });
+    } catch (e) {
+      setMsg({ ok: false, text: `Riavvio fallito: ${(e as Error).message}` });
+    } finally {
+      setRestarting(false);
+    }
+  }
 
   // Browser voices available on this device — used as suggestions for the
   // "voce del browser" engine. Loaded asynchronously by the browser.
@@ -266,8 +300,11 @@ export function AdminPage() {
         {/* Quick nav to deep admin pages */}
         <nav className="flex flex-wrap gap-2 text-xs">
           {[
+            { to: '/admin/users',       label: 'Famiglia' },
+            { to: '/admin/face',        label: 'Volti' },
             { to: '/admin/skills',      label: 'Skill Factory' },
             { to: '/admin/memory',      label: 'Memoria' },
+            { to: '/admin/persona',     label: 'Persona' },
             { to: '/admin/smart-home',  label: 'Smart Home' },
             { to: '/admin/proactivity', label: 'Proattività' },
             { to: '/admin/devices',     label: 'Dispositivi' },
@@ -659,6 +696,26 @@ export function AdminPage() {
               </div>
             </div>
           ))}
+        </section>
+
+        {/* Sistema */}
+        <section className="rounded-2xl bg-slate-800/60 border border-slate-700 p-5 space-y-3">
+          <h2 className="text-sm font-medium">Sistema</h2>
+          <p className="text-xs text-slate-500">
+            Alcune modifiche (dizionario anglicismi, env, hot-swap modello) hanno effetto solo
+            dopo un riavvio del backend. Downtime ~5 secondi.
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={restartBackend}
+              disabled={restarting}
+              className="rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-40 px-4 py-2 text-sm font-medium"
+            >
+              {restarting ? 'Riavvio…' : 'Riavvia cara-backend'}
+            </button>
+            <span className="text-[11px] text-slate-500">exit 42 → docker restart unless-stopped</span>
+          </div>
         </section>
 
         {/* Audit log */}

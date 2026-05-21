@@ -4,6 +4,18 @@ const API = '/api/v1';
 const TOKEN_KEY = 'cara.access_token';
 const REFRESH_KEY = 'cara.refresh_token';
 
+/** Tone presets the user can self-select. Mirrors backend
+ *  `_chat_prompt.USER_SELECTABLE_TONES`. "privacy" is admin-only. */
+export type ToneKey = 'default' | 'calmo' | 'energico' | 'formale' | 'playful';
+
+export const TONE_LABELS: Record<ToneKey, { label: string; description: string }> = {
+  default: { label: 'Standard', description: 'Tono caloroso e diretto, quello attuale.' },
+  calmo: { label: 'Calmo', description: 'Tranquillo e misurato. Frasi brevi, pause naturali.' },
+  energico: { label: 'Energico', description: 'Vivace, propulsivo, incoraggiante.' },
+  formale: { label: 'Formale', description: 'Uso del "lei", registro educato e professionale.' },
+  playful: { label: 'Giocoso', description: 'Leggerezza e ironia gentile, mai sarcasmo.' },
+};
+
 export interface User {
   id: number;
   email: string;
@@ -12,6 +24,7 @@ export interface User {
   is_active: boolean;
   role?: string;
   birth_date?: string | null;
+  tone_preference?: ToneKey | null;
   created_at: string;
 }
 
@@ -121,6 +134,7 @@ export async function fetchMe(): Promise<User> {
 export async function updateMe(changes: {
   full_name?: string | null;
   birth_date?: string | null;
+  tone_preference?: ToneKey | null;
 }): Promise<User> {
   const r = await authFetch(`${API}/auth/me`, {
     method: 'PATCH',

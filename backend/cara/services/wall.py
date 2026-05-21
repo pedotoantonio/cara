@@ -27,7 +27,6 @@ from cara.models.calendar_event import CalendarEvent
 from cara.models.task import Task
 from cara.models.user import User
 from cara.services import admin_settings as admin_svc
-from cara.services import family as family_svc
 
 log = structlog.get_logger(__name__)
 
@@ -322,23 +321,11 @@ async def build_today_summary(
 
     pending = await pending_tasks_by_owner(session, owner_index=owners)
 
-    # Presence — best effort, never block the bundle on a frigate-faces
-    # outage.
+    # Presence — disabled. The legacy frigate-faces feed has been
+    # removed; the in-browser face recognition stack does not push
+    # presence data into the Wall summary (yet). Returned shape kept
+    # stable for the frontend.
     presence: dict[str, Any] = {"available": False, "people": []}
-    try:
-        rows = await family_svc.people_present(window_minutes=15)
-        presence = {
-            "available": True,
-            "people": [
-                {
-                    "name": p.name,
-                    "minutes_ago": p.minutes_ago,
-                }
-                for p in rows
-            ],
-        }
-    except family_svc.FamilyPresenceUnavailable:
-        pass
 
     weather_block = await _build_weather_block(session)
 

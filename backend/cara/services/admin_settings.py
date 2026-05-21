@@ -30,6 +30,10 @@ DEFAULTS: dict[str, Any] = {
     "cloud_llm_enabled": False,
     "validation_enabled": False,
     "cognitive_mode": False,
+    # Health watchdog: skip the probe for a service the admin has
+    # intentionally stopped. Setting to false silences both the
+    # periodic Telegram alert and the dashboard red dot.
+    "monitor_frigate_enabled": True,
     # Free-form / numeric settings exposed to the admin UI. When unset
     # (None), the runtime falls back to the value from `.env` / `cara.config`.
     "llm_system_prompt": None,
@@ -65,10 +69,14 @@ DEFAULTS: dict[str, Any] = {
     "cda_domain_blacklist": None,  # list[str] of always-blocked domains
     "cda_domain_whitelist_for_child": None,  # allowed domains for child role
     "cda_agent_loop_enabled": True,  # forced grounding on info-need queries
-    # Persona tone preset (Lumo-inspired). Layered ON TOP of llm_system_prompt:
-    #   "default"  → persona standard, contesto storico + profilo utente
-    #   "privacy"  → no profilo utente, no cronologia, solo turno corrente
-    #   "playful"  → persona più scherzosa, no profilo nel prompt
+    # Persona tone preset (Lumo-inspired). Layered ON TOP of llm_system_prompt.
+    # System-wide default; per-user override via `users.tone_preference`.
+    #   "default"  → persona standard
+    #   "calmo"    → tono tranquillo, frasi brevi, pause naturali
+    #   "energico" → tono vivace, ritmo, incoraggiante
+    #   "formale"  → uso del "lei", registro educato
+    #   "playful"  → leggerezza e ironia gentile
+    #   "privacy"  → MODE (non tono): no profilo, no cronologia
     "tone_preset": "default",
     # Hot-swappable LLM size variant. "fast" = 1.5B (~9 tok/s), "quality" =
     # 3B (~4 tok/s, less hallucination). Switch is destroy+load (~10 s).
@@ -121,11 +129,9 @@ DEFAULTS: dict[str, Any] = {
     # HomeAssistant adapter (used when smart_home_enabled=True).
     "ha_url": None,
     "ha_token": None,
-    # Frigate NVR + frigate-faces (referenced by widgets + presence).
-    # When None, the runtime falls back to `cara.config.settings`
-    # (`http://frigate:5000`, `http://frigate-faces:5051`).
+    # Frigate NVR. When None the runtime falls back to
+    # `cara.config.settings.frigate_url` (`http://frigate:5000`).
     "frigate_url": None,
-    "frigate_faces_url": None,
     # Per-camera overrides, keyed by Frigate camera id (e.g. "cam_194").
     # Each entry: {"label": "Ingresso", "area": "ingresso",
     #              "presence_relevant": True, "notify_motion": False}.
@@ -146,12 +152,6 @@ DEFAULTS: dict[str, Any] = {
     # access (Cloudflare Tunnel, port forward) is unaffected. Flip to
     # False if you later want to enforce credential auth even at home.
     "lan_auto_login_enabled": True,
-    # Presence agent — face arrivals via frigate-faces poll.
-    "presence_greeting_enabled": True,
-    "presence_greeting_cooldown_min_known": 30,
-    "presence_greeting_cooldown_min_unknown": 5,
-    "presence_greeting_silent_hours": [22, 8],     # local Europe/Rome
-    "presence_push_enabled": True,
     # Notification dispatcher — per-channel master switches.
     "notify_telegram_enabled": True,
     "notify_push_enabled": True,
@@ -178,9 +178,9 @@ DEFAULTS: dict[str, Any] = {
     "wall_watchdog_min_bad_ticks": 2,
     "wall_watchdog_escalate_bad_ticks": 6,
     # ── Health agent (functional probes) ────────────────────────────
-    # Runs 8 internal probes every 5 min: db, redis, minio, frigate,
-    # frigate-faces, telegram bot, wall summary loopback, open-meteo.
-    # Telegram alert when a probe fails N consecutive ticks.
+    # Runs 7 internal probes every 5 min: db, redis, minio, frigate,
+    # telegram bot, wall summary loopback, open-meteo. Telegram alert
+    # when a probe fails N consecutive ticks.
     "wall_health_enabled": True,
     "wall_health_alert_streak": 2,
     # ── Chat web-search fallback ────────────────────────────────────

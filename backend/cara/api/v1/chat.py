@@ -22,6 +22,7 @@ with the same `conversation_id` get context.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -38,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cara.ai import LLMService, get_llm_service
 from cara.ai import kv_cache
 from cara.ai.llm import LLMUnavailableError
-from cara.learning import episodic
+from cara.learning import episodic, semantic
 from cara.api.deps import get_current_user
 from cara.api.v1._chat_grounding import (
     has_discover_tool as _has_discover_tool,
@@ -199,6 +200,21 @@ async def chat(
         )
 
     await session.commit()
+
+    # Fire-and-forget fact extraction on the LAST user message. Uses its
+    # own session, never blocks the chat reply, never raises into the hot
+    # path (errors are logged inside the helper). See feedback memory
+    # `feedback_lazy_global_imports` — extract_facts_async resolves the
+    # sessionmaker via `get_sessionmaker()`, not the lifespan global.
+    if user_msgs:
+        _last_user_content = user_msgs[-1].content
+        asyncio.create_task(
+            semantic.extract_facts_async(
+                user_id=user.id,
+                message=_last_user_content,
+                source_ref=f"conversation:{convo.id}",
+            )
+        )
 
     if attached_files:
         logger.info(
@@ -388,13 +404,83 @@ async def chat(
         session, "llm_system_prompt", settings.llm_system_prompt
     )
 
-    # Tone preset — appends a directive and, in "privacy" mode, also strips
-    # the conversation history so the model only sees the current turn.
-    tone_preset = await setting_svc.get(session, "tone_preset")
-    tone_preset = tone_preset if tone_preset in _TONE_DIRECTIVE else "default"
+    # Tone resolution order (Lumo-inspired, Ondata α #1):
+    #   1. user.tone_preference  (per-user override, NULL = inherit)
+    #   2. admin_settings.tone_preset  (family default)
+    #   3. "default"  (no overlay)
+    # Privacy is admin-only — it strips history + facts, which is a mode
+    # we don't expose as a self-service user choice.
+    user_tone = getattr(user, "tone_preference", None)
+    if user_tone and user_tone in _TONE_DIRECTIVE and user_tone != "privacy":
+        tone_preset = user_tone
+    else:
+        admin_tone = await setting_svc.get(session, "tone_preset")
+        tone_preset = admin_tone if admin_tone in _TONE_DIRECTIVE else "default"
     tone_directive = _TONE_DIRECTIVE.get(tone_preset, "")
     if tone_directive:
         sysprompt_active = sysprompt_active + tone_directive
+
+    # Persona profile injection (Ondata β) — Lumo-inspired longitudinal
+    # memory. Append the user's profile Markdown to the system prompt
+    # BEFORE the volatile facts block so it lives in the KV-cache-stable
+    # prefix. Off in privacy mode (whole point is no profile). Skipped
+    # automatically when confidence is low or no profile exists yet.
+    if tone_preset != "privacy":
+        try:
+            from cara.learning import persona_profiler as _persona  # noqa: PLC0415
+            from cara.api.v1._chat_system_prompt import build_persona_block  # noqa: PLC0415
+
+            persona_md = await _persona.get_for_prompt_injection(session, user.id)
+            if persona_md:
+                persona_block = build_persona_block(
+                    persona_md,
+                    user_name=(user.full_name or user.email.split("@")[0]).split()[0],
+                )
+                if persona_block:
+                    sysprompt_active = f"{sysprompt_active}\n\n{persona_block}"
+                    logger.info(
+                        "chat.persona.injected",
+                        user_id=user.id,
+                        markdown_chars=len(persona_md),
+                    )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning("chat.persona.failed", error=str(exc))
+
+    # RAG: top-k facts for THIS user vs THIS question. Off in privacy
+    # mode (the whole point of privacy is to not leak stored facts back
+    # into the prompt) and off when the message is empty or only an
+    # attachment. Failures are swallowed — retrieval is best-effort and
+    # must never break a chat reply.
+    if tone_preset != "privacy" and last_user_q and len(last_user_q.strip()) >= 4:
+        try:
+            from cara.ai.embeddings import EmbeddingService as _EmbeddingService
+            from cara.api.v1._chat_system_prompt import build_facts_block
+            from cara.learning import semantic as _semantic_mod
+
+            _embedder = _EmbeddingService()
+            hits = await _semantic_mod.top_k_for_query(
+                session,
+                query=last_user_q,
+                user_id=user.id,
+                embedder=_embedder,
+                k=3,
+                min_score=0.5,
+            )
+            if hits:
+                facts_block = build_facts_block(
+                    [f.text for f, _score in hits],
+                    user_name=(user.full_name or user.email.split("@")[0]).split()[0],
+                )
+                if facts_block:
+                    sysprompt_active = f"{sysprompt_active}\n\n{facts_block}"
+                logger.info(
+                    "chat.rag.facts_injected",
+                    user_id=user.id,
+                    count=len(hits),
+                    top_score=round(hits[0][1], 3),
+                )
+        except Exception as exc:  # noqa: BLE001 — RAG is best-effort
+            logger.warning("chat.rag.failed", error=str(exc))
 
     # Privacy mode: drop ALL prior messages so the model can't echo back
     # personal context. Keep only the persona prompt + last user turn.

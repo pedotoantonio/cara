@@ -6,9 +6,6 @@ container is up — that's the watchdog's job). Examples:
 
 - `db.select_1` confirms Postgres can take a query end-to-end.
 - `redis.ping` confirms cache + bus are reachable from the worker.
-- `chroma.heartbeat` exercises the vector store HTTP API.
-- `frigate_faces.api_people` confirms the face-recognition service
-  returns the people list (the upstream of presence).
 - `wall.summary` is a loopback probe through nginx-proxy → frontend
   → backend, catching reverse-proxy + auth wiring breakage.
 - `open_meteo.external` proves outbound internet still works.
@@ -106,16 +103,6 @@ async def _probe_minio() -> tuple[str, str]:
         return _FAIL, f"HTTP {r.status_code}"
 
 
-async def _probe_frigate_faces() -> tuple[str, str]:
-    from cara.config import settings  # noqa: PLC0415
-    url = (settings.frigate_faces_url or "http://frigate-faces:5051").rstrip("/")
-    async with httpx.AsyncClient(timeout=5.0) as c:
-        r = await c.get(f"{url}/api/people")
-        if r.status_code == 200:
-            return _OK, ""
-        return _FAIL, f"HTTP {r.status_code}"
-
-
 async def _probe_frigate() -> tuple[str, str]:
     async with httpx.AsyncClient(timeout=5.0) as c:
         r = await c.get("http://frigate:5000/api/stats")
@@ -170,7 +157,6 @@ _PROBES: list[tuple[str, str, ProbeFn]] = [
     ("db",            "PostgreSQL · SELECT 1",     _probe_db),
     ("redis",         "Redis · PING",              _probe_redis),
     ("minio",         "MinIO · /health/live",      _probe_minio),
-    ("frigate_faces", "Frigate Faces · /api/people", _probe_frigate_faces),
     ("frigate",       "Frigate · /api/stats",      _probe_frigate),
     ("wall_summary",  "Backend · /wall/summary",   _probe_wall_summary),
     ("telegram_bot",  "Telegram · getMe",          _probe_telegram_bot),
@@ -195,6 +181,13 @@ async def run_probes_once() -> dict[str, Any]:
         alert_threshold = int(
             await _admin.get(s, "wall_health_alert_streak") or 2
         )
+        # Per-probe gates: if the admin has stopped a service on purpose
+        # (e.g. Frigate to free DDR/CPU for the LLM) the corresponding
+        # probe must NOT run — otherwise the watchdog keeps paging
+        # Telegram about a service that's intentionally offline.
+        probe_gates: dict[str, bool] = {
+            "frigate": bool(await _admin.get(s, "monitor_frigate_enabled")),
+        }
 
     if enabled is False:  # default is None/True, only False disables
         return {"skipped": "disabled"}
@@ -203,6 +196,22 @@ async def run_probes_once() -> dict[str, Any]:
     try:
         results: list[dict[str, Any]] = []
         for name, label, fn in _PROBES:
+            if probe_gates.get(name) is False:
+                # Skip silently AND clear any prior failure/alert state so
+                # we don't ship a stale red dot or an orphan recovery
+                # message the moment the admin flips the gate back on.
+                try:
+                    await r.delete(
+                        _REDIS_PROBE_KEY.format(name=name),
+                        _REDIS_ALERT_KEY.format(name=name),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                results.append({
+                    "name": name, "status": _WARN,
+                    "duration_ms": 0, "error": "probe disabilitata",
+                })
+                continue
             t0 = time.monotonic()
             try:
                 status, err = await asyncio.wait_for(fn(), timeout=30.0)

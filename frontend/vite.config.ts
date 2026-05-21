@@ -83,6 +83,13 @@ export default defineConfig({
             url: '/wallet?source=shortcut',
             icons: [{ src: '/icon-192.png', sizes: '192x192' }],
           },
+          {
+            name: 'Ricordi',
+            short_name: 'Ricordi',
+            description: 'Promemoria guidati: famiglia, salute, documenti, eventi',
+            url: '/reminders?source=shortcut',
+            icons: [{ src: '/icon-192.png', sizes: '192x192' }],
+          },
         ],
       },
       injectManifest: {

@@ -312,7 +312,7 @@ async def _on_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         f"Ciao {name}, sono CARA 🤖\n\n"
         "Scrivimi qualunque cosa (es. \"che tempo fa\", \"appuntamenti settimana prossima\", "
         "\"aggiungi pane alla spesa\") e ti rispondo come dal web.\n\n"
-        "Comandi rapidi: /oggi /domani /spesa /note /meteo /casa /cam /help\n",
+        "Comandi rapidi: /oggi /domani /spesa /note /meteo /cam /help\n",
     )
 
 
@@ -395,13 +395,27 @@ async def _on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # notes are OGG/Opus, audio files vary; faster-whisper handles
     # both via libsndfile.
     text: str | None = None
+    asr_result: dict | None = None
     try:
         from cara.services.asr import transcribe_bytes  # noqa: PLC0415
-        result = await transcribe_bytes(bytes(blob_bytes), language="it")
-        if isinstance(result, dict):
-            text = result.get("text")
+        asr_result = await transcribe_bytes(bytes(blob_bytes), language="it")
+        if isinstance(asr_result, dict):
+            text = asr_result.get("text")
     except Exception as exc:  # noqa: BLE001
         logger.warning("telegram.voice.transcribe_failed", error=str(exc))
+
+    # Sanity check (Ondata α #2). If transcribe_bytes ran the check
+    # (recent path) we reuse its decision; otherwise fall through to
+    # the legacy emptiness test.
+    sanity = (asr_result or {}).get("sanity") if isinstance(asr_result, dict) else None
+    if sanity and not sanity.get("ok", True):
+        canned = sanity.get("canned_reply") or (
+            "Non ho capito il vocale. Riprova in un posto silenzioso o "
+            "scrivi il messaggio."
+        )
+        await chat.send_message(canned)
+        logger.info("telegram.voice.rejected", reason=sanity.get("reason"))
+        return
 
     if not text or not text.strip():
         await chat.send_message(
@@ -742,10 +756,6 @@ async def _on_meteo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_phrase(update, phrase)
 
 
-async def _on_casa(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await _run_phrase(update, "chi è in casa")
-
-
 async def _on_news(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     args = ctx.args or []
     cat = " ".join(args).strip() if args else ""
@@ -884,8 +894,7 @@ async def _on_cam(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     args = ctx.args or []
     if not args:
         await chat.send_message(
-            "Uso: /cam <id>  (es. /cam cam_194 oppure /cam ingresso)\n"
-            "Usa /casa per vedere chi è in casa."
+            "Uso: /cam <id>  (es. /cam cam_194 oppure /cam ingresso)"
         )
         return
     raw = " ".join(args).strip()
@@ -1009,6 +1018,53 @@ async def _on_diag(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await chat.send_message(text=text[:4000], parse_mode="HTML")
 
 
+async def _on_ricorda(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/ricorda` — show the next upcoming reminders + link to the web
+    page where the user actually creates one.
+
+    A full 3-step Telegram wizard (category → template → datetime)
+    would be cleaner UX but requires per-chat session state. For MVP
+    we send the user to the web/PWA where the guided form lives.
+    """
+    user = await _gate(update)
+    if user is None:
+        return
+    chat = update.effective_chat
+    if chat is None:
+        return
+    try:
+        from cara.services import reminders as rem_svc  # noqa: PLC0415
+        async with get_sessionmaker()() as s:
+            rows = await rem_svc.list_reminders(
+                s, user_id=user.id, upcoming_days=14, include_done=False,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.ricorda_failed", error=str(exc))
+        rows = []
+
+    lines = ["🔔 <b>I tuoi promemoria (prossimi 14 giorni)</b>", ""]
+    if not rows:
+        lines.append("Nessun promemoria attivo.")
+    else:
+        for r in rows[:10]:
+            try:
+                from zoneinfo import ZoneInfo
+                local = r.due_at.astimezone(ZoneInfo("Europe/Rome"))
+            except Exception:  # noqa: BLE001
+                local = r.due_at
+            lines.append(
+                f"• <b>{r.title}</b> — {local.strftime('%d/%m %H:%M')}"
+            )
+    lines.append("")
+    lines.append("➕ Per crearne uno nuovo, apri <a "
+                 "href=\"https://cara.home.lan:8455/reminders\">CARA → Ricordi</a>")
+    await chat.send_message(
+        text="\n".join(lines)[:4000],
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
 async def _on_help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _gate(update)
     if user is None:
@@ -1029,8 +1085,9 @@ async def _on_help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "/task &lt;descrizione&gt; — nuovo task\n\n"
         "🌤️ <b>Casa</b>\n"
         "/meteo [città] — meteo (Ferrara di default)\n"
-        "/casa — chi è in casa\n"
         "/cam &lt;id&gt; — foto camera (es. /cam cam_194)\n\n"
+        "🔔 <b>Promemoria</b>\n"
+        "/ricorda — i tuoi promemoria + link per crearne uno\n\n"
         "💬 <b>Chat libera</b>\n"
         "Scrivimi qualsiasi cosa — userò CARA come dal web\n\n"
         "🛠️ <b>Sistema</b>\n"
@@ -1078,35 +1135,14 @@ async def _edit_resolved(query, suffix: str) -> None:  # type: ignore[no-untyped
 
 
 async def _cb_presence_ignore(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
-    if not args:
-        await _edit_resolved(query, "⚠ Argomento mancante")
-        return
-    sighting_id = int(args[0])
-    from cara.services import frigate_faces_admin as ff  # noqa: PLC0415
-    ok = await ff.ignore_sighting(sighting_id)
-    await _edit_resolved(
-        query,
-        "🚫 Ignorato" if ok else "⚠ Impossibile ignorare (frigate-faces non risponde)",
-    )
+    # The old frigate-faces sighting backend is gone; presence is now
+    # client-side in the browser via face-api.js. The inline buttons on
+    # legacy notifications are inert.
+    await _edit_resolved(query, "⚠ Funzione non più disponibile")
 
 
 async def _cb_presence_assign(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
-    if len(args) < 2:
-        await _edit_resolved(query, "⚠ Argomenti mancanti")
-        return
-    sighting_id = int(args[0])
-    person_id = int(args[1])
-    from cara.services import frigate_faces_admin as ff  # noqa: PLC0415
-    person = await ff.get_person(person_id)
-    name = (person or {}).get("name") if person else None
-    if not name:
-        await _edit_resolved(query, "⚠ Persona non trovata")
-        return
-    ok = await ff.identify_sighting_with_name(sighting_id, str(name))
-    await _edit_resolved(
-        query,
-        f"👤 Riconosciuto come <b>{name}</b>" if ok else "⚠ Riconoscimento fallito",
-    )
+    await _edit_resolved(query, "⚠ Funzione non più disponibile")
 
 
 async def _cb_task_done(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
@@ -1158,11 +1194,88 @@ async def _cb_shopping_bought(query, args: list[str]) -> None:  # type: ignore[n
         await _edit_resolved(query, f"⚠ Errore: {exc}")
 
 
+async def _cb_reminder_done(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
+    """Mark a reminder done — handles one-shot OR rolls forward a
+    recurring reminder by one occurrence."""
+    if not args:
+        await _edit_resolved(query, "⚠ Argomento mancante")
+        return
+    import uuid as _uuid  # noqa: PLC0415
+    try:
+        reminder_id = _uuid.UUID(args[0])
+    except ValueError:
+        await _edit_resolved(query, "⚠ ID non valido")
+        return
+    try:
+        from cara.services import reminders as rem_svc  # noqa: PLC0415
+        async with get_sessionmaker()() as s:
+            owner = await _resolve_user_for_chat(query.message.chat.id)
+            if owner is None:
+                await _edit_resolved(query, "⚠ Utente non riconosciuto")
+                return
+            r = await rem_svc.mark_done(s, reminder_id, user_id=owner.id)
+            await s.commit()
+        if r is None:
+            await _edit_resolved(query, "⚠ Promemoria non trovato")
+        elif r.status == "active":
+            # Recurring: rolled forward to the next occurrence.
+            await _edit_resolved(query, f"✅ Fatto. Prossimo: {r.title}")
+        else:
+            await _edit_resolved(query, f"✅ Fatto: {r.title}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.cb.reminder_done_failed", error=str(exc))
+        await _edit_resolved(query, f"⚠ Errore: {exc}")
+
+
+async def _cb_reminder_snooze(query, args: list[str]) -> None:  # type: ignore[no-untyped-def]
+    """Postpone a reminder by N minutes. `args = [reminder_uuid, minutes]`.
+
+    Telegram caps callback_data at 64 bytes, so we send only the int
+    minutes — common values: 60 (+1h), 1440 (domani).
+    """
+    if len(args) < 2:
+        await _edit_resolved(query, "⚠ Argomenti mancanti")
+        return
+    import uuid as _uuid  # noqa: PLC0415
+    try:
+        reminder_id = _uuid.UUID(args[0])
+        minutes = int(args[1])
+    except (ValueError, TypeError):
+        await _edit_resolved(query, "⚠ Argomenti non validi")
+        return
+    if minutes <= 0 or minutes > 60 * 24 * 30:
+        await _edit_resolved(query, "⚠ Durata fuori range")
+        return
+    try:
+        from cara.services import reminders as rem_svc  # noqa: PLC0415
+        async with get_sessionmaker()() as s:
+            owner = await _resolve_user_for_chat(query.message.chat.id)
+            if owner is None:
+                await _edit_resolved(query, "⚠ Utente non riconosciuto")
+                return
+            r = await rem_svc.snooze(
+                s, reminder_id, user_id=owner.id, duration_minutes=minutes,
+            )
+            await s.commit()
+        if r is None:
+            await _edit_resolved(query, "⚠ Promemoria non trovato")
+        else:
+            label = "+1h" if minutes == 60 else (
+                "domani" if minutes == 1440 else f"+{minutes} min"
+            )
+            await _edit_resolved(query, f"⏰ Posticipato {label}: {r.title}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.cb.reminder_snooze_failed", error=str(exc))
+        await _edit_resolved(query, f"⚠ Errore: {exc}")
+
+
 CALLBACK_HANDLERS: dict[str, Any] = {
     "presence:ignore": _cb_presence_ignore,
     "presence:assign": _cb_presence_assign,
     "task:done": _cb_task_done,
     "shopping:bought": _cb_shopping_bought,
+    "reminder:done": _cb_reminder_done,
+    "reminder:snz": _cb_reminder_snooze,
 }
 
 
@@ -1224,12 +1337,12 @@ async def start_telegram_bot() -> None:
     app.add_handler(CommandHandler("settimana", _on_settimana))
     app.add_handler(CommandHandler("appuntamenti", _on_appuntamenti))
     app.add_handler(CommandHandler("meteo", _on_meteo))
-    app.add_handler(CommandHandler("casa", _on_casa))
     app.add_handler(CommandHandler("news", _on_news))
     app.add_handler(CommandHandler(["spesa", "lista"], _on_spesa_v2))
     app.add_handler(CommandHandler(["note", "nota"], _on_note))
     app.add_handler(CommandHandler(["task", "tasks"], _on_task))
     app.add_handler(CommandHandler("cam", _on_cam))
+    app.add_handler(CommandHandler(["ricorda", "ricordi", "promemoria"], _on_ricorda))
     app.add_handler(CommandHandler("diag", _on_diag))
     # Phase 3 — voice in / audio in: any voice note or audio file
     # gets transcribed by Whisper and routed as text.

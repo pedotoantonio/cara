@@ -53,13 +53,14 @@ function BirthdayWatcher({ user }: { user: User }) {
 import AdminFaceDebugPage from './routes/AdminFaceDebugPage';
 import AdminFacePage from './routes/AdminFacePage';
 import { AdminMemoryPage } from './routes/AdminMemoryPage';
-import { AdminPersonsPage } from './routes/AdminPersonsPage';
+import { AdminPersonaPage } from './routes/AdminPersonaPage';
 import { AdminTelegramPage } from './routes/AdminTelegramPage';
 import { AdminPage } from './routes/AdminPage';
 import { AdminDevicesPage } from './routes/AdminDevicesPage';
 import { AdminProactivityPage } from './routes/AdminProactivityPage';
 import { AdminSkillsPage } from './routes/AdminSkillsPage';
 import { AdminSmartHomePage } from './routes/AdminSmartHomePage';
+import { AdminUsersPage } from './routes/AdminUsersPage';
 import { PairPage } from './routes/PairPage';
 import { SetupPage } from './routes/SetupPage';
 import { ChatPage } from './routes/ChatPage';
@@ -71,10 +72,15 @@ import { FaceLabPage } from './routes/FaceLabPage';
 import { HomePage } from './routes/HomePage';
 import { IntegrationsPage } from './routes/IntegrationsPage';
 import { MemoryPage } from './routes/MemoryPage';
+import { MenuPage } from './routes/MenuPage';
 import { NewsPage } from './routes/NewsPage';
 import { NotesPage } from './routes/NotesPage';
 import { ProposalsPage } from './routes/ProposalsPage';
 import { RadioPage } from './routes/RadioPage';
+import { RemindersFormPage } from './routes/RemindersFormPage';
+import { RemindersHomePage } from './routes/RemindersHomePage';
+import { RemindersListPage } from './routes/RemindersListPage';
+import { RemindersSituationPage } from './routes/RemindersSituationPage';
 import { SettingsPage } from './routes/SettingsPage';
 import { ShoppingPage } from './routes/ShoppingPage';
 import { TasksPage } from './routes/TasksPage';
@@ -84,8 +90,8 @@ import { WallToday } from './routes/wall/WallToday';
 import { WallCalendarPage } from './routes/wall/WallCalendarPage';
 import { WallWeekPage } from './routes/wall/WallWeekPage';
 import { WallShoppingPage } from './routes/wall/WallShoppingPage';
+import { WallNewsPage } from './routes/wall/WallNewsPage';
 import { WallServicesPage } from './routes/wall/WallServicesPage';
-import { WallPersonsPage } from './routes/wall/WallPersonsPage';
 
 type AuthState = { kind: 'loading' } | { kind: 'anonymous' } | { kind: 'authenticated'; user: User };
 
@@ -184,8 +190,8 @@ export default function App() {
                 <Route path="week" element={<WallWeekPage />} />
                 <Route path="calendar" element={<WallCalendarPage />} />
                 <Route path="shopping" element={<WallShoppingPage />} />
+                <Route path="news" element={<WallNewsPage />} />
                 <Route path="services" element={<WallServicesPage />} />
-                <Route path="persons" element={<WallPersonsPage />} />
               </Route>
             </Routes>
           </BrowserRouter>
@@ -257,6 +263,7 @@ export default function App() {
         >
           <Route index element={<HomePage />} />
           <Route path="home" element={<Navigate to="/" replace />} />
+          <Route path="menu" element={<MenuPage />} />
           <Route path="wallet" element={<WalletPage />} />
           <Route path="chat" element={<ChatPage />} />
           <Route path="tasks" element={<TasksPage />} />
@@ -264,11 +271,15 @@ export default function App() {
           <Route path="notes" element={<NotesPage />} />
           <Route path="news" element={<NewsPage />} />
           <Route path="radio" element={<RadioPage />} />
+          <Route path="reminders" element={<RemindersHomePage />} />
+          <Route path="reminders/category/:category" element={<RemindersSituationPage />} />
+          <Route path="reminders/new/:slug" element={<RemindersFormPage />} />
+          <Route path="reminders/list" element={<RemindersListPage />} />
           <Route path="discoveries" element={<DiscoveriesPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="admin/diagnostics" element={<DiagnosticsPage />} />
           <Route path="admin/memory" element={<AdminMemoryPage />} />
-          <Route path="admin/persone" element={<AdminPersonsPage />} />
+          <Route path="admin/persona" element={<AdminPersonaPage />} />
           <Route path="admin/face" element={<AdminFacePage />} />
           <Route path="admin/face/debug" element={<AdminFaceDebugPage />} />
           <Route path="admin/telegram" element={<AdminTelegramPage />} />
@@ -276,6 +287,7 @@ export default function App() {
           <Route path="admin/proactivity" element={<AdminProactivityPage />} />
           <Route path="admin/skills" element={<AdminSkillsPage />} />
           <Route path="admin/devices" element={<AdminDevicesPage />} />
+          <Route path="admin/users" element={<AdminUsersPage />} />
           <Route path="admin/setup" element={<SetupPage />} />
           <Route path="setup" element={<SetupPage />} />
           <Route path="pair" element={<PairPage />} />
