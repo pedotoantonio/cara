@@ -14,6 +14,12 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { askCara, transcribeAudio } from '../../api/wall';
+import { AudioLevelMeter } from '../AudioLevelMeter';
+import {
+  diagnoseMicFailure,
+  startMicSession,
+  type MicSession,
+} from '../../lib/micPipeline';
 
 type Phase = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'error';
 
@@ -53,13 +59,17 @@ export function WallMic() {
   // auto-start the MediaRecorder pipeline.
   const [wakeOn, setWakeOn] = useState<boolean>(false);
 
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  const sessionRef = useRef<MicSession | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const armedAtRef = useRef<number>(0);
   const wakeRecRef = useRef<SpeechRecognitionLike | null>(null);
   const phaseRef = useRef<Phase>('idle');
+  // Live mic level — refs hold the latest value, a 50ms pump mirrors
+  // to state so the bar renders smoothly without flooding React.
+  const micDbRef = useRef<number>(-60);
+  const micLevelRef = useRef<number>(0);
+  const [micDb, setMicDb] = useState<number>(-60);
+  const [micLevel, setMicLevel] = useState<number>(0);
+  const meterPumpRef = useRef<number | null>(null);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -71,6 +81,27 @@ export function WallMic() {
     typeof window.MediaRecorder !== 'undefined' &&
     !!navigator.mediaDevices?.getUserMedia;
   const supportsWake = Boolean(getRecognitionCtor());
+
+  function _startMeterPump() {
+    if (meterPumpRef.current !== null) return;
+    const tick = () => {
+      setMicDb(micDbRef.current);
+      setMicLevel(micLevelRef.current);
+      meterPumpRef.current = window.setTimeout(tick, 50);
+    };
+    tick();
+  }
+
+  function _stopMeterPump() {
+    if (meterPumpRef.current !== null) {
+      clearTimeout(meterPumpRef.current);
+      meterPumpRef.current = null;
+    }
+    setMicDb(-60);
+    setMicLevel(0);
+    micDbRef.current = -60;
+    micLevelRef.current = 0;
+  }
 
   useEffect(() => {
     return () => {
@@ -105,10 +136,17 @@ export function WallMic() {
     } catch {
       return;
     }
+    // Track consecutive errors so we throttle restarts instead of hammering
+    // the API when the network to Google STT is wobbling.
+    let wakeErrCount = 0;
+    let wakeRestartTimer: ReturnType<typeof setTimeout> | null = null;
+    const WAKE_BACKOFF_MS = [400, 2_000, 5_000, 15_000, 60_000];
     rec.lang = 'it-IT';
     rec.continuous = true;
     rec.interimResults = false;
     rec.onresult = (ev) => {
+      // Got a transcript → connection to STT is healthy; reset backoff.
+      wakeErrCount = 0;
       // Look for "cara" in any final result. The user can be saying
       // anything around it — "cara accendi…", "ehi cara…", etc.
       // Conservative: only trigger when the recorder is idle and not
@@ -128,15 +166,31 @@ export function WallMic() {
     rec.onerror = (ev) => {
       const code = ev.error || 'unknown';
       // `no-speech`/`aborted` are normal — recognition restarts in onend.
-      if (code !== 'no-speech' && code !== 'aborted') {
+      // `network` happens whenever Chrome can't reach Google STT (transient
+      // ISP hiccup, DNS lag, captive portal). Surface NOTHING for it —
+      // it's actionable only by the network, not by the user, and showing
+      // a toast every few seconds is just noise.
+      if (code !== 'no-speech' && code !== 'aborted' && code !== 'network') {
         setDiag(`wake: ${code}`);
+      }
+      if (code !== 'no-speech' && code !== 'aborted') {
+        wakeErrCount += 1;
       }
     };
     rec.onend = () => {
-      // Auto-restart so the listener keeps running.
-      if (wakeRecRef.current === rec && phaseRef.current !== 'speaking') {
-        try { rec.start(); } catch { /* noop */ }
-      }
+      // Auto-restart so the listener keeps running, but back off on error
+      // streaks so a flaky network doesn't burn battery + CPU in a loop.
+      if (wakeRecRef.current !== rec || phaseRef.current === 'speaking') return;
+      const idx = Math.min(wakeErrCount, WAKE_BACKOFF_MS.length - 1);
+      const delay = wakeErrCount === 0 ? 0 : WAKE_BACKOFF_MS[idx];
+      if (wakeRestartTimer) clearTimeout(wakeRestartTimer);
+      wakeRestartTimer = setTimeout(() => {
+        if (wakeRecRef.current !== rec) return;
+        try {
+          rec.start();
+          // A successful start resets the error counter on next onresult.
+        } catch { /* noop */ }
+      }, delay);
     };
     try {
       rec.start();
@@ -154,14 +208,9 @@ export function WallMic() {
   }
 
   function stopAll() {
-    try {
-      recorderRef.current?.stop();
-    } catch { /* noop */ }
-    recorderRef.current = null;
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
+    sessionRef.current?.abort();
+    sessionRef.current = null;
+    _stopMeterPump();
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -178,20 +227,21 @@ export function WallMic() {
     setReply('');
     setTranscript('');
     setDiag('');
-    chunksRef.current = [];
-    armedAtRef.current = Date.now();
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 48000,
-          noiseSuppression: true,
-          echoCancellation: true,
-          autoGainControl: true,
+      const session = await startMicSession({
+        // Push-to-talk on the Wall = manual stop only. VAD would
+        // betray user expectations ("ho ancora il dito sopra!").
+        vadMode: 'manual',
+        maxDurationMs: 30_000,
+        onLevel: (db, lvl) => {
+          micDbRef.current = db;
+          micLevelRef.current = lvl;
         },
       });
-      streamRef.current = stream;
+      sessionRef.current = session;
+      _startMeterPump();
+      setPhase('listening');
     } catch (e) {
       const err = e as DOMException;
       const msg = err?.name === 'NotAllowedError'
@@ -202,76 +252,59 @@ export function WallMic() {
       setDiag(msg);
       setPhase('error');
       window.setTimeout(() => setPhase('idle'), 3500);
-      return;
-    }
-
-    let rec: MediaRecorder;
-    try {
-      // Prefer Opus in WebM. Whisper handles it via ffmpeg.
-      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-          ? 'audio/webm'
-          : '';
-      rec = mime
-        ? new MediaRecorder(streamRef.current, { mimeType: mime, audioBitsPerSecond: 64_000 })
-        : new MediaRecorder(streamRef.current);
-    } catch (e) {
-      setDiag(`Recorder non avviato: ${(e as Error).message}`);
-      setPhase('error');
-      stopAll();
-      window.setTimeout(() => setPhase('idle'), 3500);
-      return;
-    }
-
-    rec.ondataavailable = (ev) => {
-      if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
-    };
-    rec.onstop = async () => {
-      // Stop the underlying tracks so the mic indicator goes away.
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
-      const elapsed = Date.now() - armedAtRef.current;
-      const blob = new Blob(chunksRef.current, { type: rec.mimeType || 'audio/webm' });
-      chunksRef.current = [];
-      // Too short → user just tapped, ignore.
-      if (elapsed < 400 || blob.size < 1500) {
-        setPhase('idle');
-        return;
-      }
-      await uploadAndAsk(blob);
-    };
-
-    recorderRef.current = rec;
-    rec.start(500); // emit chunks every 500ms so onstop has data fast
-    setPhase('listening');
-  }
-
-  function stopRecording() {
-    const rec = recorderRef.current;
-    if (rec && rec.state !== 'inactive') {
-      try { rec.stop(); } catch { /* noop */ }
     }
   }
 
-  async function uploadAndAsk(blob: Blob) {
+  async function stopRecording() {
+    const session = sessionRef.current;
+    if (!session) return;
+    sessionRef.current = null;
     setPhase('transcribing');
-    let text = '';
+    let result: { blob: Blob; diag: ReturnType<typeof session.getDiag> };
     try {
-      text = await transcribeAudio(blob, 'it');
+      result = await session.stop();
+    } catch {
+      _stopMeterPump();
+      setPhase('idle');
+      return;
+    }
+    _stopMeterPump();
+    const { blob, diag } = result;
+    // Too short → user just tapped accidentally, ignore.
+    if (diag.recordedMs < 400 || blob.size < 1500) {
+      setPhase('idle');
+      return;
+    }
+    await uploadAndAsk(blob, diag);
+  }
+
+  async function uploadAndAsk(
+    blob: Blob,
+    micDiag: ReturnType<MicSession['getDiag']>,
+  ) {
+    let asr: Awaited<ReturnType<typeof transcribeAudio>>;
+    try {
+      asr = await transcribeAudio(blob, 'it');
     } catch (e) {
       setDiag(`ASR fallita: ${(e as Error).message}`);
       setPhase('error');
       window.setTimeout(() => setPhase('idle'), 3500);
       return;
     }
+    const text = (asr.text || '').trim();
+    const hint = diagnoseMicFailure(micDiag, text, asr.confidence_label);
     if (!text) {
-      setDiag('Non ho capito, riprova più vicino al microfono');
+      // Empty transcript — never silent. Show the precise mic
+      // pipeline hint instead of a generic "non ho capito".
+      setDiag(hint || 'Non ho capito, riprova');
       setPhase('error');
-      window.setTimeout(() => setPhase('idle'), 2500);
+      window.setTimeout(() => setPhase('idle'), 6000);
       return;
+    }
+    if (asr.confidence_label === 'low' && hint) {
+      // Low confidence — show what we heard but let the user retry.
+      setTranscript(text);
+      setDiag(hint);
     }
     setTranscript(text);
     setPhase('thinking');
@@ -359,10 +392,10 @@ export function WallMic() {
         }}
         onPointerUp={(e) => {
           e.preventDefault();
-          if (phase === 'listening') stopRecording();
+          if (phase === 'listening') void stopRecording();
         }}
-        onPointerCancel={() => { if (phase === 'listening') stopRecording(); }}
-        onPointerLeave={() => { if (phase === 'listening') stopRecording(); }}
+        onPointerCancel={() => { if (phase === 'listening') void stopRecording(); }}
+        onPointerLeave={() => { if (phase === 'listening') void stopRecording(); }}
         className={[
           'inline-flex items-center justify-center rounded-full',
           'w-16 h-16 bg-bg/60 backdrop-blur-sm transition-all',
@@ -390,9 +423,14 @@ export function WallMic() {
       >
         {buttonLabel}
       </span>
-      {/* Single-line transcript track. Always reserves vertical space
-          (h-7) so layout doesn't jump when text appears. Inline-flow,
-          not absolute-positioned, so it never overlaps siblings. */}
+      {/* Live mic level meter — only while actively recording. */}
+      <AudioLevelMeter
+        active={phase === 'listening'}
+        db={micDb}
+        level={micLevel}
+        width={224}
+      />
+      {/* Single-line transcript track. */}
       <MicTranscriptLine text={lineText} />
       {supportsWake && (
         <button

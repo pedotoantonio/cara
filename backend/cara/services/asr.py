@@ -80,19 +80,73 @@ async def transcribe_bytes(audio_bytes: bytes, language: str | None = "it") -> d
         tmp_path = f.name
 
     def _run() -> dict[str, Any]:
+        # Tuned for short Italian household utterances in noisy rooms:
+        # beam_size=5 (vs greedy 1) roughly halves the empty-transcript
+        # rate at the cost of ~30% latency; no_speech / compression
+        # filters drop the classic "Sottotitoli e revisione" hallucination
+        # loop on silence; condition_on_previous_text=False keeps each
+        # turn independent; initial_prompt biases toward the household
+        # lexicon. silero VAD threshold tightened so short answers
+        # ("sì", "ok") still slip through.
         segments, info = model.transcribe(
             tmp_path,
             language=language,
-            beam_size=1,        # greedy = faster, accuracy still fine for short utterances
-            vad_filter=True,    # voice-activity detection: skip silence at edges
-            vad_parameters={"min_silence_duration_ms": 500},
+            beam_size=5,
+            condition_on_previous_text=False,
+            no_speech_threshold=0.5,
+            compression_ratio_threshold=2.4,
+            initial_prompt=(
+                "Conversazione familiare italiana con CARA, l'assistente "
+                "di casa. Comandi brevi: accendi, spegni, ricordami, "
+                "aggiungi alla spesa, metti, dimmi."
+            ),
+            vad_filter=True,
+            vad_parameters={
+                "min_silence_duration_ms": 350,
+                "threshold": 0.45,
+            },
         )
-        # `segments` is a generator; consume it.
-        text = "".join(seg.text for seg in segments).strip()
+        # Consume the generator AND collect per-segment confidence so
+        # the frontend can decide whether to ask "Hai detto X?".
+        texts: list[str] = []
+        avg_logprobs: list[float] = []
+        no_speech_probs: list[float] = []
+        for seg in segments:
+            texts.append(seg.text)
+            if seg.avg_logprob is not None:
+                avg_logprobs.append(float(seg.avg_logprob))
+            if seg.no_speech_prob is not None:
+                no_speech_probs.append(float(seg.no_speech_prob))
+        text = "".join(texts).strip()
+        avg_logprob = (
+            sum(avg_logprobs) / len(avg_logprobs) if avg_logprobs else None
+        )
+        no_speech_prob = (
+            sum(no_speech_probs) / len(no_speech_probs) if no_speech_probs else None
+        )
+        # Coarse-grain confidence label; the UI only needs three
+        # buckets, not the raw logprobs.
+        if not text:
+            confidence_label = "empty"
+        elif (
+            (no_speech_prob is not None and no_speech_prob > 0.6)
+            or (avg_logprob is not None and avg_logprob < -1.0)
+        ):
+            confidence_label = "low"
+        elif (
+            (no_speech_prob is not None and no_speech_prob > 0.3)
+            or (avg_logprob is not None and avg_logprob < -0.6)
+        ):
+            confidence_label = "medium"
+        else:
+            confidence_label = "high"
         return {
             "text": text,
             "language": info.language,
             "duration_s": float(info.duration),
+            "avg_logprob": avg_logprob,
+            "no_speech_prob": no_speech_prob,
+            "confidence_label": confidence_label,
         }
 
     try:
@@ -109,6 +163,9 @@ async def transcribe_bytes(audio_bytes: bytes, language: str | None = "it") -> d
         elapsed_ms=result["elapsed_ms"],
         text_chars=len(result["text"]),
         duration_s=round(result["duration_s"], 2),
+        confidence=result.get("confidence_label"),
+        avg_logprob=result.get("avg_logprob"),
+        no_speech_prob=result.get("no_speech_prob"),
     )
     # Mirror to the in-memory event log so the admin diagnostics page
     # can show recent ASR activity without requiring `docker logs`.

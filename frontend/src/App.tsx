@@ -71,10 +71,15 @@ import { FaceLabPage } from './routes/FaceLabPage';
 import { HomePage } from './routes/HomePage';
 import { IntegrationsPage } from './routes/IntegrationsPage';
 import { MemoryPage } from './routes/MemoryPage';
+import { MenuPage } from './routes/MenuPage';
 import { NewsPage } from './routes/NewsPage';
 import { NotesPage } from './routes/NotesPage';
 import { ProposalsPage } from './routes/ProposalsPage';
 import { RadioPage } from './routes/RadioPage';
+import { RemindersFormPage } from './routes/RemindersFormPage';
+import { RemindersHomePage } from './routes/RemindersHomePage';
+import { RemindersListPage } from './routes/RemindersListPage';
+import { RemindersSituationPage } from './routes/RemindersSituationPage';
 import { SettingsPage } from './routes/SettingsPage';
 import { ShoppingPage } from './routes/ShoppingPage';
 import { TasksPage } from './routes/TasksPage';
@@ -84,6 +89,7 @@ import { WallToday } from './routes/wall/WallToday';
 import { WallCalendarPage } from './routes/wall/WallCalendarPage';
 import { WallWeekPage } from './routes/wall/WallWeekPage';
 import { WallShoppingPage } from './routes/wall/WallShoppingPage';
+import { WallNewsPage } from './routes/wall/WallNewsPage';
 import { WallServicesPage } from './routes/wall/WallServicesPage';
 
 type AuthState = { kind: 'loading' } | { kind: 'anonymous' } | { kind: 'authenticated'; user: User };
@@ -183,6 +189,7 @@ export default function App() {
                 <Route path="week" element={<WallWeekPage />} />
                 <Route path="calendar" element={<WallCalendarPage />} />
                 <Route path="shopping" element={<WallShoppingPage />} />
+                <Route path="news" element={<WallNewsPage />} />
                 <Route path="services" element={<WallServicesPage />} />
               </Route>
             </Routes>
@@ -255,6 +262,7 @@ export default function App() {
         >
           <Route index element={<HomePage />} />
           <Route path="home" element={<Navigate to="/" replace />} />
+          <Route path="menu" element={<MenuPage />} />
           <Route path="wallet" element={<WalletPage />} />
           <Route path="chat" element={<ChatPage />} />
           <Route path="tasks" element={<TasksPage />} />
@@ -262,6 +270,10 @@ export default function App() {
           <Route path="notes" element={<NotesPage />} />
           <Route path="news" element={<NewsPage />} />
           <Route path="radio" element={<RadioPage />} />
+          <Route path="reminders" element={<RemindersHomePage />} />
+          <Route path="reminders/category/:category" element={<RemindersSituationPage />} />
+          <Route path="reminders/new/:slug" element={<RemindersFormPage />} />
+          <Route path="reminders/list" element={<RemindersListPage />} />
           <Route path="discoveries" element={<DiscoveriesPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="admin/diagnostics" element={<DiagnosticsPage />} />

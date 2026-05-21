@@ -526,6 +526,66 @@ async def budget_drift_warning(ctx: RuleContext) -> Suggestion | None:
 
 
 # ---------------------------------------------------------------------------
+# 11) Documenti in scadenza — Memorial ondata
+# ---------------------------------------------------------------------------
+
+
+@rule(
+    "expiring_documents_30d",
+    cooldown_hours=72.0,  # 3 giorni — non sgridare ogni mattina
+    description=(
+        "Quando un promemoria della categoria 'documenti' scade entro "
+        "30 giorni e non è ancora stato chiuso, ricorda di rinnovarlo."
+    ),
+)
+async def expiring_documents_30d(ctx: RuleContext) -> Suggestion | None:
+    if ctx.db_session is None:
+        return None
+    from datetime import timedelta as _td
+    from sqlalchemy import select
+
+    from cara.models.reminder import (
+        CATEGORY_DOCUMENTS,
+        STATUS_ACTIVE,
+        STATUS_SNOOZED,
+        Reminder,
+    )
+
+    horizon = ctx.now + _td(days=30)
+    stmt = (
+        select(Reminder)
+        .where(
+            Reminder.category == CATEGORY_DOCUMENTS,
+            Reminder.status.in_([STATUS_ACTIVE, STATUS_SNOOZED]),
+            Reminder.due_at <= horizon,
+            Reminder.due_at >= ctx.now,
+        )
+        .order_by(Reminder.due_at.asc())
+        .limit(1)
+    )
+    try:
+        row = (await ctx.db_session.execute(stmt)).scalar_one_or_none()
+    except Exception as exc:  # noqa: BLE001
+        log.debug("expiring_documents.query_failed", error=str(exc))
+        return None
+
+    if row is None:
+        return None
+
+    days = max(1, (row.due_at - ctx.now).days)
+    return Suggestion(
+        rule_id="expiring_documents_30d",
+        text=(
+            f"📄 {row.title} scade fra {days} "
+            f"{'giorno' if days == 1 else 'giorni'}. Vuoi pianificare il rinnovo?"
+        ),
+        priority=Priority.MEDIUM,
+        target_user_id=row.user_id,
+        action={"deep_link": f"/reminders/list?focus={row.id}"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Convenience: register count + diagnostic
 # ---------------------------------------------------------------------------
 
@@ -542,4 +602,5 @@ def registered_rule_ids() -> tuple[str, ...]:
         "shopping_review_saturday",
         "task_overdue_24h",
         "budget_drift_warning",
+        "expiring_documents_30d",
     )

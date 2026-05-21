@@ -10,6 +10,7 @@ import type { WallSummary } from '../../api/wall';
 import { WallAvatarPanel } from '../../components/wall/WallAvatarPanel';
 import { WallClock } from '../../components/wall/WallClock';
 import { WallMic } from '../../components/wall/WallMic';
+import { WallNewsTicker } from '../../components/wall/WallNewsTicker';
 import { WeatherIcon } from '../../components/wall/WeatherIcon';
 
 const TABS = [
@@ -17,6 +18,7 @@ const TABS = [
   { to: '/wall/week', label: 'Settimana', end: false },
   { to: '/wall/calendar', label: 'Mese', end: false },
   { to: '/wall/shopping', label: 'Spesa', end: false },
+  { to: '/wall/news', label: 'News', end: false },
   { to: '/wall/services', label: 'Servizi', end: false },
 ];
 
@@ -26,18 +28,20 @@ function HeaderMeta({ summary }: { summary: WallSummary | null }) {
   const presence = summary.presence;
   const inHouse = presence?.people?.map((p) => p.name).slice(0, 4).join(', ') || '';
   return (
-    <div className="flex flex-col items-end gap-3 text-right">
+    // Left-aligned on mobile, right-aligned on tablets+ to balance the
+    // 3-column header grid.
+    <div className="flex flex-col items-start md:items-end gap-2 md:gap-3 text-left md:text-right w-full">
       {w.available ? (
-        <div className="flex items-center gap-3">
-          <WeatherIcon slug={w.icon_slug} isDay={w.is_day} size={56} />
+        <div className="flex items-center gap-2 md:gap-3">
+          <WeatherIcon slug={w.icon_slug} isDay={w.is_day} size={44} />
           <span>
             <span
               className="font-display"
-              style={{ fontSize: 'clamp(28px, 3vw, 44px)', fontWeight: 300 }}
+              style={{ fontSize: 'clamp(24px, 3vw, 44px)', fontWeight: 300 }}
             >
               {Math.round(w.temperature_c ?? 0)}°
             </span>
-            <span className="block text-fg-muted text-sm leading-tight">
+            <span className="block text-fg-muted text-xs md:text-sm leading-tight">
               {w.label} · {w.city}
             </span>
           </span>
@@ -45,7 +49,7 @@ function HeaderMeta({ summary }: { summary: WallSummary | null }) {
       ) : (
         <span className="text-fg-muted text-sm">Meteo n/d</span>
       )}
-      <div className="text-fg-soft text-sm">
+      <div className="text-fg-soft text-xs md:text-sm">
         {presence.available ? (
           inHouse ? (
             <>
@@ -53,7 +57,7 @@ function HeaderMeta({ summary }: { summary: WallSummary | null }) {
               <span>{inHouse}</span>
             </>
           ) : (
-            <span className="text-fg-muted">In casa: nessuno rilevato</span>
+            <span className="text-fg-muted">In casa: nessuno</span>
           )
         ) : (
           <span className="text-fg-muted">Presenza n/d</span>
@@ -95,49 +99,72 @@ export function WallShell() {
   return (
     <div className="min-h-dvh w-full bg-bg text-fg overflow-hidden flex flex-col">
       <WallBackground />
-      {/* Header */}
-      <header className="px-8 pt-8 pb-4 grid grid-cols-3 items-center gap-6 z-10">
+
+      {/* Header — single-column stack on phones, 3-col grid on tablets+.
+          On mobile we render the meta inline under the clock instead of
+          in a right-rail so we don't waste vertical space and the avatar
+          can sit centred under everything. */}
+      <header
+        className="px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6 lg:pt-8 pb-3 z-10
+                   flex flex-col gap-3
+                   md:grid md:grid-cols-3 md:items-center md:gap-6"
+      >
         <WallClock />
-        <div className="flex flex-col items-center gap-3">
-          <WallAvatarPanel size={156} />
+        <div className="flex flex-col items-center gap-2 sm:gap-3 order-3 md:order-none">
+          {/* Avatar shrinks on phones — 96 px keeps it visible without
+              dominating a 360 px viewport; 156 px reserved for tablets+. */}
+          <div className="hidden md:block">
+            <WallAvatarPanel size={156} />
+          </div>
+          <div className="md:hidden">
+            <WallAvatarPanel size={96} />
+          </div>
           <WallMic />
         </div>
-        <div className="flex justify-end">
+        <div className="flex md:justify-end order-2 md:order-none">
           <HeaderMeta summary={summary} />
         </div>
       </header>
 
-      {/* Tabs */}
+      {/* Tabs — horizontal scroll on phones so all 6 fit without
+          wrapping; centred pill bar on tablets+. */}
       <nav
-        className="flex justify-center gap-2 px-4 py-2 z-10"
+        className="px-2 sm:px-4 py-2 z-10 overflow-x-auto no-scrollbar"
         aria-label="Vista del wall"
       >
-        {TABS.map((tab) => (
-          <NavLink
-            key={tab.to}
-            to={tab.to}
-            end={tab.end}
-            className={({ isActive }) =>
-              [
-                'inline-flex items-center justify-center rounded-pill font-medium transition-colors',
-                'px-6 py-2',
-                isActive
-                  ? 'bg-accent text-bg'
-                  : 'bg-surface2 text-fg-soft hover:bg-surface2/80',
-              ].join(' ')
-            }
-            style={{ fontSize: 'clamp(14px, 1.2vw, 18px)' }}
-          >
-            {tab.label}
-          </NavLink>
-        ))}
+        <div
+          className="inline-flex gap-1 p-1 sm:p-1.5 rounded-pill bg-surface1/70
+                     backdrop-blur-md ring-1 ring-fg/8 shadow-sm
+                     mx-auto"
+          style={{ minWidth: 'fit-content' }}
+        >
+          {TABS.map((tab) => (
+            <NavLink
+              key={tab.to}
+              to={tab.to}
+              end={tab.end}
+              className={({ isActive }) =>
+                [
+                  'inline-flex items-center justify-center rounded-pill font-medium transition-all duration-200',
+                  'px-3 sm:px-5 py-1.5 sm:py-2 whitespace-nowrap',
+                  isActive
+                    ? 'bg-accent text-bg shadow-md scale-[1.02]'
+                    : 'text-fg-soft hover:bg-surface2/60 hover:text-fg',
+                ].join(' ')
+              }
+              style={{ fontSize: 'clamp(13px, 1.1vw, 18px)' }}
+            >
+              {tab.label}
+            </NavLink>
+          ))}
+        </div>
       </nav>
 
       {/* Outlet — `min-h-0` is the magic that lets `flex-1` actually
           clamp the main panel to remaining viewport so children that
           rely on `overflow-y-auto` (calendar grid, week scroll) can
           compute heights instead of growing to fit content. */}
-      <main className="flex-1 min-h-0 overflow-y-auto px-8 pb-8 z-10">
+      <main className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 lg:px-8 pb-4 z-10">
         {error && (
           <div className="text-alert text-center py-4">
             ⚠ {error}
@@ -145,6 +172,9 @@ export function WallShell() {
         )}
         <Outlet context={{ summary, location, refreshSummary: loadSummary }} />
       </main>
+
+      {/* Persistent scrolling news ticker — visible across all Wall views */}
+      <WallNewsTicker />
     </div>
   );
 }

@@ -18,6 +18,7 @@ import {
   BottomSheet,
   Button,
   Card,
+  CategoryHeader,
   Field,
   Icon,
   IconButton,
@@ -311,34 +312,39 @@ export function TasksPage() {
 
   // ── Render ────────────────────────────────────────────
 
+  const done = tasks.filter(t => t.done).length;
+  const totalKnown = pending + done;
+  const progressValue = totalKnown === 0 ? 0 : done / totalKnown;
+  const pillText =
+    pending === 0
+      ? 'Tutto fatto'
+      : `${pending} da fare${overdue > 0 ? ` · ${overdue} in ritardo` : todays > 0 ? ` · ${todays} oggi` : ''}`;
+
   return (
     <div className="px-5 md:px-8 max-w-3xl mx-auto pb-8">
-      <div className="flex items-end justify-between gap-3 mb-5">
-        <div>
-          <h1 className="font-display text-3xl md:text-4xl text-fg leading-tight">
-            Task
-          </h1>
-          <p className="text-sm text-fg-soft mt-1">
-            {pending === 0 ? 'Tutto fatto.' : `${pending} da fare`}
-            {todays > 0 && (
-              <span className="text-celebrate"> · {todays} oggi</span>
-            )}
-            {overdue > 0 && (
-              <span className="text-alert"> · {overdue} in ritardo</span>
-            )}
-          </p>
-        </div>
-        <label className="text-xs text-fg-muted flex items-center gap-2 cursor-pointer shrink-0 select-none">
-          <input
-            type="checkbox"
-            checked={hideDone}
-            onChange={e => setHideDone(e.target.checked)}
-            className="accent-accent w-4 h-4"
-          />
-          <span className="hidden sm:inline">Nascondi completate</span>
-          <span className="sm:hidden">Nascondi ✓</span>
-        </label>
-      </div>
+      <CategoryHeader
+        icon="task"
+        title="Cose da fare"
+        subtitle={pending === 0 ? 'Goditi la giornata.' : 'Tocca per modificare, cestino per cancellare.'}
+        pill={pillText}
+        tint="ocean"
+        progress={totalKnown === 0 ? undefined : progressValue}
+        progressLabel={totalKnown === 0 ? undefined : `${done}/${totalKnown}`}
+        progressCaption={totalKnown === 0 ? undefined : 'fatte'}
+        className="mb-5"
+        right={
+          <label className="text-xs text-fg-muted flex items-center gap-2 cursor-pointer select-none bg-bg/60 backdrop-blur-sm rounded-pill px-3 py-2 ring-1 ring-fg/8">
+            <input
+              type="checkbox"
+              checked={hideDone}
+              onChange={e => setHideDone(e.target.checked)}
+              className="accent-accent w-4 h-4"
+            />
+            <span className="hidden sm:inline">Nascondi completate</span>
+            <span className="sm:hidden">✓</span>
+          </label>
+        }
+      />
 
       {/* Push notifications banner */}
       {showPushBanner && (
@@ -436,11 +442,11 @@ export function TasksPage() {
             <div
               key={t.id}
               className={cn(
-                'group rounded-xl px-3 py-2.5 transition-all duration-180',
+                'group rounded-2xl px-4 py-3 transition-all duration-200',
                 'flex items-center gap-3',
                 t.done
-                  ? 'bg-surface1/60 text-fg-muted'
-                  : 'bg-surface1 hover:bg-surface2 ring-1 ring-fg/8',
+                  ? 'bg-surface1/50 text-fg-muted ring-1 ring-fg/5'
+                  : 'bg-surface1 hover:bg-surface2 ring-1 ring-fg/8 hover:ring-fg/15 hover:shadow-sm',
               )}
             >
               <button
@@ -502,14 +508,28 @@ export function TasksPage() {
               )}
 
               {!isEditing && (
-                <IconButton
-                  name="calendar"
-                  label="Modifica scadenza o elimina"
-                  size="sm"
-                  variant="plain"
-                  onClick={() => openSheet(t)}
-                  className="opacity-0 group-hover:opacity-100 md:opacity-0 transition"
-                />
+                <>
+                  <IconButton
+                    name="calendar"
+                    label="Modifica scadenza"
+                    size="sm"
+                    variant="plain"
+                    onClick={() => openSheet(t)}
+                    className="opacity-60 hover:opacity-100 md:opacity-0 md:group-hover:opacity-100 transition"
+                  />
+                  <IconButton
+                    name="trash"
+                    label="Elimina task"
+                    size="sm"
+                    variant="plain"
+                    onClick={() => {
+                      if (window.confirm(`Eliminare "${t.title}"?`)) {
+                        void remove(t.id);
+                      }
+                    }}
+                    className="opacity-60 hover:opacity-100 md:opacity-0 md:group-hover:opacity-100 transition text-alert"
+                  />
+                </>
               )}
             </div>
           );

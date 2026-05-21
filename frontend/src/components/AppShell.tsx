@@ -54,6 +54,7 @@ const PRIMARY: NavEntry[] = [
 
 // Secondary — accessibili da "Altro" su mobile, sempre visibili in rail.
 const SECONDARY: NavEntry[] = [
+  { to: '/menu',             label: 'Stanze',    icon: 'home' },
   { to: '/shopping',         label: 'Spesa',     icon: 'shopping' },
   { to: '/notes',            label: 'Note',      icon: 'note' },
   { to: '/news',             label: 'News',      icon: 'news' },

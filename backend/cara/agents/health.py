@@ -181,6 +181,13 @@ async def run_probes_once() -> dict[str, Any]:
         alert_threshold = int(
             await _admin.get(s, "wall_health_alert_streak") or 2
         )
+        # Per-probe gates: if the admin has stopped a service on purpose
+        # (e.g. Frigate to free DDR/CPU for the LLM) the corresponding
+        # probe must NOT run — otherwise the watchdog keeps paging
+        # Telegram about a service that's intentionally offline.
+        probe_gates: dict[str, bool] = {
+            "frigate": bool(await _admin.get(s, "monitor_frigate_enabled")),
+        }
 
     if enabled is False:  # default is None/True, only False disables
         return {"skipped": "disabled"}
@@ -189,6 +196,22 @@ async def run_probes_once() -> dict[str, Any]:
     try:
         results: list[dict[str, Any]] = []
         for name, label, fn in _PROBES:
+            if probe_gates.get(name) is False:
+                # Skip silently AND clear any prior failure/alert state so
+                # we don't ship a stale red dot or an orphan recovery
+                # message the moment the admin flips the gate back on.
+                try:
+                    await r.delete(
+                        _REDIS_PROBE_KEY.format(name=name),
+                        _REDIS_ALERT_KEY.format(name=name),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                results.append({
+                    "name": name, "status": _WARN,
+                    "duration_ms": 0, "error": "probe disabilitata",
+                })
+                continue
             t0 = time.monotonic()
             try:
                 status, err = await asyncio.wait_for(fn(), timeout=30.0)

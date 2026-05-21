@@ -54,7 +54,7 @@ from cara.models.shopping import ShoppingItem
 from cara.models.task import Task
 from cara.models.user import User
 from cara.services import admin_settings as admin_svc
-from cara.services import family_bus, wall as wall_svc
+from cara.services import family_bus, news as news_svc, wall as wall_svc
 from cara.store import get_session
 
 log = structlog.get_logger(__name__)
@@ -435,6 +435,44 @@ async def list_wall_cameras(
     session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> list[dict[str, Any]]:
     return await _list_wall_cameras_raw(session)
+
+
+@router.get("/news")
+async def wall_news(
+    category: str = "all",
+    limit: int = 20,
+    _lan: None = Depends(require_lan),  # noqa: B008
+    _enabled: None = Depends(require_wall_enabled),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, Any]:
+    """LAN-only news feed for the Wall.
+
+    Same source as /api/v1/news (RSS aggregator) but no auth, gated by
+    CIDR + wall_enabled. Returns a flat list of items the Wall ticker
+    and the dedicated /wall/news page consume.
+    """
+    if category not in ("all", "italia", "mondo", "economia", "tech", "sport"):
+        category = "all"
+    if limit < 1 or limit > 50:
+        limit = 20
+    news_on = await admin_svc.get(session, "news_enabled")
+    if not news_on:
+        return {"category": category, "count": 0, "items": []}
+    items = await news_svc.fetch_category(category, limit=limit)
+    return {
+        "category": category,
+        "count": len(items),
+        "items": [
+            {
+                "title": it.title,
+                "summary": it.summary,
+                "link": it.link,
+                "source": it.source,
+                "published": it.published,
+            }
+            for it in items
+        ],
+    }
 
 
 @router.get("/cameras/{cam_id}/snapshot.jpg")

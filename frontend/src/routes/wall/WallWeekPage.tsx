@@ -122,7 +122,7 @@ function DayColumn({
           {date.getDate()}
         </div>
       </div>
-      <div className="flex flex-col gap-1.5 flex-1 min-h-[120px]">
+      <div className="flex flex-col gap-1.5 flex-1 min-h-0 sm:min-h-[120px]">
         {day.items.length === 0 && (
           <span className="text-fg-muted text-xs italic text-center mt-2">
             —
@@ -183,13 +183,15 @@ export function WallWeekPage() {
   const startLabel = start.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' });
 
   return (
-    <div className="flex flex-col gap-4 mt-2">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+    <div className="flex flex-col gap-3 sm:gap-4 mt-2">
+      {/* Header — wraps on mobile so navigation buttons + label fit
+          without horizontal scroll. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-3">
           <button
             type="button"
             onClick={() => shift(-7)}
-            className="rounded-pill bg-surface2 px-4 py-2 text-fg-soft hover:bg-surface2/80"
+            className="rounded-pill bg-surface2 px-3 sm:px-4 py-1.5 sm:py-2 text-fg-soft hover:bg-surface2/80"
             aria-label="Settimana precedente"
           >
             ‹
@@ -197,7 +199,7 @@ export function WallWeekPage() {
           <button
             type="button"
             onClick={() => shift(+7)}
-            className="rounded-pill bg-surface2 px-4 py-2 text-fg-soft hover:bg-surface2/80"
+            className="rounded-pill bg-surface2 px-3 sm:px-4 py-1.5 sm:py-2 text-fg-soft hover:bg-surface2/80"
             aria-label="Settimana successiva"
           >
             ›
@@ -205,18 +207,18 @@ export function WallWeekPage() {
           <button
             type="button"
             onClick={jumpToThisWeek}
-            className="rounded-pill bg-surface2 px-4 py-2 text-fg-soft hover:bg-surface2/80 text-sm"
+            className="rounded-pill bg-surface2 px-3 sm:px-4 py-1.5 sm:py-2 text-fg-soft hover:bg-surface2/80 text-xs sm:text-sm"
           >
-            Questa settimana
+            Oggi
           </button>
         </div>
         <h2
-          className="font-display text-fg"
-          style={{ fontSize: 'clamp(20px, 2vw, 28px)', fontWeight: 300 }}
+          className="font-display text-fg w-full sm:w-auto order-first sm:order-none text-center sm:text-left"
+          style={{ fontSize: 'clamp(18px, 2vw, 28px)', fontWeight: 300 }}
         >
           {startLabel} – {endLabel}
         </h2>
-        <div className="w-32" />
+        <div className="hidden sm:block sm:w-32" />
       </div>
 
       {error && <div className="text-alert text-center py-2">⚠ {error}</div>}
@@ -226,7 +228,9 @@ export function WallWeekPage() {
           Carico la settimana…
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+        // Phone: single column stacked (each day full-width readable).
+        // Small tablet: 2 cols. Tablet: 4 cols. Desktop: 7 cols.
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 sm:gap-3">
           {data.days.map((day) => (
             <DayColumn key={day.date} day={day} onPick={setPicked} />
           ))}

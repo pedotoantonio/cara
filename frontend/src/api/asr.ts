@@ -5,6 +5,11 @@ export interface AsrResult {
   language: string;
   duration_s: number;
   elapsed_ms: number;
+  // Confidence signals from faster-whisper (added 2026-05-20).
+  // Backwards-compatible: older deployments return them undefined.
+  avg_logprob?: number | null;
+  no_speech_prob?: number | null;
+  confidence_label?: 'high' | 'medium' | 'low' | 'empty';
 }
 
 /** Upload an audio blob to the server-side Whisper transcriber. */

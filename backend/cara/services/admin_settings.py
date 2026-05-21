@@ -30,6 +30,10 @@ DEFAULTS: dict[str, Any] = {
     "cloud_llm_enabled": False,
     "validation_enabled": False,
     "cognitive_mode": False,
+    # Health watchdog: skip the probe for a service the admin has
+    # intentionally stopped. Setting to false silences both the
+    # periodic Telegram alert and the dashboard red dot.
+    "monitor_frigate_enabled": True,
     # Free-form / numeric settings exposed to the admin UI. When unset
     # (None), the runtime falls back to the value from `.env` / `cara.config`.
     "llm_system_prompt": None,

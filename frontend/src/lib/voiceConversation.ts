@@ -86,6 +86,12 @@ export interface VoiceConversation {
   errorMessage: string | null;
   /** Dismiss the visible error banner. */
   dismissError: () => void;
+  /** Live mic level in dBFS (-60..0). -60 outside listening. */
+  micDb: number;
+  /** Normalised 0..1 mic level. 0 outside listening. */
+  micLevel: number;
+  /** True if the mic pipeline meter is active for this session. */
+  meterActive: boolean;
 }
 
 export function useVoiceConversation(opts: {
@@ -106,6 +112,86 @@ export function useVoiceConversation(opts: {
   const phaseRef = useRef<VoicePhase>('idle');
   const [wakeWordActive, setWakeWordActive] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Live mic level — refs hold the latest value so we don't trigger a
+  // setState every animation frame; a single setState pump at ~20 Hz
+  // keeps React renders cheap while the bar still feels live.
+  const micDbRef = useRef<number>(-60);
+  const micLevelRef = useRef<number>(0);
+  const [micDb, setMicDb] = useState<number>(-60);
+  const [micLevel, setMicLevel] = useState<number>(0);
+  const [meterActive, setMeterActive] = useState<boolean>(false);
+  const meterPumpRef = useRef<number | null>(null);
+
+  function _startMeterPump() {
+    if (meterPumpRef.current !== null) return;
+    const tick = () => {
+      setMicDb(micDbRef.current);
+      setMicLevel(micLevelRef.current);
+      meterPumpRef.current = window.setTimeout(tick, 50);
+    };
+    setMeterActive(true);
+    tick();
+  }
+
+  function _stopMeterPump() {
+    if (meterPumpRef.current !== null) {
+      clearTimeout(meterPumpRef.current);
+      meterPumpRef.current = null;
+    }
+    setMeterActive(false);
+    setMicDb(-60);
+    setMicLevel(0);
+    micDbRef.current = -60;
+    micLevelRef.current = 0;
+  }
+
+  function _whisperOpts() {
+    return {
+      language: 'it',
+      maxDurationMs: 30_000,
+      vadMode: 'auto' as const,
+      onLevel: (db: number, lvl: number) => {
+        micDbRef.current = db;
+        micLevelRef.current = lvl;
+      },
+      onAutoStop: () => {
+        // VAD decided we're done — go straight to thinking and pull
+        // the transcript via the same path the manual tap-stop uses.
+        if (!whisperRef.current) return;
+        const handle = whisperRef.current;
+        whisperRef.current = null;
+        submittedRef.current = true;
+        setPhase('thinking');
+        _stopMeterPump();
+        handle.stopWithDiag()
+          .then((r) => _handleWhisperResult(r))
+          .catch((e: Error) => {
+            logVoice('whisper auto-stop transcribe failed', e);
+            setErrorMessage(`Trascrizione fallita: ${e.message}`);
+            setPhase('idle');
+          });
+      },
+    };
+  }
+
+  function _handleWhisperResult(r: {
+    text: string;
+    failureHint?: string | null;
+    confidence?: string;
+  }) {
+    const captured = (r.text || '').trim();
+    logVoice('whisper transcribed', { captured, confidence: r.confidence });
+    if (captured && (r.confidence === 'high' || r.confidence === 'medium' || !r.confidence)) {
+      setUserText(captured);
+      submitToBackend(captured);
+      return;
+    }
+    // Empty OR low-confidence: never silent. Surface the precise hint
+    // returned by the mic pipeline (it knows whether the user was
+    // muted, too quiet, or whisper just couldn't decode).
+    setErrorMessage(r.failureHint || 'Non ho capito. Riprova.');
+    setPhase('idle');
+  }
   // Latest interim STT transcript. Updated on every onText so we always have
   // it available — even if the recognizer never fires `isFinal` (a known iOS
   // Safari behaviour) or the user taps stop before completing the sentence.
@@ -157,7 +243,12 @@ export function useVoiceConversation(opts: {
     listenRef.current?.stop();
     abortStreamRef.current?.();
     wakeRef.current?.stop();
+    whisperRef.current?.abort();
     stopSpeaking();
+    if (meterPumpRef.current !== null) {
+      clearTimeout(meterPumpRef.current);
+      meterPumpRef.current = null;
+    }
     void import('./streamingAudio').then(({ clear }) => clear());
   }, []);
 
@@ -258,20 +349,10 @@ export function useVoiceConversation(opts: {
         whisperRef.current = null;
         submittedRef.current = true;
         setPhase('thinking');   // upload + transcribe takes 1-3 s on RK3588
+        _stopMeterPump();
         handle
-          .stop()
-          .then((text) => {
-            const captured = (text || '').trim();
-            logVoice('whisper transcribed', { captured });
-            if (captured) {
-              setUserText(captured);
-              submitToBackend(captured);
-            } else {
-              // Empty transcript — never silent. Tell the user.
-              setErrorMessage('Non ho sentito niente. Tocca il microfono e parla più vicino al dispositivo.');
-              setPhase('idle');
-            }
-          })
+          .stopWithDiag()
+          .then((r) => _handleWhisperResult(r))
           .catch((e: Error) => {
             logVoice('whisper transcribe failed', e);
             setErrorMessage(`Trascrizione fallita: ${e.message}`);
@@ -316,11 +397,13 @@ export function useVoiceConversation(opts: {
       interimRef.current = '';
       submittedRef.current = false;
       setPhase('listening');
-      startWhisperRecording({ language: 'it', maxDurationMs: 30_000 })
+      _startMeterPump();
+      startWhisperRecording(_whisperOpts())
         .then((handle) => {
           whisperRef.current = handle;
         })
         .catch((e: Error) => {
+          _stopMeterPump();
           logVoice('whisper recording failed to start', e);
           // Map common getUserMedia errors to user-friendly Italian.
           let msg = `Microfono non avviato: ${e.message}`;
@@ -414,6 +497,28 @@ export function useVoiceConversation(opts: {
         onError: (err) => {
           logVoice('STT onError', err);
           listenRef.current = null;
+          const isNetworkErr = err.toLowerCase().includes('network');
+          // On `network` errors (Web Speech uses Google STT which needs the
+          // public internet) fall back to local Whisper if available — the
+          // backend ASR lives on LAN so it works even when the device has
+          // no usable Google connectivity.
+          if (isNetworkErr && whisperRecorderAvailable()) {
+            logVoice('STT network error → falling back to Whisper recording');
+            setUserText('');
+            interimRef.current = '';
+            submittedRef.current = false;
+            setPhase('listening');
+            _startMeterPump();
+            startWhisperRecording(_whisperOpts())
+              .then((h) => { whisperRef.current = h; })
+              .catch((e: Error) => {
+                _stopMeterPump();
+                logVoice('whisper fallback also failed', e);
+                setErrorMessage(`Microfono non avviato: ${e.message}`);
+                setPhase('idle');
+              });
+            return;
+          }
           const msg = describeMicError(err);
           if (msg) setErrorMessage(msg);
           setPhase('idle');
@@ -439,10 +544,14 @@ export function useVoiceConversation(opts: {
   const stop = useCallback(() => {
     listenRef.current?.stop();
     listenRef.current = null;
+    whisperRef.current?.abort();
+    whisperRef.current = null;
     abortStreamRef.current?.();
     abortStreamRef.current = null;
     stopSpeaking();
+    _stopMeterPump();
     setPhase('idle');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const cancel = stop;
@@ -509,5 +618,8 @@ export function useVoiceConversation(opts: {
     wakeWordActive,
     errorMessage,
     dismissError,
+    micDb,
+    micLevel,
+    meterActive,
   };
 }

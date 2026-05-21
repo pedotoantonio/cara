@@ -6,6 +6,7 @@ import {
   type NewsCategory,
   type NewsItem,
 } from '../api/news';
+import { CategoryHeader } from '../design';
 import { isSpeaking, speak, stopSpeaking, ttsAvailable } from '../lib/speech';
 
 const CATEGORIES: { id: NewsCategory; label: string }[] = [
@@ -88,41 +89,40 @@ export function NewsPage() {
   }, [category]);
 
   return (
-    <main className="flex-1 overflow-y-auto bg-slate-900 text-slate-100">
-      <div className="max-w-3xl mx-auto p-4 md:p-6 space-y-4">
-        <header className="flex items-start justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-medium">News 📰</h1>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Lette dai principali quotidiani italiani e internazionali.
-            </p>
-          </div>
-          {ttsOk && digest && (
+    <main className="flex-1 overflow-y-auto bg-bg">
+      <div className="max-w-3xl mx-auto px-5 md:px-8 py-5 md:py-6 space-y-5">
+        <CategoryHeader
+          icon="news"
+          title="Notizie"
+          subtitle="Dai principali quotidiani italiani e internazionali."
+          tint="plum"
+          pill={`${items.length} ${items.length === 1 ? 'articolo' : 'articoli'}`}
+          right={ttsOk && digest ? (
             <button
               type="button"
               onClick={toggleRead}
-              className={`shrink-0 rounded-xl px-3 py-2 text-xs font-medium border ${
+              className={`shrink-0 rounded-pill px-4 py-2 text-sm font-medium transition shadow-sm ${
                 reading
-                  ? 'bg-rose-500/20 border-rose-500/40 text-rose-200'
-                  : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/25'
+                  ? 'bg-alert text-white hover:bg-alert/90'
+                  : 'bg-bg/80 text-fg backdrop-blur-sm ring-1 ring-fg/8 hover:bg-bg'
               }`}
             >
-              {reading ? '⏹ Stop lettura' : '🔊 Leggimi le news'}
+              {reading ? '⏹ Stop' : '🔊 Leggimi'}
             </button>
-          )}
-        </header>
+          ) : undefined}
+        />
 
         {/* Category chips */}
-        <nav className="flex flex-wrap gap-2">
+        <nav className="flex flex-wrap gap-2" aria-label="Categoria news">
           {CATEGORIES.map((c) => (
             <button
               key={c.id}
               type="button"
               onClick={() => setCategory(c.id)}
-              className={`rounded-full px-3 py-1.5 text-xs border transition ${
+              className={`rounded-pill px-4 py-2 text-sm font-medium transition shadow-sm ${
                 category === c.id
-                  ? 'bg-emerald-600 border-emerald-500 text-white'
-                  : 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-slate-300'
+                  ? 'bg-accent text-white scale-[1.02]'
+                  : 'bg-surface1 text-fg-soft hover:bg-surface2 ring-1 ring-fg/8'
               }`}
             >
               {c.label}
@@ -131,42 +131,46 @@ export function NewsPage() {
         </nav>
 
         {error && (
-          <div className="rounded-2xl bg-rose-500/10 border border-rose-500/40 p-4 text-sm text-rose-200">
+          <div className="rounded-2xl bg-alert/10 ring-1 ring-alert/30 p-4 text-sm text-alert">
             {error}
           </div>
         )}
 
         {loading && !items.length && (
-          <p className="text-sm text-slate-500">Carico le news…</p>
+          <p className="text-sm text-fg-muted text-center py-8">Carico le notizie…</p>
         )}
 
         <ul className="space-y-3">
           {items.map((it, i) => (
             <li
               key={`${it.link}-${i}`}
-              className="rounded-2xl bg-slate-800/60 border border-slate-700 p-4 space-y-1"
+              className="rounded-2xl bg-surface1 ring-1 ring-fg/8 p-4 md:p-5 space-y-2 hover:shadow-md hover:ring-fg/15 transition-all duration-200"
             >
               <a
                 href={it.link}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block text-sm font-medium text-slate-100 hover:text-emerald-300"
+                className="block font-display text-fg hover:text-accent leading-snug"
+                style={{ fontSize: 'clamp(15px, 1.5vw, 18px)' }}
               >
                 {it.title}
               </a>
               {it.summary && (
-                <p className="text-xs text-slate-400 line-clamp-2">{it.summary}</p>
+                <p className="text-sm text-fg-soft line-clamp-2 leading-relaxed">{it.summary}</p>
               )}
-              <p className="text-[11px] text-slate-500">
-                {it.source}
-                {it.published && <> · {timeAgo(it.published)}</>}
+              <p className="text-xs text-fg-muted flex items-center gap-1.5">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent/70" aria-hidden />
+                <span className="font-medium">{it.source}</span>
+                {it.published && <span>· {timeAgo(it.published)}</span>}
               </p>
             </li>
           ))}
         </ul>
 
         {!loading && !error && items.length === 0 && (
-          <p className="text-sm text-slate-500">Nessuna news disponibile per questa categoria.</p>
+          <p className="text-sm text-fg-muted text-center py-8 rounded-2xl bg-surface1 ring-1 ring-fg/6">
+            Nessuna notizia per questa categoria.
+          </p>
         )}
       </div>
     </main>

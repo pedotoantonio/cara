@@ -45,6 +45,7 @@ celery_app = Celery(
         "cara.agents.learn",
         "cara.agents.watchdog",
         "cara.agents.health",
+        "cara.agents.reminders",
     ],
 )
 
@@ -56,6 +57,7 @@ celery_app.conf.update(
         "cara.agents.learn.*": {"queue": "learn"},
         "cara.agents.watchdog.*": {"queue": "learn"},  # docker socket mounted there
         "cara.agents.health.*": {"queue": "learn"},     # functional probes share the learn worker
+        "cara.agents.reminders.*": {"queue": "learn"},   # 1-min scanner co-located with watchdog
     },
     task_serializer="json",
     accept_content=["json"],
@@ -125,6 +127,19 @@ celery_app.conf.beat_schedule = {
     "health-tick-every-5-min": {
         "task": "cara.agents.health.tick",
         "schedule": 5 * 60,
+    },
+    # Reminders (Memorial). Tight cadence (every minute) so a "due"
+    # notification fires within 60s of its scheduled timestamp. The
+    # scanner is cheap: a single indexed query bounded at 200 rows.
+    "reminders-scan-due-every-min": {
+        "task": "cara.agents.reminders.scan_due",
+        "schedule": 60,
+    },
+    # Nightly safety net — re-materialise future notification rows for
+    # every active reminder. Idempotent.
+    "reminders-materialize-nightly": {
+        "task": "cara.agents.reminders.materialize_recurrences",
+        "schedule": crontab(hour=3, minute=30),
     },
 }
 

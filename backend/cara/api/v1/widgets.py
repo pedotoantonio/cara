@@ -272,6 +272,9 @@ def _register_for_request(session: AsyncSession):
     reg = get_default_registry()
     register_all(fetchers, registry=reg)
     register_extras(_make_extras(session), registry=reg)
+    # Reminders (Memorial) — pulls reminders directly via session.
+    from cara.widgets import reminders_widget as _rem  # noqa: PLC0415
+    _rem.register(session, reg)
     return reg
 
 

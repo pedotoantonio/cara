@@ -54,15 +54,16 @@ function ItemRow({
       type="button"
       onClick={() => onPick(item)}
       className={[
-        'w-full text-left flex items-center gap-4 py-3 px-4 rounded-lg',
-        'border-l-4 bg-surface2/40 hover:bg-surface2/60 transition-colors',
+        'group w-full text-left flex items-center gap-2 sm:gap-4 py-2.5 sm:py-3.5 px-3 sm:px-5 rounded-xl sm:rounded-2xl',
+        'border-l-4 bg-surface2/40 hover:bg-surface2/70 hover:translate-x-0.5 transition-all duration-200',
+        'ring-1 ring-fg/5 hover:ring-fg/15 hover:shadow-sm',
         isDone ? 'opacity-50' : '',
       ].join(' ')}
       style={{ borderLeftColor: item.owner?.color ?? '#94a3b8' }}
     >
       <span
-        className="font-mono text-fg-soft flex-shrink-0 w-14"
-        style={{ fontSize: 'clamp(14px, 1.2vw, 18px)' }}
+        className="font-mono text-fg-soft flex-shrink-0 w-10 sm:w-14"
+        style={{ fontSize: 'clamp(12px, 1.2vw, 18px)' }}
       >
         {time || '—'}
       </span>
@@ -101,7 +102,7 @@ function UpcomingCard({
   preview: WallItem[];
 }) {
   return (
-    <div className="rounded-xl bg-surface2/50 p-4 flex flex-col gap-2">
+    <div className="rounded-2xl bg-surface2/50 backdrop-blur-sm ring-1 ring-fg/5 p-5 flex flex-col gap-2 hover:bg-surface2/70 transition-colors duration-200">
       <div className="flex items-baseline justify-between">
         <span
           className="font-display font-medium text-fg first-letter:capitalize"
@@ -146,7 +147,7 @@ function PendingByOwner({
 }) {
   if (!rows.length) return null;
   return (
-    <div className="rounded-xl bg-surface2/40 px-4 py-3 flex flex-wrap items-center gap-3">
+    <div className="rounded-2xl bg-surface2/40 backdrop-blur-sm ring-1 ring-fg/5 px-5 py-4 flex flex-wrap items-center gap-3">
       <span className="text-fg-muted text-sm">Aperti:</span>
       {rows.map((r) => (
         <span key={r.owner.id} className="inline-flex items-center gap-1.5 text-sm">
@@ -181,8 +182,8 @@ export function WallToday() {
   const hasToday = today.items.length > 0 || today.open_no_date.length > 0;
 
   return (
-    <div className="flex flex-col gap-6 mt-2">
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <div className="flex flex-col gap-4 sm:gap-6 mt-2">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
       {/* Today timeline */}
       <section className="lg:col-span-7 flex flex-col gap-2">
         <h2

@@ -16,6 +16,7 @@ import { useNavigate, useOutletContext } from 'react-router-dom';
 import type { User } from '../api/auth';
 import { CaraFaceFX } from '../components/CaraFaceFX';
 import { LiveCaption } from '../components/LiveCaption';
+import { AudioLevelMeter } from '../components/AudioLevelMeter';
 import { MicButton, type MicState } from '../components/MicButton';
 import { type Emotion, type EnergyState } from '../components/CaraFace';
 import { Badge, Card, Icon, IconButton } from '../design';
@@ -137,7 +138,7 @@ export function HomePage() {
           )}
         </div>
 
-        <div className="flex justify-center">
+        <div className="flex flex-col items-center gap-3">
           <MicButton
             state={micState}
             onClick={conv.start}
@@ -147,6 +148,14 @@ export function HomePage() {
                 ? 'Tocca per inviare'
                 : undefined
             }
+          />
+          {/* Live audio level meter — visible only while the mic
+              pipeline is actively recording. Gives the user immediate
+              evidence that CARA is hearing them (or isn't). */}
+          <AudioLevelMeter
+            active={conv.meterActive && conv.phase === 'listening'}
+            db={conv.micDb}
+            level={conv.micLevel}
           />
         </div>
 

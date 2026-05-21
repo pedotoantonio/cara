@@ -36,7 +36,9 @@ export function WallDayCell({
   return (
     <div
       className={[
-        'flex flex-col gap-1 p-2 rounded-md min-h-[120px]',
+        // Phones: compact cell, 56 px min-h is enough to show the day
+        // number + 1-2 chips. Tablets+: 120 px wall-poster size.
+        'flex flex-col gap-0.5 sm:gap-1 p-1 sm:p-2 rounded-md min-h-[56px] sm:min-h-[120px]',
         'border border-surface2/60',
         dim ? 'opacity-40 bg-transparent' : 'bg-bg/30',
         day.is_holiday && !dim ? 'bg-rose-50/40 dark:bg-rose-900/20' : '',
@@ -49,16 +51,16 @@ export function WallDayCell({
           className={[
             'inline-flex items-center justify-center font-display',
             day.is_today
-              ? 'rounded-full bg-accent text-bg w-8 h-8 font-medium'
+              // Today badge — 24 px circle on mobile, 32 px on desktop.
+              ? 'rounded-full bg-accent text-bg w-6 h-6 sm:w-8 sm:h-8 font-medium text-xs sm:text-base'
               : day.is_holiday
-                ? 'text-rose-600 dark:text-rose-300 font-semibold'
+                ? 'text-rose-600 dark:text-rose-300 font-semibold text-sm sm:text-base'
                 : day.is_pre_holiday
-                  ? 'text-amber-600 dark:text-amber-300 font-medium'
+                  ? 'text-amber-600 dark:text-amber-300 font-medium text-sm sm:text-base'
                   : day.is_weekend
-                    ? 'text-fg-soft'
-                    : 'text-fg',
+                    ? 'text-fg-soft text-sm sm:text-base'
+                    : 'text-fg text-sm sm:text-base',
           ].join(' ')}
-          style={{ fontSize: day.is_today ? 16 : 18 }}
         >
           {dayNum}
         </span>

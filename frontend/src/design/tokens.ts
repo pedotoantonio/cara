@@ -2,19 +2,20 @@
 // Day = avorio + terracotta + verde salvia, sera = blu notte profondo + oro.
 
 export const palette = {
-  // Day mode — calmo, naturale, materico.
-  ivory:        '#FAF7F2', // background base
-  ivoryWarm:    '#F2EBDC', // surface 1
-  sand:         '#E8DDC7', // surface 2
-  terracotta:   '#D87C42', // primary accent
-  terracottaDk: '#B05F2D', // hover/pressed
-  brick:        '#C8553D', // alert / warm urgency
-  sage:         '#5C8D89', // secondary, "ok / vivo"
-  sageLight:    '#8AB1AB',
-  gold:         '#E8B23E', // celebrazioni, badge
-  ink:          '#2A2A2A', // testo primario giorno
-  inkSoft:      '#5A554F', // testo secondario
-  inkMuted:     '#8C857B', // hint / placeholder
+  // Day mode — light & airy, friendly per famiglia. Bg quasi bianco con
+  // velo azzurrino freddo (come una pagina di carta sotto luce naturale).
+  ivory:        '#F5F8FC', // background base — bianco-azzurrino chiarissimo
+  ivoryWarm:    '#FFFFFF', // surface 1 — bianco puro, card "galleggiano"
+  sand:         '#EAEFF6', // surface 2 — soft blue-gray
+  terracotta:   '#F97C42', // primary accent — arancio acceso (era spento)
+  terracottaDk: '#E0631F', // hover/pressed
+  brick:        '#EF4444', // alert — rosso vivo
+  sage:         '#10B981', // secondary, "ok / vivo" — verde emerald saturo
+  sageLight:    '#34D399',
+  gold:         '#F59E0B', // celebrazioni, badge — ambra saturo
+  ink:          '#0F172A', // testo primario giorno — slate scuro
+  inkSoft:      '#475569', // testo secondario
+  inkMuted:     '#94A3B8', // hint / placeholder
 
   // Night mode — più profondo, contrasto basso, occhio rilassato.
   night:        '#0F1B2D', // background base sera
@@ -67,10 +68,14 @@ export const semantic = {
 
 export type SemanticTheme = typeof semantic.day;
 
-// Typography. Loaded via Google Fonts in index.css.
+// Typography (2026-05-20). Single-family serif system inspired by
+// Utopia: body + display share Source Serif 4, with the optical-size
+// axis doing the heavy lifting (small opsz for UI, larger opsz for
+// titles). Source Serif 4 is open-source and the closest free webfont
+// to Adobe's proprietary Utopia.
 export const fonts = {
-  display: '"Fraunces", "Times New Roman", serif', // headings & moments
-  body:    '"Geist", "Inter", system-ui, sans-serif', // body / UI
+  display: '"Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif',
+  body:    '"Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif',
   mono:    '"JetBrains Mono", ui-monospace, "SF Mono", monospace',
 } as const;
 
