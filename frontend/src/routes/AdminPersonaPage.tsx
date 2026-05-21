@@ -86,11 +86,11 @@ export function AdminPersonaPage() {
       toast.push({
         kind: 'ok',
         title: `Ricostruito (${result.status})`,
-        message: `${result.chunks_processed ?? 0} chunk · confidenza ${result.confidence ?? '?'}%`,
+        body: `${result.chunks_processed ?? 0} chunk · confidenza ${result.confidence ?? '?'}%`,
       });
       await loadProfile(selected);
     } catch (e) {
-      toast.push({ kind: 'alert', title: 'Rebuild fallito', message: (e as Error).message });
+      toast.push({ kind: 'alert', title: 'Rebuild fallito', body: (e as Error).message });
     } finally {
       setBusy(false);
     }
@@ -108,7 +108,7 @@ export function AdminPersonaPage() {
       setEditing(false);
       toast.push({ kind: 'ok', title: 'Profilo aggiornato' });
     } catch (e) {
-      toast.push({ kind: 'alert', title: 'Patch fallita', message: (e as Error).message });
+      toast.push({ kind: 'alert', title: 'Patch fallita', body: (e as Error).message });
     } finally {
       setBusy(false);
     }
@@ -123,7 +123,7 @@ export function AdminPersonaPage() {
       setProfile(null);
       toast.push({ kind: 'ok', title: 'Profilo cancellato' });
     } catch (e) {
-      toast.push({ kind: 'alert', title: 'Delete fallita', message: (e as Error).message });
+      toast.push({ kind: 'alert', title: 'Delete fallita', body: (e as Error).message });
     } finally {
       setBusy(false);
     }
