@@ -7,6 +7,89 @@ pre-v1.0 period are in `~/CARA-CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added — Lumo Conversion (2026-05-21)
+
+Architectural lessons borrowed from Lumo (the Raspberry-Pi-based AI
+appliance documented in `REPORT_LUMO.md`). CARA stays multi-user PWA,
+but adopts three patterns that Lumo got right and four quick wins.
+
+Branch `feature/lumo-conversion`, on top of the Reminders / mic v2 /
+CaraFace v2 wave.
+
+- **Voice tones (Ondata α #1)** — 5 selectable tones: `default`,
+  `calmo`, `energico`, `formale`, `playful`. Per-user override via
+  `users.tone_preference` (migration `a1c5e8d29f74`); resolution order
+  is user → admin → default. Privacy stays admin-only (it's a mode,
+  not a tone). UI: tone dropdown in `/settings` profile section.
+  Backend: `PATCH /api/v1/auth/me` accepts `tone_preference`;
+  invalid values produce 422. `"default"` is normalised to NULL so
+  the chat layer cleanly falls through.
+
+- **ASR sanity check (Ondata α #2)** — pure-function gate that drops
+  Whisper hallucinations before they hit the LLM. Catches 6 reject
+  categories: `empty`, `too_short`, `hallucination` (corpus of ~15 IT
+  YouTube-outros + 'Grazie.' silence outputs observed in production
+  logs), `low_confidence` (`no_speech_prob > 0.6` or low+short),
+  `loop` (token-repeat ratio > 4 on hum), `wrong_language` (de/fr/pl
+  on music). `transcribe_bytes()` includes a `sanity` field in its
+  response (additive, non-breaking); `/wall/ask` short-circuits with
+  a Piper-synthesised canned reply; Telegram voice handler reuses the
+  same gate.
+
+- **Restart-self / exit-code 42 (Ondata α #3)** — Lumo's supervisor
+  convention. `EXIT_CODE_RESTART = 42` constant. New CLI subcommand
+  `python -m cara.bootstrap restart-self [reason]`. New admin endpoint
+  `POST /api/v1/admin/restart-backend` (`require_admin`, audited).
+  Response 202 → 250ms delay → `os._exit(42)` → Docker's
+  `restart: unless-stopped` brings the container back in ~5s. Audit
+  row committed BEFORE exit (otherwise lost with the process). UI:
+  'Riavvia cara-backend' button in `/admin` system section.
+
+- **Persona Profiler (Ondata β) — THE memory win on the 1.5B**.
+  Per-user longitudinal Markdown profile built by map-reduce LLM
+  (EXTRACT + MERGE prompts in Italian) over the entire chat history.
+  Distinguishes **STABILE** (durable traits) from **EPISODICO**
+  (time-bound, ISO-dated, 30d decay). Fixed H3 sections: Identità,
+  Famiglia, Lavoro, Abitudini, Gusti, Salute, Valori, Stato emotivo,
+  Relazioni, Contraddizioni, Lacune. Ends with 'Confidenza: X%';
+  profiles under 60% are NOT injected into the prompt.
+
+  Built nightly at 03:15 Europe/Rome by an in-process scheduler
+  (`services/persona_scheduler.py`) that walks active users with at
+  least one chat message and rebuilds incrementally from a
+  `last_message_id_consumed` watermark. Cap `max_chunks=10` per
+  invocation — worst case ~3min per user; rest picked up next night.
+  In-process (not Celery) because Celery workers can't use the NPU;
+  moves to a `learn` queue task when cara-llm HTTP arrives (Ondata δ,
+  deferred).
+
+  Injected into the chat system prompt right after the tone
+  directive, before the volatile facts block, so it lives in the
+  KV-cache stable prefix. Skipped in privacy mode.
+
+  Migration `b2d6f9a47e15` creates `persona_profiles` (user_id PK,
+  markdown TEXT, confidence FLOAT, sections JSONB, last_status,
+  last_error, watermark, timestamps).
+
+  REST surface:
+  - User self-service: `GET /api/v1/persona/me`,
+    `POST /api/v1/persona/me/rebuild` (30-min cooldown),
+    `DELETE /api/v1/persona/me` (GDPR Art. 17).
+  - Admin: `GET/PATCH/DELETE /api/v1/admin/persona/{user_id}` (manual
+    override audited), `POST /admin/persona/{user_id}/rebuild`
+    (foreground, no cooldown).
+
+  UI:
+  - `/admin/persona` page with user list + profile detail (status
+    badge, confidence, last build), Markdown viewer / editor,
+    section cards showing STABILE (green dot) vs EPISODICO (amber
+    dot) bullets, Rebuild / Modifica / Elimina actions.
+
+  22 unit tests cover the LLM-free paths (chunking, parsing,
+  confidence extraction, prompt-injection gating). LLM-touching paths
+  (extract_from_chunk, merge, rebuild_for_user) are exercised by the
+  nightly scheduler.
+
 ### Added — Face Recognition (privacy-first, on-device)
 
 A complete face recognition stack mounted at `/face/enroll` (wizard)
