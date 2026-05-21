@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
 
-import { changePassword, updateMe, type User } from '../api/auth';
+import { changePassword, updateMe, TONE_LABELS, type ToneKey, type User } from '../api/auth';
 import { loadPrefs, savePrefs, type TTSEngine } from '../lib/userPrefs';
 import { playSound, setSoundsEnabled, setVolume } from '../lib/sounds';
 import { browserTtsAvailable, speak, stopSpeaking } from '../lib/speech';
@@ -17,6 +17,7 @@ export function SettingsPage() {
 
   const [fullName, setFullName] = useState(user.full_name ?? '');
   const [birthDate, setBirthDate] = useState(user.birth_date ?? '');
+  const [tone, setTone] = useState<ToneKey>(user.tone_preference ?? 'default');
   const [profileMsg, setProfileMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
 
@@ -53,6 +54,7 @@ export function SettingsPage() {
       await updateMe({
         full_name: fullName.trim() || null,
         birth_date: birthDate || null,
+        tone_preference: tone,
       });
       setProfileMsg({ ok: true, text: 'Profilo aggiornato' });
       refreshMe();
@@ -120,6 +122,25 @@ export function SettingsPage() {
                 onChange={(e) => setBirthDate(e.target.value)}
                 className="w-full rounded-xl bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
               />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">
+                Tono della voce di CARA (per te)
+              </label>
+              <select
+                value={tone}
+                onChange={(e) => setTone(e.target.value as ToneKey)}
+                className="w-full rounded-xl bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+              >
+                {(Object.keys(TONE_LABELS) as ToneKey[]).map((k) => (
+                  <option key={k} value={k}>
+                    {TONE_LABELS[k].label}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-slate-500">
+                {TONE_LABELS[tone].description}
+              </p>
             </div>
             <div>
               <label className="block text-xs text-slate-400 mb-1">Email (non modificabile)</label>
