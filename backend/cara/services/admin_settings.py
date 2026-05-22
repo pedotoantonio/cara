@@ -34,6 +34,13 @@ DEFAULTS: dict[str, Any] = {
     # intentionally stopped. Setting to false silences both the
     # periodic Telegram alert and the dashboard red dot.
     "monitor_frigate_enabled": True,
+    # Smart notification policy (top5 #4). DND + bundling + priority
+    # bypass. urgent=true bypassa SEMPRE entrambi.
+    "notify_quiet_hours_enabled": True,
+    "notify_quiet_hours_start": "22:00",  # Europe/Rome
+    "notify_quiet_hours_end": "07:00",
+    "notify_bundle_window_seconds": 300,  # 5 min
+    "notify_bundle_max_items": 5,
     # Free-form / numeric settings exposed to the admin UI. When unset
     # (None), the runtime falls back to the value from `.env` / `cara.config`.
     "llm_system_prompt": None,

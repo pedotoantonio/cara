@@ -16,6 +16,11 @@ from cara.models.face import FaceDescriptor, FaceProfile, FaceSettings
 from cara.models.fact import Fact
 from cara.models.file import UploadedFile
 from cara.models.habit import HabitCandidate
+from cara.models.lifeops_list import (
+    LifeopsList,
+    LifeopsListItem,
+    LifeopsPendingApproval,
+)
 from cara.models.note import Note
 from cara.models.oauth_credentials import OAuthCredentials
 from cara.models.persona_profile import PersonaProfile
@@ -53,6 +58,9 @@ __all__ = [
     "FaceSettings",
     "Fact",
     "HabitCandidate",
+    "LifeopsList",
+    "LifeopsListItem",
+    "LifeopsPendingApproval",
     "Message",
     "Note",
     "OAuthCredentials",
