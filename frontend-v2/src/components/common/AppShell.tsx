@@ -8,6 +8,7 @@ import {
   User,
 } from '@phosphor-icons/react';
 import { FloatingAvatar } from '@/components/avatar/FloatingAvatar';
+import { AvatarDrawer } from '@/components/avatar/AvatarDrawer';
 import { VoicePanel } from '@/components/voice/VoicePanel';
 import { useAvatarStore } from '@/state/avatar';
 import { cn } from '@/lib/cn';
@@ -44,6 +45,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
   const isHome = location.pathname === '/';
   const avatarSize = useAvatarStore((s) => s.size);
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
     <div className="min-h-[100dvh] bg-bg-base flex flex-col">
@@ -59,11 +61,16 @@ export function AppShell({ children }: { children?: ReactNode }) {
           Tap → drawer (placeholder per ora); long-press → voice immediato. */}
       {!isHome && avatarSize !== 'hero' && (
         <FloatingAvatar
-          onTap={() => setVoiceOpen(true)}
+          onTap={() => setDrawerOpen(true)}
           onLongPress={() => setVoiceOpen(true)}
         />
       )}
 
+      <AvatarDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        onVoice={() => setVoiceOpen(true)}
+      />
       <VoicePanel open={voiceOpen} onClose={() => setVoiceOpen(false)} />
 
       {/* Bottom nav (mobile) */}

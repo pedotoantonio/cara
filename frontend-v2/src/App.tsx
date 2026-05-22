@@ -11,9 +11,21 @@ import { LoginPage } from '@/routes/auth/LoginPage';
 import { PermissionsPage } from '@/routes/onboarding/PermissionsPage';
 import { HubHome } from '@/routes/home/HubHome';
 import { ChatPage } from '@/routes/chat/ChatPage';
-import { ListHub } from '@/routes/list/ListHub';
-import { LifeHub } from '@/routes/life/LifeHub';
+import { ListLayout } from '@/routes/list/ListLayout';
+import { TasksPage } from '@/routes/list/TasksPage';
+import { ShoppingPage } from '@/routes/list/ShoppingPage';
+import { NotesPage } from '@/routes/list/NotesPage';
+import { RemindersPage } from '@/routes/list/RemindersPage';
+import { LifeLayout } from '@/routes/life/LifeLayout';
+import { CalendarPage } from '@/routes/life/CalendarPage';
+import { MeteoPage } from '@/routes/life/MeteoPage';
+import { NewsPage } from '@/routes/life/NewsPage';
+import { RadioPage } from '@/routes/life/RadioPage';
 import { MePage } from '@/routes/me/MePage';
+import { SettingsPage } from '@/routes/me/SettingsPage';
+import { PersonaPage } from '@/routes/me/PersonaPage';
+import { MemoryPage } from '@/routes/me/MemoryPage';
+import { AdminHub } from '@/routes/admin/AdminHub';
 import { hasCompletedOnboarding } from '@/hooks/usePermissions';
 import { reaffirmSubscriptionSilently } from '@/api/push';
 
@@ -76,12 +88,26 @@ export default function App() {
               <Route element={<AppShell />}>
                 <Route path="/" element={<HubHome />} />
                 <Route path="/chat" element={<ChatPage />} />
-                <Route path="/list" element={<ListHub />} />
-                <Route path="/list/:tab" element={<ListHub />} />
-                <Route path="/life" element={<LifeHub />} />
-                <Route path="/life/:tab" element={<LifeHub />} />
+                <Route path="/chat/:conversationId" element={<ChatPage />} />
+                <Route path="/list" element={<ListLayout />}>
+                  <Route index element={<Navigate to="/list/tasks" replace />} />
+                  <Route path="tasks" element={<TasksPage />} />
+                  <Route path="shopping" element={<ShoppingPage />} />
+                  <Route path="notes" element={<NotesPage />} />
+                  <Route path="reminders" element={<RemindersPage />} />
+                </Route>
+                <Route path="/life" element={<LifeLayout />}>
+                  <Route index element={<Navigate to="/life/calendar" replace />} />
+                  <Route path="calendar" element={<CalendarPage />} />
+                  <Route path="meteo" element={<MeteoPage />} />
+                  <Route path="news" element={<NewsPage />} />
+                  <Route path="radio" element={<RadioPage />} />
+                </Route>
                 <Route path="/me" element={<MePage />} />
-                <Route path="/me/:section" element={<MePage />} />
+                <Route path="/me/settings" element={<SettingsPage />} />
+                <Route path="/me/persona" element={<PersonaPage />} />
+                <Route path="/me/memory" element={<MemoryPage />} />
+                <Route path="/admin" element={<AdminHub />} />
               </Route>
             </Route>
               <Route path="*" element={<Navigate to="/" replace />} />
