@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CARA PWA v2 — base styles
+ *
+ * Backgrounds always light. Color comes from accent tokens (icons, primary
+ * actions, illustrations). Typography uses Inter for UI body; Source Serif 4
+ * is reserved for hero/editorial moments via `font-display` utility.
+ */
+
+@layer base {
+  :root {
+    --avatar-glow-color: rgba(255, 107, 107, 0.25);
+    --safe-top: env(safe-area-inset-top, 0);
+    --safe-bottom: env(safe-area-inset-bottom, 0);
+    --safe-left: env(safe-area-inset-left, 0);
+    --safe-right: env(safe-area-inset-right, 0);
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    background: #FFFFFF;
+    color: #0E1116;
+    /* Avoid auto-zoom on input focus iOS */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply font-ui text-base text-text-primary;
+    background: #FFFFFF;
+    /* Pleasant overscroll on iOS without bouncing the chrome */
+    overscroll-behavior-y: none;
+  }
+
+  /* Custom focus ring — solo accent-coral, mai outline:none */
+  :focus-visible {
+    outline: 2px solid theme('colors.accent.coral');
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Scrollbar custom su webkit */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: theme('colors.border.soft');
+    border-radius: 999px;
+    border: 2px solid #FFFFFF;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: theme('colors.border.strong');
+  }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* Container con safe-area padding */
+  .container-app {
+    @apply mx-auto max-w-screen-sm px-4 lg:max-w-screen-lg lg:px-8;
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+  }
+
+  /* Top bar app — sticky, white background */
+  .topbar {
+    @apply sticky top-0 z-20 flex items-center justify-between bg-bg-base/95 backdrop-blur px-4 py-3;
+    padding-top: calc(var(--safe-top) + 0.75rem);
+  }
+}
+
+@layer utilities {
+  /* Hide scrollbar (per strip orizzontali) */
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+
+  /* Glow halo per avatar attiva — colore via CSS var */
+  .avatar-glow {
+    box-shadow: 0 0 32px 4px var(--avatar-glow-color);
+    transition: box-shadow 400ms cubic-bezier(0.2, 0, 0, 1);
+  }
+}

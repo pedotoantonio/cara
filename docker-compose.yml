@@ -255,6 +255,27 @@ services:
       timeout: 5s
       retries: 3
 
+  # PWA v2 — deploy in parallelo a v1 per migrazione graduale.
+  # Esposta su :8456 via nginx-proxy (vs :8455 per v1).
+  frontend-v2:
+    build:
+      context: ./frontend-v2
+      dockerfile: Dockerfile
+    image: cara-frontend-v2:0.1.0
+    container_name: cara-frontend-v2
+    restart: unless-stopped
+    profiles: ["app"]
+    depends_on:
+      - backend
+    networks:
+      proxy-net:
+        ipv4_address: 172.31.0.29
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 networks:
   proxy-net:
     name: proxy-net
