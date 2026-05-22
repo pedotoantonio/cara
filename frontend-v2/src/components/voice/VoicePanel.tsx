@@ -21,6 +21,7 @@ import {
   consumeChatStream,
   type ChatTokenPayload,
   type ChatAudioChunkPayload,
+  type ChatMetaPayload,
 } from '@/lib/chatStream';
 import { createTtsPlayer, type TtsPlayer } from '@/lib/ttsPlayback';
 
@@ -53,6 +54,15 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
   const ttsRef = useRef<TtsPlayer | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);
+  /**
+   * Conversation id catturato dal primo turno voice (event `meta`).
+   * Riusato per ogni "Parla ancora" successivo dentro la stessa sessione
+   * del pannello — così il backend carica la history e l'LLM ha context.
+   * Senza questo, ogni turno è isolato e il 1.5B Qwen risponde "inventando"
+   * perché vede solo il singolo messaggio corrente.
+   * Reset a null quando il pannello si chiude (nuova sessione = nuova convo).
+   */
+  const voiceConvIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -67,6 +77,9 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
       setErrorMsg(null);
       setLevel(0);
       setLevelDb(-90);
+      // Reset conversation id quando il pannello si chiude — la prossima
+      // apertura inizia una conversazione voice nuova.
+      voiceConvIdRef.current = null;
     }
     return () => {
       cancelledRef.current = true;
@@ -193,10 +206,12 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
 
   /**
    * Manda il transcript al backend chat e gestisce lo stream SSE.
-   * Token accumulati in `reply`, audio_chunk passati a Piper player.
-   * Niente conversation_id → backend ne crea una nuova ogni volta
-   * (le conversazioni voice non hanno bisogno di history persistente
-   * per ora; se l'utente vuole continuare può aprire /chat).
+   *
+   * Conversation_id: il PRIMO turno della sessione panel parte SENZA id
+   * (backend ne crea una nuova + risponde con `meta.conversation_id`).
+   * I turni successivi ("Parla ancora") riusano lo stesso id → backend
+   * carica la history → l'LLM ha context multi-turn invece di rispondere
+   * a freddo (la causa del bug 'risponde con informazioni inventate').
    */
   async function runChatTurn(userText: string) {
     if (cancelledRef.current) return;
@@ -216,16 +231,25 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
     let hasAudio = false;
 
     try {
-      const response = await streamChat({
-        messages: [{ role: 'user', content: userText }],
-        max_new_tokens: 400,
-      });
+      const response = await streamChat(
+        {
+          messages: [{ role: 'user', content: userText }],
+          max_new_tokens: 400,
+        },
+        voiceConvIdRef.current ?? undefined,
+      );
 
       await consumeChatStream(
         response,
         (ev) => {
           if (cancelledRef.current) return;
-          if (ev.type === 'token') {
+          if (ev.type === 'meta') {
+            const meta = ev.data as unknown as ChatMetaPayload;
+            if (meta.conversation_id && !voiceConvIdRef.current) {
+              voiceConvIdRef.current = meta.conversation_id;
+              console.log('[cara-voice] captured conv_id', meta.conversation_id);
+            }
+          } else if (ev.type === 'token') {
             const tok = ev.data as unknown as ChatTokenPayload;
             const t = tok.text ?? '';
             if (t) {
