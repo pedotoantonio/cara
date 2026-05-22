@@ -26,9 +26,13 @@ class Note(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # NOTE: no `onupdate=func.now()` — quel pattern mette la colonna in
+    # "refresh-required" dopo flush, e in async SQLAlchemy il lazy reload
+    # → MissingGreenlet alla serializzazione Pydantic. Aggiorniamo
+    # esplicitamente nel service `update_note`. Stesso bug già risolto
+    # su Reminders (vedi CLAUDE.md "Quirks di implementazione").
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
-        onupdate=func.now(),
         nullable=False,
     )

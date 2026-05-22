@@ -25,7 +25,13 @@ import { MePage } from '@/routes/me/MePage';
 import { SettingsPage } from '@/routes/me/SettingsPage';
 import { PersonaPage } from '@/routes/me/PersonaPage';
 import { MemoryPage } from '@/routes/me/MemoryPage';
+import { WalletPage } from '@/routes/me/WalletPage';
+import { IntegrationsPage } from '@/routes/me/IntegrationsPage';
+import { ProposalsPage } from '@/routes/me/ProposalsPage';
+import { DevicesPage } from '@/routes/me/DevicesPage';
 import { AdminHub } from '@/routes/admin/AdminHub';
+import { DiscoveriesPage } from '@/routes/DiscoveriesPage';
+import { DiagnosticsPage } from '@/routes/DiagnosticsPage';
 import { hasCompletedOnboarding } from '@/hooks/usePermissions';
 import { reaffirmSubscriptionSilently } from '@/api/push';
 
@@ -107,6 +113,12 @@ export default function App() {
                 <Route path="/me/settings" element={<SettingsPage />} />
                 <Route path="/me/persona" element={<PersonaPage />} />
                 <Route path="/me/memory" element={<MemoryPage />} />
+                <Route path="/me/wallet" element={<WalletPage />} />
+                <Route path="/me/integrations" element={<IntegrationsPage />} />
+                <Route path="/me/proposals" element={<ProposalsPage />} />
+                <Route path="/me/devices" element={<DevicesPage />} />
+                <Route path="/discoveries" element={<DiscoveriesPage />} />
+                <Route path="/diagnostics" element={<DiagnosticsPage />} />
                 <Route path="/admin" element={<AdminHub />} />
               </Route>
             </Route>

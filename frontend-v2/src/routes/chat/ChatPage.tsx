@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { List, Plus, X } from '@phosphor-icons/react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { List, Plus, X, Trash } from '@phosphor-icons/react';
 import { useAvatarStore } from '@/state/avatar';
 import { useAuthStore } from '@/state/auth';
 import { Sheet, Button, Card, CardSubtitle, useToast } from '@/design/components';
@@ -11,6 +11,7 @@ import { WelcomeScreen } from '@/components/chat/WelcomeScreen';
 import { VoicePanel } from '@/components/voice/VoicePanel';
 import {
   createConversation,
+  deleteConversation,
   getMessages,
   listConversations,
   streamChat,
@@ -65,6 +66,20 @@ export function ChatPage() {
     queryKey: ['conversations'],
     queryFn: listConversations,
     staleTime: 60_000,
+  });
+
+  const deleteConvM = useMutation({
+    mutationFn: (id: string) => deleteConversation(id),
+    onSuccess: (_, id) => {
+      queryClient.setQueryData<Conversation[]>(['conversations'], (prev) =>
+        prev ? prev.filter((c) => c.id !== id) : prev,
+      );
+      if (id === conversationId) {
+        navigate('/chat', { replace: true });
+      }
+      toast.push({ tone: 'mint', title: 'Conversazione eliminata' });
+    },
+    onError: (err) => toast.push({ tone: 'coral', title: 'Errore', body: (err as Error).message }),
   });
 
   const messagesQ = useQuery({
@@ -264,29 +279,42 @@ export function ChatPage() {
         <ul className="space-y-2 mt-2">
           {convosQ.data?.map((c: Conversation) => (
             <li key={c.id}>
-              <button
-                onClick={() => {
-                  navigate(`/chat/${c.id}`);
-                  setListOpen(false);
-                }}
-                className="block w-full text-left"
+              <Card
+                padding="base"
+                elevation={c.id === conversationId ? 2 : 0}
+                className={c.id === conversationId ? 'border-accent-lilac/40' : ''}
               >
-                <Card
-                  padding="base"
-                  elevation={c.id === conversationId ? 2 : 0}
-                  className={c.id === conversationId ? 'border-accent-lilac/40' : ''}
-                >
-                  <p className="font-medium text-sm">{c.title ?? 'Senza titolo'}</p>
-                  <CardSubtitle>
-                    {new Date(c.updated_at).toLocaleString('it-IT', {
-                      day: '2-digit',
-                      month: 'short',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </CardSubtitle>
-                </Card>
-              </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      navigate(`/chat/${c.id}`);
+                      setListOpen(false);
+                    }}
+                    className="flex-1 text-left min-w-0"
+                  >
+                    <p className="font-medium text-sm truncate">{c.title ?? 'Senza titolo'}</p>
+                    <CardSubtitle>
+                      {new Date(c.updated_at).toLocaleString('it-IT', {
+                        day: '2-digit',
+                        month: 'short',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </CardSubtitle>
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm('Eliminare questa conversazione?')) {
+                        deleteConvM.mutate(c.id);
+                      }
+                    }}
+                    aria-label="Elimina conversazione"
+                    className="p-2 text-text-muted hover:text-accent-coral rounded-md flex-shrink-0"
+                  >
+                    <Trash size={16} />
+                  </button>
+                </div>
+              </Card>
             </li>
           ))}
         </ul>

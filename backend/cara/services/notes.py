@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +49,9 @@ async def update_note(
         note.title = title or "Nota senza titolo"
     if body is not None:
         note.body = body
+    # Esplicito (no `onupdate=func.now()` sul modello — vedi commento nel
+    # modello: MissingGreenlet su async se la colonna va refresh-required).
+    note.updated_at = datetime.now(timezone.utc)
     await session.flush()
     return note
 

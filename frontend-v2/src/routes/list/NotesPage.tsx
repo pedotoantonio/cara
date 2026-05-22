@@ -21,7 +21,7 @@ export function NotesPage() {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [body, setBody] = useState('');
+  const [draft, setDraft] = useState('');
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const saveTimer = useRef<number | null>(null);
 
@@ -29,26 +29,27 @@ export function NotesPage() {
   const notes = notesQ.data ?? [];
 
   const newM = useMutation({
-    mutationFn: () => createNote({ content: '' }),
+    mutationFn: () => createNote({ body: '' }),
     onSuccess: (created) => {
       queryClient.setQueryData<Note[]>(['notes'], (prev) =>
         prev ? [created, ...prev] : [created],
       );
       setSelectedId(created.id);
-      setBody('');
+      setDraft('');
     },
     onError: (err) => toast.push({ tone: 'coral', title: 'Errore', body: (err as Error).message }),
   });
 
   const updateM = useMutation({
-    mutationFn: ({ id, content }: { id: string; content: string }) =>
-      updateNote(id, { content }),
+    mutationFn: ({ id, body: newBody }: { id: string; body: string }) =>
+      updateNote(id, { body: newBody }),
     onSuccess: (updated) => {
       queryClient.setQueryData<Note[]>(['notes'], (prev) =>
         prev ? prev.map((n) => (n.id === updated.id ? updated : n)) : prev,
       );
       setSavedAt(new Date());
     },
+    onError: (err) => toast.push({ tone: 'coral', title: 'Salvataggio fallito', body: (err as Error).message }),
   });
 
   const deleteM = useMutation({
@@ -59,7 +60,7 @@ export function NotesPage() {
       );
       if (selectedId === id) {
         setSelectedId(null);
-        setBody('');
+        setDraft('');
       }
     },
   });
@@ -70,19 +71,19 @@ export function NotesPage() {
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
       const current = notes.find((n) => n.id === selectedId);
-      if (current && current.content !== body) {
-        updateM.mutate({ id: selectedId, content: body });
+      if (current && current.body !== draft) {
+        updateM.mutate({ id: selectedId, body: draft });
       }
     }, 800);
     return () => {
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [body, selectedId]);
+  }, [draft, selectedId]);
 
   function selectNote(n: Note) {
     setSelectedId(n.id);
-    setBody(n.content);
+    setDraft(n.body);
     setSavedAt(null);
   }
 
@@ -124,8 +125,13 @@ export function NotesPage() {
                   <button onClick={() => selectNote(n)} className="block w-full text-left">
                     <Card padding="base" elevation={1} className="hover:border-accent-sun/40 transition-colors">
                       <p className="font-medium line-clamp-2">
-                        {n.content.split('\n')[0] || '(senza titolo)'}
+                        {n.title || n.body.split('\n')[0] || '(senza titolo)'}
                       </p>
+                      {n.title && n.body && (
+                        <p className="text-sm text-text-secondary line-clamp-2 mt-1">
+                          {n.body.split('\n')[0]}
+                        </p>
+                      )}
                       <CardSubtitle>
                         {new Date(n.updated_at).toLocaleString('it-IT', {
                           day: '2-digit',
@@ -150,7 +156,7 @@ export function NotesPage() {
               size="sm"
               onClick={() => {
                 setSelectedId(null);
-                setBody('');
+                setDraft('');
               }}
             >
               ← Indietro
@@ -177,8 +183,8 @@ export function NotesPage() {
           </div>
 
           <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
             autoFocus
             placeholder="Scrivi qui…"
             className="w-full min-h-[60vh] rounded-md border border-border-soft bg-bg-base p-4 text-base leading-relaxed outline-none focus:border-accent-sun focus:ring-2 focus:ring-accent-sun/20"

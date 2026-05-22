@@ -24,8 +24,12 @@ export function MePage() {
   const sections = [
     { to: '/me/persona',      label: 'Profilo persona',  Icon: Brain,    accent: 'text-accent-lilac' },
     { to: '/me/memory',       label: 'Memoria',          Icon: Brain,    accent: 'text-accent-lilac' },
-    { to: '/me/integrations', label: 'Integrazioni',     Icon: Plug,     accent: 'text-accent-grass' },
     { to: '/me/wallet',       label: 'Wallet widget',    Icon: Wallet,   accent: 'text-accent-sun' },
+    { to: '/me/integrations', label: 'Integrazioni Google', Icon: Plug,  accent: 'text-accent-grass' },
+    { to: '/me/proposals',    label: 'Proposte da email',Icon: Plug,     accent: 'text-accent-clay' },
+    { to: '/me/devices',      label: 'Dispositivi',      Icon: Plug,     accent: 'text-accent-sky' },
+    { to: '/discoveries',     label: 'Scoperte',         Icon: Plug,     accent: 'text-accent-lilac' },
+    { to: '/diagnostics',     label: 'Diagnostica',      Icon: Plug,     accent: 'text-accent-sky' },
     { to: '/me/settings',     label: 'Impostazioni',     Icon: Gear,     accent: 'text-text-secondary' },
   ];
 

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence } from 'framer-motion';
-import { Skeleton, useToast } from '@/design/components';
+import { Calendar, X } from '@phosphor-icons/react';
+import { Skeleton, useToast, Button } from '@/design/components';
 import { QuickAddInput } from '@/components/lists/QuickAddInput';
 import { ListItemCard } from '@/components/lists/ListItemCard';
 import {
@@ -12,18 +13,33 @@ import {
   type Task,
 } from '@/api/tasks';
 
+function toLocalInput(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromLocalInput(local: string): string | null {
+  if (!local) return null;
+  return new Date(local).toISOString();
+}
+
 export function TasksPage() {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [editDate, setEditDate] = useState<string | null>(null);
+  const [pendingDate, setPendingDate] = useState<string | null>(null);
 
   const tasksQ = useQuery({ queryKey: ['tasks'], queryFn: listTasks, staleTime: 30_000 });
 
   const addM = useMutation({
-    mutationFn: (title: string) => createTask({ title }),
+    mutationFn: (args: { title: string; due_date: string | null }) =>
+      createTask({ title: args.title, due_date: args.due_date }),
     onSuccess: (created) => {
       queryClient.setQueryData<Task[]>(['tasks'], (prev) => (prev ? [created, ...prev] : [created]));
+      setPendingDate(null);
     },
     onError: (err) => toast.push({ tone: 'coral', title: 'Errore', body: (err as Error).message }),
   });
@@ -45,7 +61,8 @@ export function TasksPage() {
   });
 
   const updateM = useMutation({
-    mutationFn: ({ id, title }: { id: string; title: string }) => updateTask(id, { title }),
+    mutationFn: (args: { id: string; title?: string; due_date?: string | null }) =>
+      updateTask(args.id, { title: args.title, due_date: args.due_date }),
     onSuccess: (updated) => {
       queryClient.setQueryData<Task[]>(['tasks'], (p) =>
         p ? p.map((t) => (t.id === updated.id ? updated : t)) : p,
@@ -75,24 +92,57 @@ export function TasksPage() {
   function startEdit(t: Task) {
     setEditingId(t.id);
     setEditText(t.title);
+    setEditDate(t.due_date);
   }
   function commitEdit() {
     if (!editingId) return;
     const t = tasks.find((x) => x.id === editingId);
-    if (t && editText.trim() && editText.trim() !== t.title) {
-      updateM.mutate({ id: editingId, title: editText.trim() });
+    if (t) {
+      const patch: { id: string; title?: string; due_date?: string | null } = { id: editingId };
+      if (editText.trim() && editText.trim() !== t.title) patch.title = editText.trim();
+      if (editDate !== t.due_date) patch.due_date = editDate;
+      if (Object.keys(patch).length > 1) {
+        updateM.mutate(patch);
+      }
     }
     setEditingId(null);
     setEditText('');
+    setEditDate(null);
   }
 
   return (
     <div className="container-app py-4 space-y-4">
-      <QuickAddInput
-        placeholder="Nuova task — premi invio"
-        onAdd={async (text) => { await addM.mutateAsync(text); }}
-        disabled={addM.isPending}
-      />
+      <div className="space-y-2">
+        <QuickAddInput
+          placeholder="Nuova task — premi invio"
+          onAdd={async (text) => {
+            await addM.mutateAsync({ title: text, due_date: pendingDate });
+          }}
+          disabled={addM.isPending}
+        />
+        <div className="flex items-center gap-2 pl-3 text-sm text-text-muted">
+          <Calendar size={14} weight="duotone" />
+          <input
+            type="datetime-local"
+            value={pendingDate ? toLocalInput(pendingDate) : ''}
+            onChange={(e) => setPendingDate(fromLocalInput(e.target.value))}
+            className="bg-transparent border-0 outline-none text-sm text-text-secondary"
+          />
+          {pendingDate && (
+            <button
+              type="button"
+              onClick={() => setPendingDate(null)}
+              className="ml-1 p-1 hover:bg-bg-surface rounded-sm"
+              aria-label="Rimuovi scadenza"
+            >
+              <X size={12} />
+            </button>
+          )}
+          {!pendingDate && (
+            <span className="text-xs text-text-muted">scadenza opzionale</span>
+          )}
+        </div>
+      </div>
 
       {tasksQ.isLoading && (
         <ul className="space-y-2">
@@ -126,20 +176,43 @@ export function TasksPage() {
                   onDelete={() => deleteM.mutate(t.id)}
                 >
                   {editingId === t.id ? (
-                    <input
-                      autoFocus
-                      value={editText}
-                      onChange={(e) => setEditText(e.target.value)}
-                      onBlur={commitEdit}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') commitEdit();
-                        if (e.key === 'Escape') {
-                          setEditingId(null);
-                          setEditText('');
-                        }
-                      }}
-                      className="w-full bg-transparent border-b border-accent-coral outline-none text-base"
-                    />
+                    <div className="space-y-1.5">
+                      <input
+                        autoFocus
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') commitEdit();
+                          if (e.key === 'Escape') {
+                            setEditingId(null);
+                            setEditText('');
+                            setEditDate(null);
+                          }
+                        }}
+                        className="w-full bg-transparent border-b border-accent-coral outline-none text-base"
+                      />
+                      <div className="flex items-center gap-2 text-xs flex-wrap">
+                        <Calendar size={12} weight="duotone" />
+                        <input
+                          type="datetime-local"
+                          value={editDate ? toLocalInput(editDate) : ''}
+                          onChange={(e) => setEditDate(fromLocalInput(e.target.value))}
+                          className="bg-transparent border-0 outline-none text-text-secondary"
+                        />
+                        {editDate && (
+                          <button
+                            type="button"
+                            onClick={() => setEditDate(null)}
+                            className="p-0.5 hover:bg-bg-surface rounded-sm"
+                          >
+                            <X size={10} />
+                          </button>
+                        )}
+                        <Button size="sm" variant="primary" onClick={commitEdit}>
+                          Salva
+                        </Button>
+                      </div>
+                    </div>
                   ) : (
                     <button onClick={() => startEdit(t)} className="block w-full text-left">
                       <p className="font-medium">{t.title}</p>
