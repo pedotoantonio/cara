@@ -21,7 +21,10 @@ export interface AsrResult {
 export async function transcribeBlob(blob: Blob, language = 'it'): Promise<AsrResult> {
   const fd = new FormData();
   fd.append('audio', blob, blob.type.includes('webm') ? 'rec.webm' : 'rec.audio');
-  const r = await authFetch(`/asr?language=${encodeURIComponent(language)}`, {
+  // Backend path è /asr/transcribe (vedi backend/cara/api/v1/asr.py).
+  // Il client v1 della Wall usa /wall/asr — diverso path. Per la PWA
+  // personale (non Wall, non LAN-only) usiamo il flat /asr/transcribe.
+  const r = await authFetch(`/asr/transcribe?language=${encodeURIComponent(language)}`, {
     method: 'POST',
     body: fd,
   });
