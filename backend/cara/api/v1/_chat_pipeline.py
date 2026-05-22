@@ -29,6 +29,7 @@ import structlog
 
 from cara.api.v1._chat_routing import (
     try_intent_router,
+    try_lifeops_router,
     try_quick_calc,
     try_recipe_chain,
     try_skill_dispatcher,
@@ -115,6 +116,15 @@ class IntentRouterStage(_RoutingStage):
     _handler = staticmethod(try_intent_router)
 
 
+class LifeopsRouterStage(_RoutingStage):
+    """LifeOps Tier-0.6 — catches Italian commands for lists, reminders,
+    finance. Placed BEFORE the legacy intent_router so 'aggiungi pomodori
+    alla spesa' hits the new multi-list system instead of the legacy
+    ShoppingItem table."""
+    name = "lifeops_router"
+    _handler = staticmethod(try_lifeops_router)
+
+
 class WebSearchStage(_RoutingStage):
     """Last-chance stage before the plain LLM: if the query asks about
     something happening *now* (events, news, weather, prices, "oggi a
@@ -197,6 +207,7 @@ def build_chat_pipeline() -> Pipeline:
             SmartHomeStage(),
             SkillDispatcherStage(),
             RecipeChainStage(),
+            LifeopsRouterStage(),
             IntentRouterStage(),
             # Web fallback is INTENTIONALLY last: every cheaper tier
             # gets first dibs (regex/skill/recipe match without a

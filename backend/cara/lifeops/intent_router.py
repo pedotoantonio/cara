@@ -23,14 +23,76 @@ import re
 from datetime import datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from decimal import Decimal
+
 from cara.lifeops.intents import (
+    FinanceQueryIntent,
     Intent,
     ListAddIntent,
     ListDoneIntent,
     ListQueryIntent,
     ReminderIntent,
+    TransactionAddIntent,
     UnsureIntent,
 )
+
+
+# Mapping parola → category_slug per il classificatore finance.
+_FINANCE_KEYWORDS = {
+    "farmacia": "salute",
+    "medico": "salute",
+    "dottore": "salute",
+    "ospedale": "salute",
+    "medicina": "salute",
+    "medicine": "salute",
+    "supermercato": "spesa",
+    "spesa": "spesa",
+    "spese alimentari": "spesa",
+    "frutta": "spesa",
+    "verdura": "spesa",
+    "pane": "spesa",
+    "carne": "spesa",
+    "benzina": "trasporti",
+    "carburante": "trasporti",
+    "treno": "trasporti",
+    "biglietto": "trasporti",
+    "auto": "trasporti",
+    "moto": "trasporti",
+    "metro": "trasporti",
+    "ristorante": "ristoranti",
+    "pizzeria": "ristoranti",
+    "bar": "ristoranti",
+    "pranzo": "ristoranti",
+    "cena": "ristoranti",
+    "caffè": "ristoranti",
+    "caffe": "ristoranti",
+    "cinema": "tempo_libero",
+    "concerto": "tempo_libero",
+    "libro": "tempo_libero",
+    "libri": "tempo_libero",
+    "videogioco": "tempo_libero",
+    "netflix": "abbonamenti",
+    "spotify": "abbonamenti",
+    "abbonamento": "abbonamenti",
+    "regalo": "regali",
+    "regali": "regali",
+    "compleanno": "regali",
+    "scuola": "bimbi",
+    "doposcuola": "bimbi",
+    "asilo": "bimbi",
+    "lezioni": "bimbi",
+    "bollett": "casa",  # bolletta/e
+    "luce": "casa",
+    "gas": "casa",
+    "acqua": "casa",
+    "internet": "casa",
+    "affitto": "casa",
+    "mutuo": "casa",
+    "stipendio": "stipendio",
+    "salario": "stipendio",
+    "paga": "stipendio",
+    "bonus": "stipendio",
+}
 
 
 ROME = ZoneInfo("Europe/Rome")
@@ -218,6 +280,18 @@ def route(
     now_utc = now_utc or datetime.now(timezone.utc)
     now_local = now_utc.astimezone(ROME)
 
+    # ── FINANCE — query (sum/etc) ───────────────────────────────
+
+    fin_q = _try_finance_query(low)
+    if fin_q is not None:
+        return fin_q
+
+    # ── FINANCE — transaction_add ───────────────────────────────
+
+    tx_add = _try_transaction_add(text, low)
+    if tx_add is not None:
+        return tx_add
+
     # ── REMINDERS ────────────────────────────────────────────────
 
     # "ogni <dow> alle <hh>" ricorrente settimanale
@@ -394,6 +468,153 @@ def route(
     return UnsureIntent(
         reason="Nessun pattern lifeops M1 ha matchato",
         suggested_clarification=None,
+    )
+
+
+def _classify_finance_category(text: str) -> str | None:
+    """Cerca keyword italiane → slug categoria."""
+    low = text.lower()
+    for kw, slug in _FINANCE_KEYWORDS.items():
+        if kw in low:
+            return slug
+    return None
+
+
+def _parse_amount_it(s: str) -> Decimal | None:
+    """Parse '12 euro', '12.50', '1.200 euro', '1,50', 'trecento euro'.
+    Returns Decimal or None.
+    """
+    s = s.strip().lower()
+    # Forme numeriche '12.50', '12,50', '1.200,50', '1200'
+    # Italian: , è decimale, . è migliaia
+    m = re.search(
+        r"\b(\d{1,3}(?:[.,]\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)"
+        r"\s*(?:eur(?:o|i)?|€|euro)?\b",
+        s,
+    )
+    if m:
+        num = m.group(1)
+        # Detect formato: se ha ',' e poi 1-2 cifre, è decimale.
+        # Altrimenti '.', se 3 cifre dopo = migliaia, else decimale.
+        if "," in num:
+            # rimuovi '.' di migliaia, sostituisci ',' con '.'
+            num_norm = num.replace(".", "").replace(",", ".")
+        elif num.count(".") == 1:
+            parts = num.split(".")
+            if len(parts[1]) == 3:
+                # migliaia
+                num_norm = num.replace(".", "")
+            else:
+                num_norm = num
+        else:
+            num_norm = num.replace(".", "")
+        try:
+            return Decimal(num_norm).quantize(Decimal("0.01"))
+        except Exception:
+            return None
+    # Numeri scritti (limitato)
+    written = {
+        "uno": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5,
+        "dieci": 10, "venti": 20, "trenta": 30, "quaranta": 40,
+        "cinquanta": 50, "cento": 100, "duecento": 200, "trecento": 300,
+        "quattrocento": 400, "cinquecento": 500, "mille": 1000,
+    }
+    for k, v in written.items():
+        if re.search(rf"\b{k}\s*euro?", s):
+            return Decimal(v).quantize(Decimal("0.01"))
+    return None
+
+
+def _try_transaction_add(text: str, low: str) -> TransactionAddIntent | None:
+    """Pattern: 'ho speso X', 'ho pagato X', 'segna X per Y',
+    'mi sono entrati X', 'ho preso X di stipendio'.
+    """
+    # Direction inference + extract amount + description
+    if re.search(
+        r"\b(ho\s+speso|ho\s+pagato|spesi?|pagato|segna\s+\d|paga(?:to|i))\b",
+        low,
+    ):
+        amount = _parse_amount_it(low)
+        if not amount:
+            return None
+        # description: prendi tutto tranne il numero
+        desc = re.sub(
+            r"\b(?:ho\s+speso|ho\s+pagato|spes[ai]?|pagato|segna|paga(?:to|i))\b",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        desc = re.sub(
+            r"\b\d{1,3}(?:[.,]\d{3})*(?:,\d{1,2})?(?:\s*(?:eur(?:o|i)?|€))?\b",
+            "",
+            desc,
+            flags=re.IGNORECASE,
+        )
+        desc = re.sub(r"\b(?:per|in|al|alla|allo|ai|alle)\b", " ", desc).strip(" .,!?")
+        desc = re.sub(r"\s+", " ", desc) or None
+        category = _classify_finance_category(text)
+        return TransactionAddIntent(
+            amount=amount,
+            direction="expense",
+            description=desc.capitalize() if desc else None,
+            category_slug=category,
+        )
+
+    # Income
+    if re.search(
+        r"\b(mi\s+sono\s+entrati|ho\s+preso\s+\d|mi\s+hanno\s+pagato|ricevuto)\b",
+        low,
+    ):
+        amount = _parse_amount_it(low)
+        if not amount:
+            return None
+        category = _classify_finance_category(text) or "entrate_varie"
+        desc = "Stipendio" if "stipendio" in low else None
+        return TransactionAddIntent(
+            amount=amount,
+            direction="income",
+            description=desc,
+            category_slug=category,
+        )
+    return None
+
+
+def _try_finance_query(low: str) -> FinanceQueryIntent | None:
+    """Pattern: 'quanto ho speso', 'quanto ho guadagnato', 'quanto in farmacia'."""
+    if not re.search(r"\bquanto\s+(?:ho|sono|c['e])?\b", low):
+        return None
+    direction: str | None = None
+    if "speso" in low or "spese" in low or "pagato" in low:
+        direction = "expense"
+    elif "guadagn" in low or "incass" in low or "entrate" in low:
+        direction = "income"
+
+    category = _classify_finance_category(low)
+
+    # Period hint
+    period_hint = None
+    if "oggi" in low:
+        period_hint = "oggi"
+    elif "ieri" in low:
+        period_hint = "ieri"
+    elif "settimana" in low:
+        period_hint = "settimana"
+    elif re.search(r"\bquest['o]?\s+mese\b|\bnel\s+mese\b|\bal\s+mese\b|\bmese\s+corrente\b", low):
+        period_hint = "mese"
+    elif "anno" in low:
+        period_hint = "anno"
+    elif "maggio" in low or "giugno" in low or "luglio" in low or "agosto" in low:
+        # mese specifico → period_hint stesso nome
+        for m_name in _MONTH:
+            if m_name in low:
+                period_hint = m_name
+                break
+
+    return FinanceQueryIntent(
+        metric="sum",
+        direction=direction,  # type: ignore[arg-type]
+        category_slug=category,
+        period_hint=period_hint,
     )
 
 

@@ -37,6 +37,7 @@ from typing import Any
 
 import structlog
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cara.api.v1._chat_prompt import runtime_context_message
@@ -1122,6 +1123,88 @@ async def try_intent_router(
     return _canned_response(convo_id_str, canned, routed.kind)
 
 
+async def try_lifeops_router(
+    *,
+    session: AsyncSession,
+    user: User,
+    last_user_q: str | None,
+    attached_files: list,
+    convo: Any,
+) -> StreamingResponse | None:
+    """LifeOps Tier-0.6 — regex-based intent router for lists, reminders,
+    finance. Catches commands like 'aggiungi pomodori alla spesa',
+    'ricordami domani alle 16', 'ho preso il pane'. Returns canned reply
+    + applies the side effect. Falls through to LLM if Unsure."""
+    if not last_user_q or attached_files:
+        return None
+
+    from cara.lifeops import intent_router as lifeops_router  # noqa: PLC0415
+    from cara.lifeops import dispatchers as lifeops_dispatchers  # noqa: PLC0415
+    from cara.lifeops.intents import UnsureIntent  # noqa: PLC0415
+
+    # Available list slugs for context
+    from cara.models import LifeopsList  # noqa: PLC0415
+    rows = (
+        await session.execute(
+            select(LifeopsList.slug).where(
+                LifeopsList.deleted_at.is_(None),
+                (LifeopsList.user_id == user.id)
+                | (LifeopsList.scope.in_(("family", "shared"))),
+            )
+        )
+    ).scalars().all()
+    list_slugs = list({s for s in rows}) or ["shopping", "todo"]
+
+    intent = lifeops_router.route(last_user_q, list_slugs=list_slugs)
+    if isinstance(intent, UnsureIntent):
+        return None
+
+    import time as _t
+    _t0 = _t.perf_counter()
+    sm = get_state_machine()
+    bus = get_bus()
+    sm.transition(LumoState.THINKING)
+    bus.emit(
+        "chat.lifeops.start",
+        {"user_id": user.id, "intent": intent.kind, "query": last_user_q[:80]},
+    )
+
+    canned = await lifeops_dispatchers.execute(intent, user, session)
+    if canned is None:
+        # Dispatcher said no — fallback to LLM
+        return None
+
+    await convo_svc.add_message(
+        session, conversation_id=convo.id, role="assistant", content=canned,
+    )
+    await session.commit()
+    convo_id_str = str(convo.id)
+    elapsed_ms = int((_t.perf_counter() - _t0) * 1000)
+    log.info(
+        "chat.lifeops_routed",
+        kind=intent.kind, reply_chars=len(canned), elapsed_ms=elapsed_ms,
+    )
+    event_log.record(
+        "lifeops_router.match",
+        user_id=user.id,
+        duration_ms=elapsed_ms,
+        intent=intent.kind,
+        query=last_user_q[:80],
+    )
+    bus.emit(
+        "chat.lifeops.done",
+        {
+            "user_id": user.id,
+            "intent": intent.kind,
+            "duration_ms": elapsed_ms,
+        },
+    )
+    sm.transition(LumoState.SPEAKING)
+    sm.transition(LumoState.IDLE)
+
+    return _canned_response(convo_id_str, canned, f"lifeops.{intent.kind}")
+
+
 # Ordered list of routing tiers — `chat()` walks this list in order,
 # returning the first non-None response. Adding a new tier becomes
 # adding one entry here + one async function above.
@@ -1130,5 +1213,6 @@ ROUTING_TIERS = (
     try_smarthome,
     try_skill_dispatcher,
     try_recipe_chain,
+    try_lifeops_router,
     try_intent_router,
 )

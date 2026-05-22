@@ -21,6 +21,8 @@ from cara.api.v1 import (
     family_ws,
     files,
     integrations,
+    lifeops_csv,
+    lifeops_finance,
     lifeops_lists,
     memory,
     news,
@@ -65,6 +67,8 @@ router.include_router(face.router)
 router.include_router(family_ws.router)
 router.include_router(files.router)
 router.include_router(integrations.router)
+router.include_router(lifeops_csv.router)
+router.include_router(lifeops_finance.router)
 router.include_router(lifeops_lists.router)
 router.include_router(memory.router)
 router.include_router(news.router)

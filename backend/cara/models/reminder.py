@@ -21,6 +21,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -117,6 +118,17 @@ class Reminder(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # LifeOps M1 extension (migration c1f8a5d3e926):
+    # - source: 'template' (i 18 italiani) | 'conversational' (intent_router) | 'routine'
+    # - urgent: True bypassa DND/sfogo/silent. Es. farmaci, scadenze critiche.
+    # - delivery_context: actions JSON per routine multimediali (M3).
+    source: Mapped[str] = mapped_column(
+        String(24), nullable=False, server_default="template"
+    )
+    urgent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    delivery_context: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

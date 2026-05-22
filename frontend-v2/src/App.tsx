@@ -35,6 +35,7 @@ import { DiagnosticsPage } from '@/routes/DiagnosticsPage';
 import { LifeopsListsPage } from '@/routes/lifeops/LifeopsListsPage';
 import { LifeopsListDetailPage } from '@/routes/lifeops/LifeopsListDetailPage';
 import { LifeopsPendingPage } from '@/routes/lifeops/LifeopsPendingPage';
+import { LifeopsFinancePage } from '@/routes/lifeops/LifeopsFinancePage';
 import { hasCompletedOnboarding } from '@/hooks/usePermissions';
 import { reaffirmSubscriptionSilently } from '@/api/push';
 
@@ -123,6 +124,7 @@ export default function App() {
                 <Route path="/lifeops/lists" element={<LifeopsListsPage />} />
                 <Route path="/lifeops/lists/:slug" element={<LifeopsListDetailPage />} />
                 <Route path="/lifeops/pending" element={<LifeopsPendingPage />} />
+                <Route path="/lifeops/finance" element={<LifeopsFinancePage />} />
                 <Route path="/discoveries" element={<DiscoveriesPage />} />
                 <Route path="/diagnostics" element={<DiagnosticsPage />} />
                 <Route path="/admin" element={<AdminHub />} />

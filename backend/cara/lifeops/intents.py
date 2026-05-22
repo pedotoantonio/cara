@@ -10,6 +10,7 @@ M2 estende a note_*, transaction_*, finance_query.
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field
@@ -43,6 +44,28 @@ class ListDoneIntent(BaseModel):
     item_substring: str
 
 
+class TransactionAddIntent(BaseModel):
+    """M2 — registra una spesa/entrata. Stato sempre 'pending' lato
+    backend: l'utente deve confermare via UI."""
+
+    kind: Literal["transaction_add"] = "transaction_add"
+    amount: Decimal
+    direction: Literal["expense", "income"] = "expense"
+    description: str | None = None
+    category_slug: str | None = None
+    happened_hint: str | None = None  # 'ieri', 'stamattina', ...
+
+
+class FinanceQueryIntent(BaseModel):
+    """M2 — domanda riassuntiva su spese/entrate."""
+
+    kind: Literal["finance_query"] = "finance_query"
+    metric: Literal["sum", "avg", "count"] = "sum"
+    direction: Literal["expense", "income"] | None = None
+    category_slug: str | None = None
+    period_hint: str | None = None  # 'mese', 'maggio', 'oggi', 'anno', ...
+
+
 class UnsureIntent(BaseModel):
     kind: Literal["unsure"] = "unsure"
     reason: str
@@ -55,6 +78,8 @@ Intent = Annotated[
         ListAddIntent,
         ListQueryIntent,
         ListDoneIntent,
+        TransactionAddIntent,
+        FinanceQueryIntent,
         UnsureIntent,
     ],
     Field(discriminator="kind"),
@@ -67,5 +92,7 @@ __all__ = [
     "ListAddIntent",
     "ListQueryIntent",
     "ListDoneIntent",
+    "TransactionAddIntent",
+    "FinanceQueryIntent",
     "UnsureIntent",
 ]

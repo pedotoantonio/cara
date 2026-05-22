@@ -13,12 +13,16 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from decimal import Decimal
+
 from cara.lifeops.intent_router import route
 from cara.lifeops.intents import (
+    FinanceQueryIntent,
     ListAddIntent,
     ListDoneIntent,
     ListQueryIntent,
     ReminderIntent,
+    TransactionAddIntent,
     UnsureIntent,
 )
 
@@ -274,3 +278,109 @@ def test_32_titolo_reminder_pulito():
     # No "ricordami" o "domani alle 17" dentro il title
     assert "ricordami" not in out.title.lower()
     assert "alle 17" not in out.title.lower()
+
+
+# ═════════════════════════════════════════════════════════════════════
+# FINANCE — M2 (15 frasi golden)
+# ═════════════════════════════════════════════════════════════════════
+
+
+def test_33_spesa_farmacia():
+    out = _route("ho speso 12 euro in farmacia")
+    assert isinstance(out, TransactionAddIntent)
+    assert out.amount == Decimal("12.00")
+    assert out.direction == "expense"
+    assert out.category_slug == "salute"
+
+
+def test_34_spesa_decimale():
+    out = _route("ho pagato 1,50 euro al bar")
+    assert isinstance(out, TransactionAddIntent)
+    assert out.amount == Decimal("1.50")
+    assert out.category_slug == "ristoranti"
+
+
+def test_35_spesa_supermercato():
+    out = _route("ho speso 42 euro al supermercato")
+    assert isinstance(out, TransactionAddIntent)
+    assert out.amount == Decimal("42.00")
+    assert out.category_slug == "spesa"
+
+
+def test_36_spesa_benzina():
+    out = _route("ho pagato 60 euro di benzina")
+    assert isinstance(out, TransactionAddIntent)
+    assert out.amount == Decimal("60.00")
+    assert out.category_slug == "trasporti"
+
+
+def test_37_stipendio_income():
+    out = _route("mi sono entrati 1500 euro di stipendio")
+    assert isinstance(out, TransactionAddIntent)
+    assert out.direction == "income"
+    assert out.amount == Decimal("1500.00")
+    assert out.category_slug == "stipendio"
+
+
+def test_38_pagato_bolletta_luce():
+    out = _route("ho pagato 85 euro per la bolletta della luce")
+    assert isinstance(out, TransactionAddIntent)
+    assert out.amount == Decimal("85.00")
+    assert out.category_slug == "casa"
+
+
+def test_39_amount_scritto_trecento():
+    out = _route("ho speso trecento euro per il regalo")
+    assert isinstance(out, TransactionAddIntent)
+    assert out.amount == Decimal("300.00")
+    assert out.category_slug == "regali"
+
+
+def test_40_pagato_cinema():
+    out = _route("ho pagato 9 euro al cinema")
+    assert isinstance(out, TransactionAddIntent)
+    assert out.category_slug == "tempo_libero"
+
+
+def test_41_query_quanto_speso_mese():
+    out = _route("quanto ho speso questo mese?")
+    assert isinstance(out, FinanceQueryIntent)
+    assert out.direction == "expense"
+    assert out.period_hint == "mese"
+
+
+def test_42_query_quanto_speso_farmacia():
+    out = _route("quanto ho speso in farmacia?")
+    assert isinstance(out, FinanceQueryIntent)
+    assert out.category_slug == "salute"
+
+
+def test_43_query_quanto_guadagnato_anno():
+    out = _route("quanto ho guadagnato quest'anno?")
+    assert isinstance(out, FinanceQueryIntent)
+    assert out.direction == "income"
+    assert out.period_hint == "anno"
+
+
+def test_44_query_quanto_oggi():
+    out = _route("quanto ho speso oggi?")
+    assert isinstance(out, FinanceQueryIntent)
+    assert out.period_hint == "oggi"
+
+
+def test_45_amount_migliaia():
+    out = _route("ho speso 1.200 euro per il viaggio")
+    assert isinstance(out, TransactionAddIntent)
+    assert out.amount == Decimal("1200.00")
+
+
+def test_46_pagato_abbonamento():
+    out = _route("ho pagato 12 euro per netflix")
+    assert isinstance(out, TransactionAddIntent)
+    assert out.category_slug == "abbonamenti"
+
+
+def test_47_query_settimana():
+    out = _route("quanto ho speso questa settimana?")
+    assert isinstance(out, FinanceQueryIntent)
+    assert out.period_hint == "settimana"
