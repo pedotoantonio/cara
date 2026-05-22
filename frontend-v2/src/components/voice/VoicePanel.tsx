@@ -1,34 +1,57 @@
-// VoicePanel — modale voice-first dal CTA HomePage o long-press FloatingAvatar.
-// Usa il MicPipeline portato da v1 (MediaRecorder + AnalyserNode + VAD).
+// VoicePanel — modale voice-first end-to-end.
+// Pipeline: mic → MediaRecorder → Whisper ASR → sanity check → chat SSE
+// streaming → token + audio_chunk Piper playback inline → avatar reagisce.
+//
+// Aperto da:
+//   - CTA "Parla con me" nella Hub Casa
+//   - Long-press sul FloatingAvatar (qualsiasi page tranne home)
 
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Microphone, X, ArrowsClockwise } from '@phosphor-icons/react';
-import { Button, useToast } from '@/design/components';
+import { Button } from '@/design/components';
+import { CaraFace } from '@/components/avatar/CaraFace';
 import { AudioLevelMeter } from './AudioLevelMeter';
 import { startMicSession, type MicSession, type MicPipelineDiagnostics } from '@/lib/micPipeline';
 import { transcribeBlob, type AsrResult } from '@/api/asr';
 import { useAvatarStore } from '@/state/avatar';
 import { requestMic } from '@/hooks/usePermissions';
+import { streamChat } from '@/api/chat';
+import {
+  consumeChatStream,
+  type ChatTokenPayload,
+  type ChatAudioChunkPayload,
+} from '@/lib/chatStream';
+import { createTtsPlayer, type TtsPlayer } from '@/lib/ttsPlayback';
 
 interface VoicePanelProps {
   open: boolean;
   onClose: () => void;
 }
 
-type Phase = 'idle' | 'permission' | 'listening' | 'transcribing' | 'done' | 'error';
+type Phase =
+  | 'idle'
+  | 'permission'
+  | 'listening'
+  | 'transcribing'
+  | 'thinking'
+  | 'speaking'
+  | 'done'
+  | 'error';
 
 export function VoicePanel({ open, onClose }: VoicePanelProps) {
-  const toast = useToast();
   const setAvatar = useAvatarStore((s) => s.setAvatar);
 
   const [phase, setPhase] = useState<Phase>('idle');
   const [level, setLevel] = useState(0);
   const [levelDb, setLevelDb] = useState(-90);
   const [transcript, setTranscript] = useState('');
+  const [reply, setReply] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const sessionRef = useRef<MicSession | null>(null);
+  const ttsRef = useRef<TtsPlayer | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);
 
   useEffect(() => {
@@ -37,21 +60,22 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
       void start();
     } else {
       cancelledRef.current = true;
-      abortSession();
+      abortAll();
       setPhase('idle');
       setTranscript('');
+      setReply('');
       setErrorMsg(null);
       setLevel(0);
       setLevelDb(-90);
     }
     return () => {
       cancelledRef.current = true;
-      abortSession();
+      abortAll();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  function abortSession() {
+  function abortAll() {
     if (sessionRef.current) {
       try {
         sessionRef.current.abort();
@@ -60,11 +84,20 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
       }
       sessionRef.current = null;
     }
+    if (chatAbortRef.current) {
+      chatAbortRef.current.abort();
+      chatAbortRef.current = null;
+    }
+    if (ttsRef.current) {
+      ttsRef.current.stop();
+      ttsRef.current = null;
+    }
   }
 
   async function start() {
     setErrorMsg(null);
     setTranscript('');
+    setReply('');
     setPhase('permission');
     setAvatar({ energy: 'listening', emotion: 'neutral', glowAccent: 'coral', caption: 'Ti ascolto…' });
 
@@ -84,8 +117,6 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
       sessionRef.current = await startMicSession({
         vadMode: 'auto',
         onLevel: (db, normalised) => {
-          // Throttle via rAF — il pipeline emette ~60 Hz, React setState
-          // batchato è OK ma evitiamo work inutile durante alta freq.
           setLevel(normalised);
           setLevelDb(db);
         },
@@ -135,7 +166,7 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
       const sanity = result.sanity;
       if (sanity && !sanity.ok && sanity.canned_reply) {
         setTranscript('');
-        setErrorMsg(sanity.canned_reply);
+        setReply(sanity.canned_reply);
         setPhase('done');
         setAvatar({ energy: 'idle', emotion: 'confused', caption: sanity.canned_reply });
         console.log('[cara-mic] sanity rejected', sanity.reason, diag);
@@ -149,14 +180,88 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
         return;
       }
       setTranscript(text);
-      setPhase('done');
-      toast.push({ tone: 'mint', title: 'Ti ho sentito', body: text.slice(0, 120) });
-      setAvatar({ energy: 'idle', emotion: 'happy', caption: text.slice(0, 60) });
-      console.log('[cara-mic] ok', { text, confidence: result.confidence_label, diag });
-      // TODO M3: send to chat backend, stream reply, TTS playback inline.
+      console.log('[cara-mic] transcribed', { text, confidence: result.confidence_label, diag });
+
+      // Lancia la chat
+      await runChatTurn(text);
     } catch (err) {
       setPhase('error');
       setErrorMsg((err as Error).message || 'Errore di rete sull\'ASR.');
+      setAvatar({ energy: 'idle', emotion: 'sad', caption: null });
+    }
+  }
+
+  /**
+   * Manda il transcript al backend chat e gestisce lo stream SSE.
+   * Token accumulati in `reply`, audio_chunk passati a Piper player.
+   * Niente conversation_id → backend ne crea una nuova ogni volta
+   * (le conversazioni voice non hanno bisogno di history persistente
+   * per ora; se l'utente vuole continuare può aprire /chat).
+   */
+  async function runChatTurn(userText: string) {
+    if (cancelledRef.current) return;
+    setPhase('thinking');
+    setReply('');
+    setAvatar({ energy: 'thinking', emotion: 'thoughtful', caption: 'Sto pensando…', glowAccent: 'lilac' });
+
+    // TTS player con flag "speaking"
+    ttsRef.current = createTtsPlayer();
+    ttsRef.current.onComplete(() => {
+      if (cancelledRef.current) return;
+      setAvatar({ energy: 'idle', emotion: 'happy', caption: null, glowAccent: 'coral' });
+    });
+
+    chatAbortRef.current = new AbortController();
+    let accumulated = '';
+    let hasAudio = false;
+
+    try {
+      const response = await streamChat({
+        messages: [{ role: 'user', content: userText }],
+        max_new_tokens: 400,
+      });
+
+      await consumeChatStream(
+        response,
+        (ev) => {
+          if (cancelledRef.current) return;
+          if (ev.type === 'token') {
+            const tok = ev.data as unknown as ChatTokenPayload;
+            const t = tok.text ?? '';
+            if (t) {
+              accumulated += t;
+              setReply(accumulated);
+              if (phase !== 'speaking') {
+                setPhase('speaking');
+              }
+            }
+          } else if (ev.type === 'audio_chunk') {
+            const chunk = ev.data as unknown as ChatAudioChunkPayload;
+            hasAudio = true;
+            if (ttsRef.current) {
+              ttsRef.current.enqueue(chunk);
+            }
+            setAvatar({ energy: 'speaking', emotion: 'happy', glowAccent: 'coral' });
+          } else if (ev.type === 'done') {
+            // Final state — done event reached
+          } else if (ev.type === 'error') {
+            throw new Error((ev.data as { detail?: string }).detail ?? 'Errore chat');
+          }
+        },
+        chatAbortRef.current.signal,
+      );
+
+      if (cancelledRef.current) return;
+      setPhase('done');
+      // Se non c'erano audio_chunk, niente da aspettare → idle subito
+      if (!hasAudio) {
+        setAvatar({ energy: 'idle', emotion: 'happy', caption: null, glowAccent: 'coral' });
+      }
+      console.log('[cara-chat] done', { reply: accumulated.length, hasAudio });
+    } catch (err) {
+      if (cancelledRef.current) return;
+      setPhase('error');
+      setErrorMsg((err as Error).message || 'Errore chat');
       setAvatar({ energy: 'idle', emotion: 'sad', caption: null });
     }
   }
@@ -166,7 +271,7 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
   }
 
   function userCancel() {
-    abortSession();
+    abortAll();
     onClose();
   }
 
@@ -198,23 +303,42 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
               </button>
             </div>
 
-            <div className="my-4">
-              <motion.div
-                animate={phase === 'listening' ? { scale: [1, 1.06, 1] } : { scale: 1 }}
-                transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
-                className="inline-flex items-center justify-center w-32 h-32 rounded-full bg-accent-coral/12 mb-4"
-              >
-                <Microphone
-                  size={56}
-                  weight={phase === 'listening' ? 'fill' : 'duotone'}
-                  className="text-accent-coral"
-                />
-              </motion.div>
-              <h2 className="font-display text-2xl text-text-primary">
+            {/* Avatar / Mic visual */}
+            <div className="my-3">
+              {phase === 'thinking' || phase === 'speaking' || phase === 'done' ? (
+                <div className="inline-flex">
+                  <CaraFace
+                    size={120}
+                    energy={
+                      phase === 'speaking'
+                        ? 'speaking'
+                        : phase === 'thinking'
+                          ? 'thinking'
+                          : 'idle'
+                    }
+                    emotion={phase === 'speaking' ? 'happy' : phase === 'thinking' ? 'thoughtful' : 'happy'}
+                  />
+                </div>
+              ) : (
+                <motion.div
+                  animate={phase === 'listening' ? { scale: [1, 1.06, 1] } : { scale: 1 }}
+                  transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+                  className="inline-flex items-center justify-center w-32 h-32 rounded-full bg-accent-coral/12"
+                >
+                  <Microphone
+                    size={56}
+                    weight={phase === 'listening' ? 'fill' : 'duotone'}
+                    className="text-accent-coral"
+                  />
+                </motion.div>
+              )}
+              <h2 className="font-display text-2xl text-text-primary mt-3">
                 {phase === 'permission' && 'Un attimo…'}
                 {phase === 'listening' && 'Sto ascoltando'}
                 {phase === 'transcribing' && 'Sto capendo'}
-                {phase === 'done' && 'Eccoci'}
+                {phase === 'thinking' && 'Sto pensando'}
+                {phase === 'speaking' && 'Eccomi'}
+                {phase === 'done' && (reply ? '' : 'Tocca per parlare')}
                 {phase === 'error' && 'Qualcosa è andato storto'}
                 {phase === 'idle' && 'Tocca per parlare'}
               </h2>
@@ -226,8 +350,24 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
               </div>
             )}
 
+            {/* Trascritto utente */}
             {transcript && (
-              <p className="mt-4 text-lg text-text-primary leading-relaxed">"{transcript}"</p>
+              <div className="mt-3 px-2">
+                <p className="text-xs text-text-muted mb-1">Hai detto</p>
+                <p className="text-sm text-text-secondary italic">"{transcript}"</p>
+              </div>
+            )}
+
+            {/* Risposta CARA */}
+            {reply && (
+              <div className="mt-4 px-2">
+                <p className="text-base text-text-primary leading-relaxed text-left">
+                  {reply}
+                  {phase === 'speaking' && (
+                    <span className="inline-block w-1.5 h-4 ml-1 align-middle bg-current opacity-60 animate-pulse" />
+                  )}
+                </p>
+              </div>
             )}
 
             {errorMsg && <p className="mt-4 text-sm text-accent-coral">{errorMsg}</p>}
@@ -243,6 +383,11 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
                   </Button>
                 </>
               )}
+              {(phase === 'thinking' || phase === 'speaking') && (
+                <Button size="sm" variant="ghost" onClick={userCancel}>
+                  Annulla
+                </Button>
+              )}
               {(phase === 'done' || phase === 'error') && (
                 <>
                   <Button
@@ -251,7 +396,7 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
                     leftIcon={<ArrowsClockwise size={18} />}
                     onClick={start}
                   >
-                    Riprova
+                    Parla ancora
                   </Button>
                   <Button size="sm" variant="ghost" onClick={onClose}>
                     Chiudi
