@@ -32,6 +32,9 @@ import { DevicesPage } from '@/routes/me/DevicesPage';
 import { AdminHub } from '@/routes/admin/AdminHub';
 import { DiscoveriesPage } from '@/routes/DiscoveriesPage';
 import { DiagnosticsPage } from '@/routes/DiagnosticsPage';
+import { LifeopsListsPage } from '@/routes/lifeops/LifeopsListsPage';
+import { LifeopsListDetailPage } from '@/routes/lifeops/LifeopsListDetailPage';
+import { LifeopsPendingPage } from '@/routes/lifeops/LifeopsPendingPage';
 import { hasCompletedOnboarding } from '@/hooks/usePermissions';
 import { reaffirmSubscriptionSilently } from '@/api/push';
 
@@ -117,6 +120,9 @@ export default function App() {
                 <Route path="/me/integrations" element={<IntegrationsPage />} />
                 <Route path="/me/proposals" element={<ProposalsPage />} />
                 <Route path="/me/devices" element={<DevicesPage />} />
+                <Route path="/lifeops/lists" element={<LifeopsListsPage />} />
+                <Route path="/lifeops/lists/:slug" element={<LifeopsListDetailPage />} />
+                <Route path="/lifeops/pending" element={<LifeopsPendingPage />} />
                 <Route path="/discoveries" element={<DiscoveriesPage />} />
                 <Route path="/diagnostics" element={<DiagnosticsPage />} />
                 <Route path="/admin" element={<AdminHub />} />
