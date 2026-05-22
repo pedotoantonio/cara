@@ -35,6 +35,7 @@ type Phase =
   | 'permission'
   | 'listening'
   | 'transcribing'
+  | 'confirming'   // trascritto a bassa confidenza → chiedi conferma prima di mandare alla chat
   | 'thinking'
   | 'speaking'
   | 'done'
@@ -195,6 +196,21 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
       setTranscript(text);
       console.log('[cara-mic] transcribed', { text, confidence: result.confidence_label, diag });
 
+      // Confidence gate: se la trascrizione è incerta (low/medium o frase
+      // molto corta), chiedi conferma all'utente PRIMA di mandare il
+      // transcript all'LLM. Evita la situazione 'Whisper ha trascritto
+      // qualcosa di strano e CARA risponde a cazzo perché non capisce'.
+      // Solo 'high' confidence va dritta in chat.
+      const low =
+        result.confidence_label === 'low' ||
+        (result.confidence_label === 'medium' && text.split(/\s+/).length < 4);
+      if (low) {
+        setPhase('confirming');
+        setAvatar({ energy: 'idle', emotion: 'confused', caption: 'Ho capito bene?', glowAccent: 'sun' });
+        console.log('[cara-mic] low confidence, waiting confirm');
+        return;
+      }
+
       // Lancia la chat
       await runChatTurn(text);
     } catch (err) {
@@ -231,9 +247,20 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
     let hasAudio = false;
 
     try {
+      // Wrappa la trascrizione con un hint per l'LLM: dire esplicitamente
+      // che è voce → il 1.5B tende a inventare se si sente "sicuro", ma se
+      // gli diciamo che è una trascrizione potenzialmente imprecisa è più
+      // probabile che chieda conferma invece di sparare risposte a caso.
+      const wrappedContent =
+        userText +
+        '\n\n[Nota interna: questo è un messaggio vocale trascritto da microfono. ' +
+        'Se la domanda è poco chiara, ambigua o incompleta, chiedi ' +
+        "all'utente di ripetere o di chiarire invece di inventare una risposta. " +
+        'Se non sai con certezza una informazione, dillo onestamente.]';
+
       const response = await streamChat(
         {
-          messages: [{ role: 'user', content: userText }],
+          messages: [{ role: 'user', content: wrappedContent }],
           max_new_tokens: 400,
         },
         voiceConvIdRef.current ?? undefined,
@@ -360,6 +387,7 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
                 {phase === 'permission' && 'Un attimo…'}
                 {phase === 'listening' && 'Sto ascoltando'}
                 {phase === 'transcribing' && 'Sto capendo'}
+                {phase === 'confirming' && 'Ho capito bene?'}
                 {phase === 'thinking' && 'Sto pensando'}
                 {phase === 'speaking' && 'Eccomi'}
                 {phase === 'done' && (reply ? '' : 'Tocca per parlare')}
@@ -411,6 +439,30 @@ export function VoicePanel({ open, onClose }: VoicePanelProps) {
                 <Button size="sm" variant="ghost" onClick={userCancel}>
                   Annulla
                 </Button>
+              )}
+              {phase === 'confirming' && (
+                <>
+                  <p className="text-sm text-text-secondary mb-1">
+                    Confermi che hai detto questo o vuoi ripetere?
+                  </p>
+                  <Button
+                    size="lg"
+                    fullWidth
+                    onClick={() => {
+                      void runChatTurn(transcript);
+                    }}
+                  >
+                    Sì, è giusto
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    leftIcon={<ArrowsClockwise size={14} />}
+                    onClick={start}
+                  >
+                    Riprova
+                  </Button>
+                </>
               )}
               {(phase === 'done' || phase === 'error') && (
                 <>
