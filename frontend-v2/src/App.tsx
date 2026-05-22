@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useAuthStore } from '@/state/auth';
 import { ToastProvider } from '@/design/components';
 import { AppShell } from '@/components/common/AppShell';
+import { ErrorBoundary } from '@/components/common/ErrorBoundary';
 
 import { LoginPage } from '@/routes/auth/LoginPage';
 import { PermissionsPage } from '@/routes/onboarding/PermissionsPage';
@@ -63,11 +64,12 @@ function AuthedPermissionsRoute() {
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <ToastProvider>
-        <BrowserRouter>
-          <Bootstrap />
-          <Routes>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <BrowserRouter>
+            <Bootstrap />
+            <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/permissions" element={<AuthedPermissionsRoute />} />
             <Route element={<Protected />}>
@@ -82,10 +84,11 @@ export default function App() {
                 <Route path="/me/:section" element={<MePage />} />
               </Route>
             </Route>
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </BrowserRouter>
-      </ToastProvider>
-    </QueryClientProvider>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </BrowserRouter>
+        </ToastProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }

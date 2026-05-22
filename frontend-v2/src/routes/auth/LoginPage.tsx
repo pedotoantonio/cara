@@ -1,15 +1,25 @@
 import { useState, type FormEvent } from 'react';
+import { Navigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuthStore } from '@/state/auth';
 import { Button, Card, Input, useToast } from '@/design/components';
+import { hasCompletedOnboarding } from '@/hooks/usePermissions';
 
 export function LoginPage() {
   const login = useAuthStore((s) => s.loginWithCredentials);
+  const status = useAuthStore((s) => s.status);
   const error = useAuthStore((s) => s.error);
   const toast = useToast();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Se l'utente è già autenticato (login appena fatto, o LAN auto-login,
+  // o token in localStorage), redirigi via subito — altrimenti resta
+  // bloccato qui per sempre.
+  if (status === 'authenticated') {
+    return <Navigate to={hasCompletedOnboarding() ? '/' : '/permissions'} replace />;
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
