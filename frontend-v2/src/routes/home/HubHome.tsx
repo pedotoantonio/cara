@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
@@ -8,6 +8,7 @@ import { useAvatarStore } from '@/state/avatar';
 import { useAuthStore } from '@/state/auth';
 import { Card, CardTitle, CardSubtitle, Badge, Skeleton, Button } from '@/design/components';
 import { buildGreeting, timeOfDay } from '@/lib/greeting';
+import { VoicePanel } from '@/components/voice/VoicePanel';
 import {
   fetchFamilyResidence,
   fetchWeather,
@@ -63,6 +64,7 @@ function fmtWhen(iso: string): string {
 export function HubHome() {
   const user = useAuthStore((s) => s.user);
   const setAvatar = useAvatarStore((s) => s.setAvatar);
+  const [voiceOpen, setVoiceOpen] = useState(false);
 
   // Avatar in modalità HERO sulla home
   useEffect(() => {
@@ -157,11 +159,13 @@ export function HubHome() {
           variant="primary"
           leftIcon={<Microphone size={22} weight="fill" />}
           className="mt-5"
-          // Voice flow viene cablato in M2 (Capabilities). Per ora apre la chat.
+          onClick={() => setVoiceOpen(true)}
         >
           Parla con me
         </Button>
       </motion.section>
+
+      <VoicePanel open={voiceOpen} onClose={() => setVoiceOpen(false)} />
 
       {/* Prossimi 3 */}
       <section className="mt-6">

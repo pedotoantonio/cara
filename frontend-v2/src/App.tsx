@@ -7,11 +7,14 @@ import { ToastProvider } from '@/design/components';
 import { AppShell } from '@/components/common/AppShell';
 
 import { LoginPage } from '@/routes/auth/LoginPage';
+import { PermissionsPage } from '@/routes/onboarding/PermissionsPage';
 import { HubHome } from '@/routes/home/HubHome';
 import { ChatPage } from '@/routes/chat/ChatPage';
 import { ListHub } from '@/routes/list/ListHub';
 import { LifeHub } from '@/routes/life/LifeHub';
 import { MePage } from '@/routes/me/MePage';
+import { hasCompletedOnboarding } from '@/hooks/usePermissions';
+import { reaffirmSubscriptionSilently } from '@/api/push';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -34,6 +37,10 @@ function Protected() {
   if (status !== 'authenticated') {
     return <Navigate to="/login" replace />;
   }
+  // First-run: redirect a /permissions se onboarding non completato
+  if (!hasCompletedOnboarding()) {
+    return <Navigate to="/permissions" replace />;
+  }
   return <Outlet />;
 }
 
@@ -41,8 +48,17 @@ function Bootstrap() {
   const bootstrap = useAuthStore((s) => s.bootstrap);
   useEffect(() => {
     void bootstrap();
+    // Tenta di re-affermare la subscription push se permission granted.
+    // Silenzioso: se non c'è niente, non fa nulla.
+    void reaffirmSubscriptionSilently();
   }, [bootstrap]);
   return null;
+}
+
+function AuthedPermissionsRoute() {
+  const status = useAuthStore((s) => s.status);
+  if (status !== 'authenticated') return <Navigate to="/login" replace />;
+  return <PermissionsPage />;
 }
 
 export default function App() {
@@ -53,6 +69,7 @@ export default function App() {
           <Bootstrap />
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/permissions" element={<AuthedPermissionsRoute />} />
             <Route element={<Protected />}>
               <Route element={<AppShell />}>
                 <Route path="/" element={<HubHome />} />

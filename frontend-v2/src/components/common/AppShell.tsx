@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   HouseLine,
@@ -8,6 +8,7 @@ import {
   User,
 } from '@phosphor-icons/react';
 import { FloatingAvatar } from '@/components/avatar/FloatingAvatar';
+import { VoicePanel } from '@/components/voice/VoicePanel';
 import { useAvatarStore } from '@/state/avatar';
 import { cn } from '@/lib/cn';
 import type { AccentToken } from '@/design/tokens';
@@ -42,6 +43,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
   const location = useLocation();
   const isHome = location.pathname === '/';
   const avatarSize = useAvatarStore((s) => s.size);
+  const [voiceOpen, setVoiceOpen] = useState(false);
 
   return (
     <div className="min-h-[100dvh] bg-bg-base flex flex-col">
@@ -53,8 +55,16 @@ export function AppShell({ children }: { children?: ReactNode }) {
         {children}
       </main>
 
-      {/* Floating avatar — visible in every page EXCEPT home (where hero is shown) */}
-      {!isHome && avatarSize !== 'hero' && <FloatingAvatar />}
+      {/* Floating avatar — visible in every page EXCEPT home (where hero is shown).
+          Tap → drawer (placeholder per ora); long-press → voice immediato. */}
+      {!isHome && avatarSize !== 'hero' && (
+        <FloatingAvatar
+          onTap={() => setVoiceOpen(true)}
+          onLongPress={() => setVoiceOpen(true)}
+        />
+      )}
+
+      <VoicePanel open={voiceOpen} onClose={() => setVoiceOpen(false)} />
 
       {/* Bottom nav (mobile) */}
       <nav
