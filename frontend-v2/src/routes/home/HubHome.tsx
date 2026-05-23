@@ -9,6 +9,7 @@ import { useAuthStore } from '@/state/auth';
 import { Card, CardTitle, CardSubtitle, Badge, Skeleton, Button } from '@/design/components';
 import { buildGreeting, timeOfDay } from '@/lib/greeting';
 import { VoicePanel } from '@/components/voice/VoicePanel';
+import { TodayInfoCard } from '@/components/widgets/TodayInfoCard';
 import {
   fetchFamilyResidence,
   fetchWeather,
@@ -241,6 +242,11 @@ export function HubHome() {
             </Link>
           </div>
         </Card>
+      </section>
+
+      {/* Info del giorno: santo, fase lunare, alba/tramonto, proverbio, countdown */}
+      <section className="mt-6">
+        <TodayInfoCard variant="compact" />
       </section>
     </div>
   );

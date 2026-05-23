@@ -20,6 +20,7 @@ from cara.api.v1 import (
     face,
     family_ws,
     files,
+    calendar_info,
     integrations,
     lifeops_csv,
     lifeops_finance,
@@ -67,6 +68,7 @@ router.include_router(face.router)
 router.include_router(family_ws.router)
 router.include_router(files.router)
 router.include_router(integrations.router)
+router.include_router(calendar_info.router)
 router.include_router(lifeops_csv.router)
 router.include_router(lifeops_finance.router)
 router.include_router(lifeops_lists.router)
