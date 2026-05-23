@@ -446,10 +446,20 @@ async def build_calendar_grid(
 
     # Build day cells
     from cara.services.saints import saint_for  # noqa: PLC0415
+    from cara.services.daily_info import _MOON_EMOJI, _moon_phase  # noqa: PLC0415
     days = []
     for i in range(grid_days):
         d = grid_start + timedelta(days=i)
         iso = d.isoformat()
+        # Only the 4 major lunar phases get a marker (piena, nuova,
+        # primo, ultimo); intermediate phases would be visual noise
+        # on a small calendar cell.
+        moon_lbl, _illum = _moon_phase(d)
+        moon_marker = (
+            _MOON_EMOJI.get(moon_lbl)
+            if moon_lbl in {"luna piena", "luna nuova", "primo quarto", "ultimo quarto"}
+            else None
+        )
         days.append({
             "date": iso,
             "in_month": d.month == month,
@@ -458,6 +468,7 @@ async def build_calendar_grid(
             "is_holiday": _is_italian_holiday(d),
             "is_pre_holiday": _is_pre_holiday(d),
             "saint": saint_for(d),
+            "moon_marker": moon_marker,
             "birthdays": bdays.get((d.month, d.day), []),
             "items": buckets.get(iso, []),
         })

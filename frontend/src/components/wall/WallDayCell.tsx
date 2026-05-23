@@ -64,14 +64,25 @@ export function WallDayCell({
         >
           {dayNum}
         </span>
-        {day.birthdays && day.birthdays.length > 0 && (
-          <span
-            className="text-base leading-none"
-            title={day.birthdays.map((b) => `🎂 ${b.name}`).join(', ')}
-          >
-            🎂
-          </span>
-        )}
+        <div className="flex items-center gap-1">
+          {day.moon_marker && !dim && (
+            <span
+              className="text-sm sm:text-base leading-none"
+              title={`Luna · ${day.moon_marker}`}
+              aria-label="Fase lunare"
+            >
+              {day.moon_marker}
+            </span>
+          )}
+          {day.birthdays && day.birthdays.length > 0 && (
+            <span
+              className="text-base leading-none"
+              title={day.birthdays.map((b) => `🎂 ${b.name}`).join(', ')}
+            >
+              🎂
+            </span>
+          )}
+        </div>
       </div>
       {day.saint && !dim && (
         <div

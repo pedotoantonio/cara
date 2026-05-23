@@ -63,6 +63,8 @@ export interface WallDay {
   is_holiday: boolean;
   is_pre_holiday?: boolean;
   saint?: string;
+  /** Solo per fasi principali: 🌑 nuova, 🌓 primo quarto, 🌕 piena, 🌗 ultimo. */
+  moon_marker?: string | null;
   birthdays?: WallBirthday[];
   items: WallItem[];
 }

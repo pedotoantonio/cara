@@ -6,6 +6,7 @@ import { cn } from '@/lib/cn';
 import { listEvents, mergeForCalendar, type UnifiedCalendarItem } from '@/api/calendar';
 import { listTasks } from '@/api/tasks';
 import { listUpcomingReminders } from '@/api/reminders';
+import { getDayInfo, type DayInfo } from '@/api/calendarInfo';
 
 const MONTH_NAMES = [
   'Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno',
@@ -25,12 +26,25 @@ function startOfWeek(d: Date): Date {
   return r;
 }
 
+function toIsoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export function CalendarPage() {
   const [anchor, setAnchor] = useState<Date>(new Date());
-  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
+  // Pre-seleziona OGGI così l'utente vede subito le info del giorno
+  const [selectedDay, setSelectedDay] = useState<Date | null>(new Date());
 
   const monthStart = startOfMonth(anchor);
   const gridStart = startOfWeek(monthStart);
+
+  // Info del giorno selezionato (santo, luna, sole, proverbio, ecc.)
+  const dayInfoQ = useQuery({
+    queryKey: ['calendar', 'day-info', selectedDay ? toIsoDate(selectedDay) : 'none'],
+    queryFn: () => getDayInfo(selectedDay ? toIsoDate(selectedDay) : undefined),
+    enabled: !!selectedDay,
+    staleTime: 60 * 60_000,
+  });
 
   const days: Date[] = useMemo(() => {
     const arr: Date[] = [];
@@ -168,10 +182,17 @@ export function CalendarPage() {
         })}
       </div>
 
-      {/* Selected day detail */}
+      {/* Day info card (santo, luna, sole, proverbio, ecc.) — visibile
+          per QUALSIASI giorno selezionato (oggi pre-selezionato by default). */}
+      {selectedDay && dayInfoQ.data && (
+        <DayInfoBox info={dayInfoQ.data} />
+      )}
+
+      {/* Selected day items */}
       {selectedDay && (
-        <section>
-          <h3 className="font-semibold text-md mb-2 mt-4">
+        <section className="mt-4">
+          <h3 className="font-semibold text-md mb-2">
+            Impegni di{' '}
             {selectedDay.toLocaleDateString('it-IT', {
               weekday: 'long',
               day: 'numeric',
@@ -216,5 +237,84 @@ export function CalendarPage() {
         <Skeleton className="h-4 w-32" />
       )}
     </div>
+  );
+}
+
+
+function DayInfoBox({ info }: { info: DayInfo }) {
+  return (
+    <section className="mt-3 p-3 sm:p-4 rounded-xl bg-bg-elevated border border-border-soft space-y-2">
+      <header className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-display text-lg text-text-primary capitalize">
+          {info.long_format_it}
+        </h3>
+        <span className="text-xs text-text-muted">
+          Settimana {info.week_number} · {info.season}
+        </span>
+      </header>
+
+      {info.is_holiday && info.holiday_name && (
+        <div className="px-2.5 py-1.5 rounded-md bg-accent-coral/10 text-accent-coral text-sm">
+          🎉 <strong>{info.holiday_name}</strong>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+        {info.saint && (
+          <div className="flex items-start gap-2">
+            <span className="text-accent-sun flex-shrink-0">✝️</span>
+            <span className="text-text-secondary">
+              <span className="text-text-muted text-xs block">Santo del giorno</span>
+              {info.saint}
+            </span>
+          </div>
+        )}
+        {info.sunrise && info.sunset && (
+          <div className="flex items-start gap-2">
+            <span className="text-accent-sun flex-shrink-0">☀️</span>
+            <span className="text-text-secondary">
+              <span className="text-text-muted text-xs block">Sole</span>
+              <span className="font-mono">
+                {info.sunrise} → {info.sunset}
+              </span>
+              {info.daylight_hours && (
+                <span className="text-text-muted text-xs ml-1">
+                  · {info.daylight_hours.toFixed(1)}h
+                </span>
+              )}
+            </span>
+          </div>
+        )}
+        <div className="flex items-start gap-2">
+          <span className="text-xl flex-shrink-0">{info.moon_phase_emoji}</span>
+          <span className="text-text-secondary capitalize">
+            <span className="text-text-muted text-xs block">Luna</span>
+            {info.moon_phase} · {Math.round(info.moon_illumination * 100)}%
+          </span>
+        </div>
+        {info.countdowns[0] && (
+          <div className="flex items-start gap-2">
+            <span className="flex-shrink-0">{info.countdowns[0].emoji}</span>
+            <span className="text-text-secondary">
+              <span className="text-text-muted text-xs block">Prossimo evento</span>
+              {info.countdowns[0].label}{' '}
+              <span className="text-text-muted">
+                ({info.countdowns[0].days_to === 0
+                  ? 'oggi'
+                  : info.countdowns[0].days_to === 1
+                    ? 'domani'
+                    : `fra ${info.countdowns[0].days_to}gg`})
+              </span>
+            </span>
+          </div>
+        )}
+      </div>
+
+      {info.proverb && (
+        <p className="text-xs italic text-text-muted border-l-2 border-border-soft pl-2 mt-2">
+          "{info.proverb}"
+        </p>
+      )}
+    </section>
   );
 }
