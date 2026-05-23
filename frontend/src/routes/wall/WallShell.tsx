@@ -9,6 +9,7 @@ import { fetchSummary } from '../../api/wall';
 import type { WallSummary } from '../../api/wall';
 import { WallAvatarPanel } from '../../components/wall/WallAvatarPanel';
 import { WallClock } from '../../components/wall/WallClock';
+import { WallDayStrip } from '../../components/wall/WallDayStrip';
 import { WallMic } from '../../components/wall/WallMic';
 import { WallNewsTicker } from '../../components/wall/WallNewsTicker';
 import { WeatherIcon } from '../../components/wall/WeatherIcon';
@@ -159,6 +160,9 @@ export function WallShell() {
           ))}
         </div>
       </nav>
+
+      {/* Day strip — santo, luna, alba/tramonto, proverbio, countdown */}
+      <WallDayStrip />
 
       {/* Outlet — `min-h-0` is the magic that lets `flex-1` actually
           clamp the main panel to remaining viewport so children that
