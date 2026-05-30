@@ -82,15 +82,16 @@ async def _rebuild_all_users(Session: async_sessionmaker) -> None:
     # Pick users with at least one chat message (ignore freshly-created
     # admins who never chatted).
     async with Session() as session:
-        from cara.models import Message
+        from cara.models import Conversation, Message
         users_q = (
             select(User)
             .where(User.is_active.is_(True))
             .where(
                 User.id.in_(
-                    select(Message.user_id).distinct().where(
-                        Message.role == "user"
-                    )
+                    select(Conversation.user_id)
+                    .join(Message, Message.conversation_id == Conversation.id)
+                    .where(Message.role == "user")
+                    .distinct()
                 )
             )
         )
