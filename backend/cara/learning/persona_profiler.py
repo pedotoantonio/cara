@@ -65,7 +65,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cara.ai.llm import LLMService, LLMUnavailableError
-from cara.models import Message, PersonaProfile, User
+from cara.models import Conversation, Message, PersonaProfile, User
 
 
 log = structlog.get_logger(__name__)
@@ -78,6 +78,14 @@ log = structlog.get_logger(__name__)
 # Chars-per-token estimate (Qwen2.5 IT tokenizer): ~2.5 chars/token.
 # Conservative side — better to chunk slightly small than overflow.
 _CHARS_PER_TOKEN = 2.5
+
+# RKLLM context window for the 1.5B build. The runtime hard-rejects any
+# prompt over this (observed: "prompt greater than max context ... max
+# context: 4092"). Used by _llm_call to clamp the prompt in CHARACTERS:
+# since BPE guarantees token_count ≤ char_count, a char-cap below this
+# budget makes token overflow impossible regardless of content density.
+_RKLLM_CONTEXT_TOKENS = 4092
+_CONTEXT_SAFETY_TOKENS = 64
 
 # EXTRACT call budget. Input prompt envelope ~600 tokens + chunk
 # (variable) + output 800. RKLLM context window is set to 4096 in
@@ -331,7 +339,32 @@ async def _llm_call(
     final text. We compose a Qwen2.5-style chat template manually
     (the same one `_chat_prompt.render_qwen_prompt` produces) and
     drain the async iterator.
+
+    Hard guard against context overflow: RKLLM rejects a prompt whose
+    token count exceeds the 4092-token window (it raises and the run
+    hangs). The chars/token estimate used for chunking underestimates
+    dense content (code/JSON/URLs tokenize near 1:1), so we add a
+    GUARANTEED clamp here: in BPE, token_count ≤ char_count, so capping
+    the rendered prompt's characters at the input-token budget makes
+    overflow impossible. We trim only the variable `user` content,
+    preserving the system prompt and the template tags.
     """
+    # Input budget = context window − reserved output − safety margin.
+    input_budget = _RKLLM_CONTEXT_TOKENS - max_new_tokens - _CONTEXT_SAFETY_TOKENS
+    envelope = (
+        "<|im_start|>system\n" + system + "<|im_end|>\n"
+        "<|im_start|>user\n" + "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+    max_user_chars = input_budget - len(envelope)
+    if max_user_chars < 0:
+        max_user_chars = 0
+    if len(user) > max_user_chars:
+        log.warning("persona.llm_call.user_truncated",
+                    user_chars=len(user), max_user_chars=max_user_chars,
+                    max_new_tokens=max_new_tokens)
+        user = user[:max_user_chars]
+
     prompt = (
         f"<|im_start|>system\n{system}<|im_end|>\n"
         f"<|im_start|>user\n{user}<|im_end|>\n"
@@ -439,6 +472,12 @@ async def rebuild_for_user(
         session.add(profile)
 
     # Determine watermark.
+    #
+    # Message has no `user_id` (it lives on Conversation) and `Message.id`
+    # is a UUID, so we can't use a monotonic int id as a watermark. We
+    # instead store the epoch-seconds of the last consumed message's
+    # `created_at` in the (int) `last_message_id_consumed` column and
+    # compare on `created_at`. Epoch seconds fit int32 until 2038.
     if full_rebuild:
         watermark = 0
         old_profile = ""
@@ -446,16 +485,24 @@ async def rebuild_for_user(
         watermark = profile.last_message_id_consumed or 0
         old_profile = profile.markdown or ""
 
+    watermark_dt = (
+        datetime.fromtimestamp(watermark, tz=timezone.utc)
+        if watermark
+        else datetime.fromtimestamp(0, tz=timezone.utc)
+    )
+
     # Fetch new messages (user role only — assistant messages confuse
-    # the extractor about WHOSE traits we're profiling).
+    # the extractor about WHOSE traits we're profiling). Scope to this
+    # user's conversations via join (Message has no user_id).
     msgs_q = (
         select(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
         .where(
-            Message.user_id == user_id,
-            Message.id > watermark,
+            Conversation.user_id == user_id,
+            Message.created_at > watermark_dt,
             Message.role == "user",
         )
-        .order_by(Message.id.asc())
+        .order_by(Message.created_at.asc())
     )
     msgs = (await session.execute(msgs_q)).scalars().all()
     if not msgs:
@@ -498,7 +545,12 @@ async def rebuild_for_user(
                      fragment_chars=len(fragment.markdown),
                      fragment_confidence=fragment.confidence)
 
-        new_watermark = chunks[-1][-1].id if chunks and chunks[-1] else watermark
+        # Watermark = epoch-seconds of the last consumed message's
+        # created_at (int column; UUID ids can't be a monotonic cursor).
+        if chunks and chunks[-1]:
+            new_watermark = int(chunks[-1][-1].created_at.timestamp())
+        else:
+            new_watermark = watermark
 
         # If still too long, run a compression-merge pass.
         if len(current_profile) > PROFILE_MAX_CHARS:
