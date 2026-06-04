@@ -59,6 +59,7 @@ PRESETS: tuple[WalletPreset, ...] = (
             {"widget_id": "tasks_mine",     "size": "medium", "config": {}},
             {"widget_id": "shopping_quick", "size": "medium", "config": {}},
             {"widget_id": "budget_month",   "size": "medium", "config": {}},
+            {"widget_id": "diet_summary",   "size": "medium", "config": {}},
             {"widget_id": "presence",       "size": "small",  "config": {}},
             {"widget_id": "weather_now",    "size": "small",  "config": {}},
             {"widget_id": "quick_actions",  "size": "medium", "config": {}},

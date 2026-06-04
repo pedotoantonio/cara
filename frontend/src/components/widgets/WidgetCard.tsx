@@ -27,6 +27,7 @@ const ICON_BY_ID: Record<string, IconName> = {
   news_brief: 'news',
   radio_now_playing: 'radio',
   now_playing: 'radio',
+  diet_summary: 'heart',
 };
 
 export function WidgetCard({ data, onRemove }: Props) {
@@ -94,6 +95,7 @@ function WidgetBody({ data }: { data: RenderedWidget }) {
     case 'now_playing':  return <NowPlayingView body={data.body} />;
     case 'weather':      return <WeatherView body={data.body} />;
     case 'quote':        return <QuoteView body={data.body} />;
+    case 'diet_summary': return <DietSummaryView body={data.body} />;
     default:             return <FallbackView body={data.body} />;
   }
 }
@@ -406,6 +408,124 @@ function QuoteView({ body }: { body: Record<string, unknown> }) {
       {author && (
         <p className="text-xs text-fg-muted mt-2 text-right">— {author}</p>
       )}
+    </div>
+  );
+}
+
+const CATEGORY_LABEL: Record<string, string> = {
+  legumi: 'Legumi', pesce: 'Pesce', carne: 'Carne', uova: 'Uova', formaggio: 'Formaggio',
+};
+
+interface DietCategory {
+  category: string;
+  color: string;
+  consumed: number;
+  target_min: number | null;
+  target_max: number | null;
+  state: string; // ok | under | over | warn
+}
+
+function DietSummaryView({ body }: { body: Record<string, unknown> }) {
+  if (body.available === false) {
+    return (
+      <p className="text-sm text-fg-muted">
+        Compila il profilo nutrizionale per vedere il resoconto.
+      </p>
+    );
+  }
+
+  const target = body.daily_target as number | null;
+  const consumed = (body.consumed as number) ?? 0;
+  const burned = (body.burned as number) ?? 0;
+  const remaining = body.remaining as number | null;
+  const adherence = (body.adherence_score as number) ?? 0;
+  const avgKcal = body.avg_kcal_per_day as number | null;
+  const water = (body.water_ml as number) ?? 0;
+  const categories = (body.categories as DietCategory[] | undefined) ?? [];
+  const profileComplete = body.profile_complete !== false;
+
+  // Progress of the day's intake vs target (0..1, clamped).
+  const pct =
+    target && target > 0 ? Math.min(1, consumed / target) : 0;
+  const remainingTone =
+    remaining != null && remaining < 0 ? 'text-alert' : 'text-violet-600 dark:text-violet-300';
+
+  const STATE_DOT: Record<string, string> = {
+    ok: 'bg-ok', under: 'bg-amber-400', over: 'bg-alert', warn: 'bg-amber-500',
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Energy balance */}
+      {profileComplete ? (
+        <div>
+          <div className="flex items-baseline justify-between">
+            <span className="font-display text-2xl text-fg leading-none">
+              {consumed}<span className="text-sm text-fg-muted"> kcal</span>
+            </span>
+            {target != null && (
+              <span className="text-2xs text-fg-muted">obiettivo {target}</span>
+            )}
+          </div>
+          <div className="h-1.5 rounded-full bg-surface2 overflow-hidden mt-1.5">
+            <div
+              className={cn('h-full', pct >= 1 ? 'bg-alert' : 'bg-accent')}
+              style={{ width: `${Math.round(pct * 100)}%` }}
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-2 mt-2 text-center">
+            <MiniStat label="bruciate" value={`−${burned}`} tone="text-emerald-600 dark:text-emerald-300" />
+            <MiniStat label="residue" value={remaining != null ? String(remaining) : '—'} tone={remainingTone} />
+            <MiniStat label="media/gg" value={avgKcal != null ? String(avgKcal) : '—'} tone="text-sky-600 dark:text-sky-300" />
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-fg-muted">Profilo incompleto — calorie non stimabili.</p>
+      )}
+
+      {/* Weekly adherence */}
+      <div className="pt-2 border-t border-fg/8">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-2xs text-fg-muted uppercase tracking-wide">Aderenza settimana</span>
+          <span className={cn(
+            'text-sm font-semibold',
+            adherence >= 80 ? 'text-ok' : adherence >= 60 ? 'text-amber-600' : 'text-alert',
+          )}>
+            {Math.round(adherence)}%
+          </span>
+        </div>
+        {categories.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {categories.map((c) => (
+              <span
+                key={c.category}
+                className="inline-flex items-center gap-1 rounded-pill bg-surface2 px-2 py-0.5 text-2xs text-fg"
+                title={`${CATEGORY_LABEL[c.category] ?? c.category}: ${c.consumed}${
+                  c.target_max != null ? `/${c.target_max}` : ''
+                }`}
+              >
+                <span className={cn('h-1.5 w-1.5 rounded-full', STATE_DOT[c.state] ?? 'bg-fg/30')} />
+                {CATEGORY_LABEL[c.category] ?? c.category} {c.consumed}
+                {c.target_max != null ? `/${c.target_max}` : ''}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Hydration */}
+      <div className="flex items-center gap-1.5 text-2xs text-fg-muted pt-1">
+        <span>💧 {(water / 1000).toFixed(1)}L oggi</span>
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value, tone }: { label: string; value: string; tone: string }) {
+  return (
+    <div>
+      <div className={cn('text-base font-bold leading-none', tone)}>{value}</div>
+      <div className="text-2xs text-fg-muted mt-0.5">{label}</div>
     </div>
   );
 }

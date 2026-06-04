@@ -256,12 +256,67 @@ def _make_extras(session: AsyncSession) -> _ExtraFetchers:
             return None
         return info
 
+    async def diet_summary(user_id: int) -> dict[str, Any] | None:
+        """Professional nutrition report: today's energy balance +
+        this week's adherence per protein category + macros + water."""
+        from cara.services import diet as diet_svc
+        from cara.services import diet_energy
+
+        today = diet_svc.rome_today()
+        energy = await diet_energy.energy_stats(
+            session, user_id=user_id, period="day", anchor=today
+        )
+
+        # Weekly adherence per protein category vs the active plan.
+        plan = await diet_svc.get_active_plan(session, user_id)
+        rules = await diet_svc.get_rules(session, plan.id) if plan else {}
+        rollup = await diet_svc.week_rollup(session, user_id, today)
+        adherence = diet_svc.adherence_score(rollup.consumed, rules)
+        categories = []
+        for cat in ("legumi", "pesce", "carne", "uova", "formaggio"):
+            rule = rules.get(cat)
+            consumed = rollup.consumed.get(cat, 0)
+            categories.append({
+                "category": cat,
+                "color": diet_svc.color_for(cat),
+                "consumed": consumed,
+                "target_min": rule.target_min if rule else None,
+                "target_max": rule.target_max if rule else None,
+                "state": diet_svc.category_state(consumed, rule),
+            })
+
+        # Today's macros from logged meals (sum over parsed items via CREA
+        # is not stored per-macro; we surface kcal + water + adherence,
+        # which is what the plan actually tracks).
+        intake = await diet_svc.get_intake(session, user_id, today)
+
+        return {
+            "available": True,
+            "profile_complete": energy.profile_complete,
+            # Energy balance (today)
+            "bmr": energy.bmr,
+            "tdee": energy.tdee,
+            "daily_target": energy.daily_target,
+            "consumed": energy.consumed,
+            "burned": energy.burned,
+            "remaining": energy.remaining,
+            # Weekly adherence
+            "adherence_score": adherence,
+            "avg_kcal_per_day": rollup.avg_kcal_per_day,
+            "categories": categories,
+            "days_logged": rollup.days_logged,
+            # Hydration today
+            "water_ml": intake.water_ml,
+            "coffee_count": intake.coffee_count,
+        }
+
     return _ExtraFetchers(
         budget_rollup=budget_rollup,
         kids_homework=kids_homework,
         habit_next=habit_next,
         news_brief=news_brief,
         now_playing=now_playing,
+        diet_summary=diet_summary,
     )
 
 

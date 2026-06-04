@@ -48,6 +48,9 @@ NewsBriefFn = Callable[[str, int], Awaitable[list[dict[str, Any]]]]
 # () → {title, source, started_unix?} | None — currently-playing station
 NowPlayingFn = Callable[[], Awaitable[dict[str, Any] | None]]
 
+# (user_id) → professional diet report dict (energy + adherence + macros)
+DietSummaryFn = Callable[[int], Awaitable[dict[str, Any] | None]]
+
 
 @dataclass
 class _ExtraFetchers:
@@ -58,6 +61,7 @@ class _ExtraFetchers:
     habit_next: HabitNextFn | None = None
     news_brief: NewsBriefFn | None = None
     now_playing: NowPlayingFn | None = None
+    diet_summary: DietSummaryFn | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +349,50 @@ class RadioNowPlayingWidget:
 
 
 # ---------------------------------------------------------------------------
+# diet_summary — resoconto professionale della dieta
+# ---------------------------------------------------------------------------
+
+
+class DietSummaryWidget:
+    """Resoconto nutrizionale professionale per il wallet.
+
+    Aggrega in un colpo solo: bilancio energetico di oggi (introdotte /
+    bruciate / fabbisogno / residuo, BMR+TDEE Mifflin-St Jeor),
+    aderenza settimanale al piano per categoria proteica, media
+    calorica e idratazione. È volutamente ricco — il wallet è il posto
+    dove l'utente vuole il quadro completo a colpo d'occhio.
+
+    Le calorie restano indicative (vedi modulo Nutrizione); il piano
+    ragiona per frequenze settimanali.
+    """
+
+    id = "diet_summary"
+    title_default = "Nutrizione"
+    refresh_interval_s = 300
+    available_for_roles: tuple[str, ...] = ()
+
+    def __init__(self, fetchers: _ExtraFetchers) -> None:
+        self._f = fetchers
+
+    async def render(
+        self, ctx: WidgetContext, *, size: WidgetSize = WidgetSize.MEDIUM,
+    ) -> WidgetData:
+        body: dict[str, Any] = {"available": False}
+        if self._f.diet_summary is not None and ctx.user_id is not None:
+            try:
+                report = await self._f.diet_summary(ctx.user_id)
+            except Exception:
+                report = None
+            if report:
+                body = report
+        return WidgetData(
+            widget_id=self.id, title=self.title_default, kind="diet_summary",
+            body=body, deep_link="/diet",
+            last_updated_unix=time.time(),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Batch registration
 # ---------------------------------------------------------------------------
 
@@ -354,10 +402,11 @@ def register_extras(
     *,
     registry,
 ) -> None:
-    """Register all 6 extra widgets on `registry`."""
+    """Register all extra widgets on `registry`."""
     registry.register(BudgetMonthWidget(fetchers))
     registry.register(KidsHomeworkWidget(fetchers))
     registry.register(RoutineNextWidget(fetchers))
     registry.register(CaraQuoteWidget())
     registry.register(NewsBriefWidget(fetchers))
     registry.register(RadioNowPlayingWidget(fetchers))
+    registry.register(DietSummaryWidget(fetchers))
