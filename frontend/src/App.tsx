@@ -79,6 +79,7 @@ import { ProposalsPage } from './routes/ProposalsPage';
 import { RadioPage } from './routes/RadioPage';
 import { RemindersFormPage } from './routes/RemindersFormPage';
 import { RemindersHomePage } from './routes/RemindersHomePage';
+import { DietHomePage } from './routes/DietHomePage';
 import { RemindersListPage } from './routes/RemindersListPage';
 import { RemindersSituationPage } from './routes/RemindersSituationPage';
 import { SettingsPage } from './routes/SettingsPage';
@@ -275,6 +276,7 @@ export default function App() {
           <Route path="reminders/category/:category" element={<RemindersSituationPage />} />
           <Route path="reminders/new/:slug" element={<RemindersFormPage />} />
           <Route path="reminders/list" element={<RemindersListPage />} />
+          <Route path="diet" element={<DietHomePage />} />
           <Route path="discoveries" element={<DiscoveriesPage />} />
           <Route path="admin" element={<AdminPage />} />
           <Route path="admin/diagnostics" element={<DiagnosticsPage />} />

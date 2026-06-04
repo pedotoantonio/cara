@@ -235,6 +235,15 @@ const Mood = (p: SVGProps<SVGSVGElement>) => (
   </svg>
 );
 
+const Scan = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...baseProps} {...p}>
+    {/* corners of a scan frame */}
+    <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" />
+    {/* barcode bars */}
+    <path d="M8 8.5v7M11 8.5v7M14 8.5v7M16.5 8.5v7" />
+  </svg>
+);
+
 // ──────────────────────────────── Registry ──
 
 export const ICON_SET = {
@@ -267,6 +276,7 @@ export const ICON_SET = {
   bell: Bell,
   sparkle: Sparkle,
   mood: Mood,
+  scan: Scan,
 } as const;
 
 export type IconName = keyof typeof ICON_SET;

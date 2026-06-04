@@ -52,6 +52,7 @@ function MenuPageInner({ user }: { user: User }) {
     { to: '/shopping', icon: 'shopping', title: 'Lista spesa',  subtitleFn: () => 'Cosa serve oggi',  tint: 'terracotta' },
     { to: '/notes',    icon: 'note',     title: 'Note',         subtitleFn: () => 'I tuoi appunti',   tint: 'amber' },
     { to: '/wallet',   icon: 'wallet',   title: 'Wallet',       subtitleFn: () => 'Bolletta, budget', tint: 'sage' },
+    { to: '/diet',     icon: 'heart',    title: 'Nutrizione',   subtitleFn: () => 'Dieta e frequenze',tint: 'mint' },
     { to: '/news',     icon: 'news',     title: 'Notizie',      subtitleFn: () => 'Cosa succede',     tint: 'plum' },
     { to: '/memory',   icon: 'spark',    title: 'Memoria',      subtitleFn: () => 'Cosa Cara ricorda',tint: 'mint' },
     { to: '/integrations', icon: 'sparkle', title: 'Integrazioni', subtitleFn: () => 'Calendar, Gmail',  tint: 'coral' },

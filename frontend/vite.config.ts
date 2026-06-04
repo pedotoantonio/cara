@@ -90,6 +90,13 @@ export default defineConfig({
             url: '/reminders?source=shortcut',
             icons: [{ src: '/icon-192.png', sizes: '192x192' }],
           },
+          {
+            name: 'Nutrizione',
+            short_name: 'Dieta',
+            description: 'Logga i pasti e segui le frequenze del piano',
+            url: '/diet?source=shortcut',
+            icons: [{ src: '/icon-192.png', sizes: '192x192' }],
+          },
         ],
       },
       injectManifest: {

@@ -10,6 +10,17 @@ from cara.models.conversation import Conversation, Message
 from cara.models.device import Device
 from cara.models.device_alias import DeviceAlias
 from cara.models.device_permission import DevicePermission
+from cara.models.diet import (
+    DailyIntake,
+    DietPlan,
+    DietProfile,
+    DietRule,
+    ExerciseLog,
+    FoodItem,
+    MealLog,
+    Recipe,
+    WeeklySummary,
+)
 from cara.models.email_proposal import EmailLearningSignal, EmailProposal
 from cara.models.event import Event
 from cara.models.face import FaceDescriptor, FaceProfile, FaceSettings
@@ -54,6 +65,15 @@ __all__ = [
     "Device",
     "DeviceAlias",
     "DevicePermission",
+    "DailyIntake",
+    "DietPlan",
+    "DietProfile",
+    "DietRule",
+    "ExerciseLog",
+    "FoodItem",
+    "MealLog",
+    "Recipe",
+    "WeeklySummary",
     "EmailLearningSignal",
     "EmailProposal",
     "Event",

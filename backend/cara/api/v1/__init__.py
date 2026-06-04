@@ -16,6 +16,7 @@ from cara.api.v1 import (
     device_aliases,
     devices,
     diagnostics,
+    diet,
     events,
     face,
     family_ws,
@@ -63,6 +64,7 @@ router.include_router(conversations.router)
 router.include_router(device_aliases.router)
 router.include_router(devices.router)
 router.include_router(diagnostics.router)
+router.include_router(diet.router)
 router.include_router(events.router)
 router.include_router(face.router)
 router.include_router(family_ws.router)
