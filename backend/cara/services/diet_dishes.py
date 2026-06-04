@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cara.models.diet import PROTEIN_CATEGORIES, FoodItem, Recipe
@@ -281,56 +281,135 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+# Proteine/alimenti-chiave riconosciuti nei titoli dei piatti. Servono a
+# VALIDARE che la ricetta generata dal LLM parli davvero del piatto chiesto
+# (il 1.5B a volte deriva — es. titolo "pollo" → ricetta "tonno"). Se
+# l'ingrediente principale del titolo non compare nella ricetta, la
+# scartiamo (niente cache di ricette sbagliate).
+_KEY_FOODS: tuple[str, ...] = (
+    "pollo", "tacchino", "vitello", "manzo", "maiale", "tonno", "merluzzo",
+    "salmone", "gamberi", "pesce", "uova", "frittata", "lenticchie",
+    "fagioli", "ceci", "piselli", "mozzarella", "ricotta", "formaggio",
+)
+
+
+def _key_foods_in(text: str) -> set[str]:
+    """Alimenti-chiave presenti in un testo (match per prefisso robusto a
+    singolare/plurale: 'pollo'/'polli', 'uovo'/'uova' via 'uov')."""
+    low = text.lower()
+    out: set[str] = set()
+    for kw in _KEY_FOODS:
+        stem = kw[:-1] if kw.endswith("o") or kw.endswith("a") else kw
+        if stem in low:
+            out.add(kw)
+    return out
+
+
+def _recipe_matches_title(title: str, ingredients: list[dict]) -> bool:
+    """True se gli alimenti-chiave del titolo compaiono negli ingredienti.
+
+    Se il titolo non ha alimenti-chiave noti, non possiamo validare →
+    accettiamo (no false reject). Se ne ha, almeno uno deve comparire.
+    """
+    wanted = _key_foods_in(title)
+    if not wanted:
+        return True
+    ing_text = " ".join(str(i.get("item", "")) for i in ingredients)
+    got = _key_foods_in(ing_text)
+    return bool(wanted & got)
+
+
+async def _generate_recipe_once(title: str) -> tuple[list[dict], str | None]:
+    """Una singola generazione LLM → (ingredients, steps). Vuoto su errore."""
+    from cara.ai import get_llm_service
+
+    llm = get_llm_service()
+    prompt = _render_recipe_prompt(title)
+    chunks: list[str] = []
+    async for tok in llm.generate(
+        prompt, max_new_tokens=_RECIPE_MAX_NEW_TOKENS, temperature=0.2
+    ):
+        chunks.append(tok.text)
+    raw = _extract_json("".join(chunks))
+    if not raw:
+        return [], None
+    ings = raw.get("ingredienti") or []
+    ingredients = [
+        {"item": str(i.get("nome", "")).strip(), "qty": str(i.get("qta", "")).strip()}
+        for i in ings
+        if isinstance(i, dict) and i.get("nome")
+    ][:8]
+    passi = raw.get("passi") or []
+    steps = "\n".join(
+        f"{n}. {str(p).strip()}" for n, p in enumerate(passi[:6], 1) if str(p).strip()
+    ) or None
+    return ingredients, steps
+
+
+def _seed_ingredients_from_title(title: str) -> list[dict]:
+    """Fallback DETERMINISTICO: gli alimenti-chiave del titolo come
+    ingredienti, così la ricetta parla sempre del piatto giusto anche
+    quando il LLM non è disponibile o deraglia."""
+    found = _key_foods_in(title)
+    base = [{"item": f.capitalize(), "qty": ""} for f in sorted(found)]
+    base.append({"item": "Olio EVO a crudo", "qty": "2-3 cucchiaini"})
+    base.append({"item": "Verdura di stagione", "qty": "a piacere"})
+    return base
+
+
 async def get_or_build_recipe(
     session: AsyncSession, *, title: str
 ) -> Recipe:
     """Ritorna la ricetta per `title`: dal DB se esiste (seed o cache),
-    altrimenti la genera col LLM e la cacha. Fallback robusto se il LLM
-    non è disponibile (ricetta minima dal titolo)."""
+    altrimenti la genera col LLM e la cacha.
+
+    Robustezza:
+      * lookup per match ESATTO (no ilike → niente wildcard SQL nel titolo
+        e niente match parziali tra piatti diversi);
+      * VALIDAZIONE: la ricetta LLM deve contenere l'alimento-chiave del
+        titolo, altrimenti si ritenta (1 volta) e poi si usa il fallback
+        deterministico. Così non si cacha mai una ricetta col proteina
+        sbagliata (es. pollo → tonno).
+    """
     name = title.strip()[:160]
+    # Match esatto case-insensitive, senza interpretare wildcard.
     existing = (
-        await session.execute(select(Recipe).where(Recipe.name.ilike(name)))
+        await session.execute(
+            select(Recipe).where(func.lower(Recipe.name) == name.lower())
+        )
     ).scalar_one_or_none()
     if existing is not None:
-        return existing
+        # Se una ricetta cachata NON corrisponde al titolo (cache vecchia
+        # sbagliata), la rigeneriamo invece di restituirla.
+        if _recipe_matches_title(name, existing.ingredients or []):
+            return existing
+        log.warning("diet.recipe.cache_mismatch", title=name,
+                    cached=[i.get("item") for i in (existing.ingredients or [])])
+        await session.delete(existing)
+        await session.flush()
 
     ingredients: list[dict] = []
     steps: str | None = None
     source = "fallback"
 
     try:
-        from cara.ai import get_llm_service
-        from cara.ai.llm import LLMUnavailableError  # noqa: F401
-
-        llm = get_llm_service()
-        prompt = _render_recipe_prompt(name)
-        chunks: list[str] = []
-        async for tok in llm.generate(
-            prompt, max_new_tokens=_RECIPE_MAX_NEW_TOKENS, temperature=0.3
-        ):
-            chunks.append(tok.text)
-        raw = _extract_json("".join(chunks))
-        if raw:
-            ings = raw.get("ingredienti") or []
-            ingredients = [
-                {"item": str(i.get("nome", "")).strip(), "qty": str(i.get("qta", "")).strip()}
-                for i in ings
-                if isinstance(i, dict) and i.get("nome")
-            ][:8]
-            passi = raw.get("passi") or []
-            steps = "\n".join(
-                f"{n}. {str(p).strip()}" for n, p in enumerate(passi[:6], 1) if str(p).strip()
-            ) or None
-            if ingredients:
-                source = "cara-llm"
+        for attempt in range(2):
+            ings, stp = await _generate_recipe_once(name)
+            if ings and _recipe_matches_title(name, ings):
+                ingredients, steps, source = ings, stp, "cara-llm"
+                break
+            log.info("diet.recipe.attempt_rejected", title=name, attempt=attempt,
+                     got=[i.get("item") for i in ings])
     except Exception as exc:  # noqa: BLE001 — fallback below
         log.info("diet.recipe.llm_failed", title=name, error=str(exc))
 
     if not ingredients:
-        # Fallback minimale: niente passi inventati, onesto.
+        # Fallback deterministico: ingredienti dal titolo (proteina giusta).
+        ingredients = _seed_ingredients_from_title(name)
         steps = (
-            "Ricetta non disponibile offline. Prepara il piatto con gli "
-            "ingredienti elencati, olio EVO a crudo e verdura di stagione."
+            "Ricetta di base: cuoci l'ingrediente principale in modo "
+            "semplice (forno/piastra/lessato), accompagna con verdura di "
+            "stagione e completa con olio EVO a crudo."
         )
         source = "fallback"
 
