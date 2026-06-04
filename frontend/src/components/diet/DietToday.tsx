@@ -6,8 +6,6 @@ import { useCallback, useEffect, useState } from 'react';
 
 import {
   MEAL_LABEL,
-  addCoffee,
-  addWater,
   getEnergy,
   getSuggest,
   getToday,
@@ -20,6 +18,7 @@ import {
 import { Button, Card, Icon } from '../../design';
 import { BarcodeScanner } from './BarcodeScanner';
 import { DishIdeas } from './DishIdeas';
+import { IntakeSheet } from './IntakeSheet';
 import { MealDetailSheet } from './MealDetailSheet';
 import { MealLogSheet } from './MealLogSheet';
 
@@ -50,6 +49,7 @@ export function DietToday() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
   const [detailMeal, setDetailMeal] = useState<MealLog | null>(null);
+  const [intakeKind, setIntakeKind] = useState<'water' | 'coffee' | null>(null);
   const meal = currentMeal();
 
   const refresh = useCallback(() => {
@@ -63,15 +63,6 @@ export function DietToday() {
   useEffect(() => {
     refresh();
   }, [refresh]);
-
-  async function water() {
-    const i = await addWater(250);
-    setToday((t) => (t ? { ...t, water_ml: i.water_ml } : t));
-  }
-  async function coffee() {
-    const i = await addCoffee(1);
-    setToday((t) => (t ? { ...t, coffee_count: i.coffee_count } : t));
-  }
 
   if (!today) return <div className="text-fg-muted text-sm">Caricamento…</div>;
 
@@ -124,45 +115,56 @@ export function DietToday() {
 
       {/* Contatori acqua / caffè / frutta */}
       <div className="grid grid-cols-3 gap-3">
-        <Card className="text-center">
-          <div className="text-2xl font-bold text-sky-500">
-            {(today.water_ml / 1000).toFixed(1)}L
-          </div>
-          <div className="text-2xs text-fg-muted mb-2">
-            obiettivo {(today.water_target_min / 1000).toFixed(1)}–
-            {(today.water_target_max / 1000).toFixed(1)}L
-          </div>
-          <div className="h-1.5 rounded-full bg-surface2 overflow-hidden mb-2">
-            <div className="h-full bg-sky-400" style={{ width: `${waterPct}%` }} />
-          </div>
-          <Button size="sm" variant="ghost" fullWidth onClick={water}>
-            +250 ml
-          </Button>
-        </Card>
-
-        <Card className="text-center">
-          <div className="text-2xl font-bold text-amber-700 dark:text-amber-300">
-            {today.coffee_count}
-          </div>
-          <div className="text-2xs text-fg-muted mb-2">max {today.coffee_max}/giorno</div>
-          <div
-            className={`text-xs mb-2 ${
-              today.coffee_count > today.coffee_max ? 'text-alert' : 'text-fg-muted'
-            }`}
+        <Card className="text-center !p-0 overflow-hidden">
+          <button
+            onClick={() => setIntakeKind('water')}
+            className="w-full px-3 py-4 hover:bg-sky-500/5 active:scale-[0.98] transition"
+            aria-label="Aggiungi acqua"
           >
-            ☕ caffè
-          </div>
-          <Button size="sm" variant="ghost" fullWidth onClick={coffee}>
-            +1
-          </Button>
+            <div className="text-3xl mb-0.5">💧</div>
+            <div className="text-2xl font-bold text-sky-500">
+              {(today.water_ml / 1000).toFixed(1)}L
+            </div>
+            <div className="text-2xs text-fg-muted mb-2">
+              obiettivo {(today.water_target_min / 1000).toFixed(1)}–
+              {(today.water_target_max / 1000).toFixed(1)}L
+            </div>
+            <div className="h-1.5 rounded-full bg-surface2 overflow-hidden">
+              <div className="h-full bg-sky-400" style={{ width: `${waterPct}%` }} />
+            </div>
+            <div className="text-2xs text-sky-500 mt-2 font-medium">tocca per aggiungere</div>
+          </button>
+        </Card>
+
+        <Card className="text-center !p-0 overflow-hidden">
+          <button
+            onClick={() => setIntakeKind('coffee')}
+            className="w-full px-3 py-4 hover:bg-amber-500/5 active:scale-[0.98] transition"
+            aria-label="Aggiungi caffè"
+          >
+            <div className="text-3xl mb-0.5">☕</div>
+            <div className="text-2xl font-bold text-amber-700 dark:text-amber-300">
+              {today.coffee_count}
+            </div>
+            <div className="text-2xs text-fg-muted mb-2">max {today.coffee_max}/giorno</div>
+            <div
+              className={`text-xs ${
+                today.coffee_count > today.coffee_max ? 'text-alert' : 'text-fg-muted'
+              }`}
+            >
+              caffè
+            </div>
+            <div className="text-2xs text-amber-600 dark:text-amber-300 mt-2 font-medium">tocca per aggiungere</div>
+          </button>
         </Card>
 
         <Card className="text-center">
+          <div className="text-3xl mb-0.5">🍎</div>
           <div className="text-2xl font-bold text-rose-500">{today.fruit_servings}</div>
           <div className="text-2xs text-fg-muted mb-2">
             obiettivo {today.fruit_target_min}-3/giorno
           </div>
-          <div className="text-xs text-fg-muted">🍎 frutta</div>
+          <div className="text-xs text-fg-muted">frutta</div>
         </Card>
       </div>
 
@@ -245,6 +247,13 @@ export function DietToday() {
       <MealDetailSheet
         meal={detailMeal}
         onClose={() => setDetailMeal(null)}
+        onChanged={() => refresh()}
+      />
+
+      <IntakeSheet
+        kind={intakeKind}
+        current={intakeKind === 'water' ? today.water_ml : today.coffee_count}
+        onClose={() => setIntakeKind(null)}
         onChanged={() => refresh()}
       />
     </div>

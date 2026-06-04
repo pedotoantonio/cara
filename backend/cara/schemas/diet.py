@@ -194,7 +194,9 @@ class SuggestOut(BaseModel):
 
 
 class WaterIn(BaseModel):
-    ml: int = Field(default=250, ge=0, le=3000)
+    # Negativo consentito per correzioni (es. "ho segnato troppo"); il
+    # totale del giorno non scende comunque sotto 0 (clamp nel service).
+    ml: int = Field(default=250, ge=-3000, le=3000)
 
 
 class CoffeeIn(BaseModel):
