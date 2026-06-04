@@ -50,6 +50,7 @@ from cara.schemas.diet import (
     MealLogIn,
     MealLogOut,
     MealLogResult,
+    MealLogUpdate,
     MetActivityOut,
     RecipeOut,
     SuggestOut,
@@ -99,6 +100,46 @@ async def log_meal(
         vegetable_present=grounded.vegetable_present,
         fruit_present=grounded.fruit_present,
     )
+
+
+@router.patch("/meal/{meal_id}", response_model=MealLogResult)
+async def update_meal(
+    meal_id: int,
+    payload: MealLogUpdate,
+    user: User = Depends(get_current_user),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> MealLogResult:
+    """Modifica un pasto: sposta lo slot (meal_type) e/o riscrivi il testo
+    (ri-analizzato dal parser)."""
+    result = await diet_svc.update_meal(
+        session,
+        meal_id,
+        user_id=user.id,
+        meal_type=payload.meal_type,
+        free_text=payload.free_text,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="pasto non trovato")
+    row, grounded = result
+    return MealLogResult(
+        log=MealLogOut.model_validate(row),
+        warnings=grounded.warnings,
+        carb_present=grounded.carb_present,
+        vegetable_present=grounded.vegetable_present,
+        fruit_present=grounded.fruit_present,
+    )
+
+
+@router.delete("/meal/{meal_id}", status_code=204)
+async def delete_meal(
+    meal_id: int,
+    user: User = Depends(get_current_user),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> None:
+    """Elimina un pasto registrato."""
+    ok = await diet_svc.delete_meal(session, meal_id, user_id=user.id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="pasto non trovato")
 
 
 # ─── Today ─────────────────────────────────────────────────────────

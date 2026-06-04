@@ -105,6 +105,15 @@ class MealLogResult(BaseModel):
     fruit_present: bool = False
 
 
+class MealLogUpdate(BaseModel):
+    """PATCH /diet/meal/{id} — move slot and/or re-edit the text."""
+
+    meal_type: str | None = Field(
+        default=None, pattern="^(colazione|spuntino|pranzo|cena)$"
+    )
+    free_text: str | None = Field(default=None, min_length=1, max_length=1000)
+
+
 # ─── Today view ────────────────────────────────────────────────────
 
 

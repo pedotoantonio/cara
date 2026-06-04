@@ -12,6 +12,7 @@ import {
   getSuggest,
   getToday,
   type EnergyStats,
+  type MealLog,
   type MealType,
   type Suggest,
   type Today,
@@ -19,6 +20,7 @@ import {
 import { Button, Card, Icon } from '../../design';
 import { BarcodeScanner } from './BarcodeScanner';
 import { DishIdeas } from './DishIdeas';
+import { MealDetailSheet } from './MealDetailSheet';
 import { MealLogSheet } from './MealLogSheet';
 
 function CalCell({
@@ -47,6 +49,7 @@ export function DietToday() {
   const [energy, setEnergy] = useState<EnergyStats | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
+  const [detailMeal, setDetailMeal] = useState<MealLog | null>(null);
   const meal = currentMeal();
 
   const refresh = useCallback(() => {
@@ -81,23 +84,39 @@ export function DietToday() {
         <h2 className="font-semibold mb-3">I pasti di oggi</h2>
         <ul className="space-y-2">
           {today.slots.map((s) => (
-            <li key={s.meal_type} className="flex items-center gap-3">
-              <span
-                className={`h-6 w-6 rounded-full grid place-items-center text-xs ${
-                  s.done ? 'bg-ok/20 text-ok' : 'bg-surface2 text-fg-muted'
-                }`}
-              >
-                {s.done ? <Icon name="check" size={14} /> : '·'}
-              </span>
-              <span className={s.done ? 'font-medium' : 'text-fg-muted'}>
-                {MEAL_LABEL[s.meal_type]}
-              </span>
-              {s.done && s.logs[0]?.free_text && (
-                <span className="text-fg-muted text-sm truncate ml-1">
-                  — {s.logs[0].free_text}
-                </span>
+            <li key={s.meal_type}>
+              {s.done && s.logs.length > 0 ? (
+                <div className="space-y-1">
+                  {s.logs.map((lg) => (
+                    <button
+                      key={lg.id}
+                      onClick={() => setDetailMeal(lg)}
+                      className="w-full flex items-center gap-3 text-left rounded-xl px-1.5 py-1 -mx-1.5 hover:bg-surface1 active:scale-[0.99] transition"
+                    >
+                      <span className="h-6 w-6 rounded-full grid place-items-center text-xs bg-ok/20 text-ok shrink-0">
+                        <Icon name="check" size={14} />
+                      </span>
+                      <span className="font-medium shrink-0">{MEAL_LABEL[s.meal_type]}</span>
+                      {lg.free_text && (
+                        <span className="text-fg-muted text-sm truncate ml-1">
+                          — {lg.free_text}
+                        </span>
+                      )}
+                      <span className="ml-auto text-fg-muted shrink-0">
+                        <Icon name="settings" size={14} />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 px-1.5 py-1">
+                  <span className="h-6 w-6 rounded-full grid place-items-center text-xs bg-surface2 text-fg-muted shrink-0">
+                    ·
+                  </span>
+                  <span className="text-fg-muted">{MEAL_LABEL[s.meal_type]}</span>
+                  <span className="ml-auto text-xs text-fg-muted">manca</span>
+                </div>
               )}
-              {!s.done && <span className="ml-auto text-xs text-fg-muted">manca</span>}
             </li>
           ))}
         </ul>
@@ -221,6 +240,12 @@ export function DietToday() {
         defaultMeal={meal}
         onClose={() => setScanOpen(false)}
         onLogged={() => refresh()}
+      />
+
+      <MealDetailSheet
+        meal={detailMeal}
+        onClose={() => setDetailMeal(null)}
+        onChanged={() => refresh()}
       />
     </div>
   );

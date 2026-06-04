@@ -269,6 +269,26 @@ export async function getToday(): Promise<Today> {
   return json(await authFetch(`${API}/today`));
 }
 
+/** Modifica un pasto: sposta lo slot e/o riscrivi il testo. */
+export async function updateMeal(
+  id: number,
+  patch: { meal_type?: MealType; free_text?: string },
+): Promise<MealLogResult> {
+  return json(
+    await authFetch(`${API}/meal/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+/** Elimina un pasto registrato. */
+export async function deleteMeal(id: number): Promise<void> {
+  const r = await authFetch(`${API}/meal/${id}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+}
+
 export async function getWeek(anchor?: string): Promise<Week> {
   const q = anchor ? `?anchor=${anchor}` : '';
   return json(await authFetch(`${API}/week${q}`));

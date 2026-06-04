@@ -452,6 +452,80 @@ async def meals_on_day(session: AsyncSession, user_id: int, day: date) -> list[M
     )
 
 
+async def get_meal(session: AsyncSession, meal_id: int, *, user_id: int) -> MealLog | None:
+    """Fetch one meal log owned by `user_id` (None if missing/not owned)."""
+    row = (
+        await session.execute(
+            select(MealLog).where(MealLog.id == meal_id, MealLog.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    return row
+
+
+async def delete_meal(session: AsyncSession, meal_id: int, *, user_id: int) -> bool:
+    """Delete a meal log. Returns True if a row was removed."""
+    row = await get_meal(session, meal_id, user_id=user_id)
+    if row is None:
+        return False
+    await session.delete(row)
+    await session.commit()
+    log.info("diet.meal_deleted", user_id=user_id, meal_id=meal_id)
+    return True
+
+
+async def update_meal(
+    session: AsyncSession,
+    meal_id: int,
+    *,
+    user_id: int,
+    meal_type: str | None = None,
+    free_text: str | None = None,
+) -> tuple[MealLog, GroundedMeal] | None:
+    """Update a meal log. Changing `meal_type` just moves the slot.
+    Changing `free_text` re-parses and re-grounds the meal (so items,
+    kcal, protein category and warnings stay consistent). Returns the
+    updated row + grounding, or None if not found."""
+    row = await get_meal(session, meal_id, user_id=user_id)
+    if row is None:
+        return None
+
+    if meal_type is not None and meal_type in MEAL_TYPES:
+        row.meal_type = meal_type
+
+    grounded: GroundedMeal | None = None
+    if free_text is not None:
+        catalog_list = await get_catalog(session)
+        catalog = {f.name: f for f in catalog_list}
+        plan = await get_active_plan(session, user_id)
+        rules = await get_rules(session, plan.id) if plan else {}
+        parsed = await parse_meal_text(free_text, [f.name for f in catalog_list])
+        context_flags = detect_context_flags(free_text)
+        grounded = _ground(parsed, row.meal_type, catalog, rules, context_flags)
+        row.free_text = free_text
+        row.parsed_items = grounded.parsed_items
+        row.est_kcal = grounded.est_kcal
+        row.protein_category = grounded.protein_category
+        row.context_flags = grounded.context_flags
+
+    await session.commit()
+    await session.refresh(row)
+    log.info("diet.meal_updated", user_id=user_id, meal_id=meal_id,
+             meal_type=row.meal_type, reparsed=free_text is not None)
+    if grounded is None:
+        # Build a minimal grounding view from the stored row.
+        grounded = GroundedMeal(
+            parsed_items=row.parsed_items or [],
+            protein_category=row.protein_category,
+            est_kcal=row.est_kcal,
+            warnings=[],
+            carb_present=False,
+            vegetable_present=False,
+            fruit_present=False,
+            context_flags=row.context_flags or {},
+        )
+    return row, grounded
+
+
 async def get_intake(session: AsyncSession, user_id: int, day: date) -> DailyIntake:
     row = (
         await session.execute(
