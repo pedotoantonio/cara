@@ -9,13 +9,15 @@ import { useState } from 'react';
 import { DISCLAIMER } from '../api/diet';
 import { DietEnergy } from '../components/diet/DietEnergy';
 import { DietFoods } from '../components/diet/DietFoods';
+import { DietHistory } from '../components/diet/DietHistory';
 import { DietToday } from '../components/diet/DietToday';
 import { DietWeek } from '../components/diet/DietWeek';
 
-type Tab = 'oggi' | 'energia' | 'settimana' | 'catalogo';
+type Tab = 'oggi' | 'storico' | 'energia' | 'settimana' | 'catalogo';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'oggi', label: 'Oggi' },
+  { key: 'storico', label: 'Storico' },
   { key: 'energia', label: 'Energia' },
   { key: 'settimana', label: 'Settimana' },
   { key: 'catalogo', label: 'Catalogo' },
@@ -54,6 +56,7 @@ export function DietHomePage() {
       </div>
 
       {tab === 'oggi' && <DietToday />}
+      {tab === 'storico' && <DietHistory />}
       {tab === 'energia' && <DietEnergy />}
       {tab === 'settimana' && <DietWeek />}
       {tab === 'catalogo' && <DietFoods />}

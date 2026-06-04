@@ -452,6 +452,28 @@ async def meals_on_day(session: AsyncSession, user_id: int, day: date) -> list[M
     )
 
 
+async def meals_in_range(
+    session: AsyncSession, user_id: int, start: date, end: date
+) -> list[MealLog]:
+    """All meals for `user_id` between `start` and `end` (inclusive),
+    ordered most-recent first. Used by the history view."""
+    start_dt = datetime.combine(start, time.min, tzinfo=ROME).astimezone(UTC)
+    end_dt = datetime.combine(end, time.max, tzinfo=ROME).astimezone(UTC)
+    return list(
+        (
+            await session.execute(
+                select(MealLog)
+                .where(
+                    MealLog.user_id == user_id,
+                    MealLog.logged_at >= start_dt,
+                    MealLog.logged_at <= end_dt,
+                )
+                .order_by(MealLog.logged_at.desc())
+            )
+        ).scalars().all()
+    )
+
+
 async def get_meal(session: AsyncSession, meal_id: int, *, user_id: int) -> MealLog | None:
     """Fetch one meal log owned by `user_id` (None if missing/not owned)."""
     row = (

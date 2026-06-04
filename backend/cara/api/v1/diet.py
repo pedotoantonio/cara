@@ -35,6 +35,8 @@ from cara.schemas.diet import (
     CategoryProgress,
     DishProposalOut,
     DishShoppingIn,
+    HistoryDayOut,
+    HistoryOut,
     RecipeDetailOut,
     CoffeeIn,
     DietProfileOut,
@@ -201,6 +203,41 @@ def _is_fruit_item(item: dict) -> bool:
         and not item.get("protein_category")
         and item.get("portion_g") in (100, 150, 300)
     )
+
+
+# ─── History (giorni passati) ──────────────────────────────────────
+
+
+@router.get("/history", response_model=HistoryOut)
+async def history(
+    days: int = Query(14, ge=1, le=90),
+    user: User = Depends(get_current_user),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> HistoryOut:
+    """Pasti registrati negli ultimi `days` giorni, raggruppati per giorno
+    (più recente prima). Sono modificabili via PATCH/DELETE /meal/{id}
+    (ownership già garantita lì)."""
+    from datetime import timedelta
+
+    today = diet_svc.rome_today()
+    start = today - timedelta(days=days - 1)
+    meals = await diet_svc.meals_in_range(session, user.id, start, today)
+    await session.commit()
+
+    by_day: dict[date, list[MealLogOut]] = {}
+    for m in meals:
+        d = m.logged_at.astimezone(diet_svc.ROME).date()
+        by_day.setdefault(d, []).append(MealLogOut.model_validate(m))
+
+    out_days = []
+    for d in sorted(by_day.keys(), reverse=True):
+        day_meals = by_day[d]
+        kcals = [mm.est_kcal for mm in day_meals if mm.est_kcal]
+        out_days.append(HistoryDayOut(
+            day=d, meals=day_meals,
+            total_kcal=sum(kcals) if kcals else None,
+        ))
+    return HistoryOut(days=out_days)
 
 
 # ─── Suggest ───────────────────────────────────────────────────────

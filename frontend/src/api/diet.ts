@@ -269,6 +269,21 @@ export async function getToday(): Promise<Today> {
   return json(await authFetch(`${API}/today`));
 }
 
+export interface HistoryDay {
+  day: string;
+  meals: MealLog[];
+  total_kcal: number | null;
+}
+
+export interface History {
+  days: HistoryDay[];
+}
+
+/** Pasti registrati negli ultimi `days` giorni, raggruppati per giorno. */
+export async function getHistory(days = 14): Promise<History> {
+  return json(await authFetch(`${API}/history?days=${days}`));
+}
+
 /** Modifica un pasto: sposta lo slot e/o riscrivi il testo. */
 export async function updateMeal(
   id: number,

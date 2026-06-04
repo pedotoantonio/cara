@@ -136,6 +136,19 @@ class TodayOut(BaseModel):
     fruit_target_min: int
 
 
+# ─── History (giorni passati) ──────────────────────────────────────
+
+
+class HistoryDayOut(BaseModel):
+    day: date
+    meals: list[MealLogOut] = Field(default_factory=list)
+    total_kcal: int | None = None
+
+
+class HistoryOut(BaseModel):
+    days: list[HistoryDayOut] = Field(default_factory=list)
+
+
 # ─── Week / frequencies ────────────────────────────────────────────
 
 
