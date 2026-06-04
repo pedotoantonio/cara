@@ -220,6 +220,51 @@ export async function logBarcode(payload: {
   );
 }
 
+// ─── "Cosa cucino?" — piatti dalla spesa ───────────────────────────
+
+export interface DishIngredient {
+  name: string;
+  portion_g: number | null;
+  kcal: number | null;
+  have: boolean;
+  status: FoodStatus | null;
+}
+
+export interface DishProposal {
+  slug: string;
+  title: string;
+  covers_category: ProteinCategory | null;
+  kcal_estimate: number | null;
+  ingredients: DishIngredient[];
+  missing: string[];
+  note: string | null;
+}
+
+export interface RecipeDetail {
+  name: string;
+  ingredients: { item: string; qty: string | null }[];
+  steps: string | null;
+  source: string | null;
+}
+
+export async function getDishes(meal: MealType = 'cena'): Promise<DishProposal[]> {
+  return json(await authFetch(`${API}/dishes?meal=${meal}`));
+}
+
+export async function getDishRecipe(title: string): Promise<RecipeDetail> {
+  return json(await authFetch(`${API}/dishes/recipe?title=${encodeURIComponent(title)}`));
+}
+
+export async function addDishMissingToShopping(names: string[]): Promise<{ added: number }> {
+  return json(
+    await authFetch(`${API}/dishes/shopping`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ names }),
+    }),
+  );
+}
+
 export async function getToday(): Promise<Today> {
   return json(await authFetch(`${API}/today`));
 }

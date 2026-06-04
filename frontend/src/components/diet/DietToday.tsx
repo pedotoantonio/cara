@@ -18,6 +18,7 @@ import {
 } from '../../api/diet';
 import { Button, Card, Icon } from '../../design';
 import { BarcodeScanner } from './BarcodeScanner';
+import { DishIdeas } from './DishIdeas';
 import { MealLogSheet } from './MealLogSheet';
 
 function CalCell({
@@ -184,6 +185,9 @@ export function DietToday() {
           )}
         </Card>
       )}
+
+      {/* Cosa cucino? — piatti dagli ingredienti in lista spesa */}
+      <DishIdeas meal={meal === 'colazione' || meal === 'spuntino' ? 'pranzo' : meal} />
 
       <div className="flex gap-2">
         <Button

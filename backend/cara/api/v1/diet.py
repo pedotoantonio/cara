@@ -33,6 +33,9 @@ from cara.schemas.diet import (
     BarcodeLogIn,
     BarcodeProductOut,
     CategoryProgress,
+    DishProposalOut,
+    DishShoppingIn,
+    RecipeDetailOut,
     CoffeeIn,
     DietProfileOut,
     DietProfileUpdate,
@@ -58,6 +61,7 @@ from cara.schemas.diet import (
 )
 from cara.config import settings
 from cara.services import diet as diet_svc
+from cara.services import diet_dishes
 from cara.services import diet_energy
 from cara.services import diet_report
 from cara.services import diet_suggest
@@ -178,6 +182,81 @@ async def suggest(
         context_reminders=result["context_reminders"],
         speak_text=result["speak_text"],
     )
+
+
+# ─── "Cosa cucino?" — piatti dalla spesa ───────────────────────────
+
+
+@router.get("/dishes", response_model=list[DishProposalOut])
+async def dishes(
+    meal: str = Query("cena"),
+    user: User = Depends(get_current_user),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> list[DishProposalOut]:
+    """Piatti cucinabili dagli ingredienti in lista spesa, con calorie."""
+    if meal not in MEAL_TYPES:
+        meal = "cena"
+    proposals = await diet_dishes.propose_dishes(
+        session, user_id=user.id, meal_type=meal
+    )
+    return [
+        DishProposalOut(
+            slug=d.slug,
+            title=d.title,
+            covers_category=d.covers_category,
+            kcal_estimate=d.kcal_estimate,
+            ingredients=[
+                {
+                    "name": i.name, "portion_g": i.portion_g, "kcal": i.kcal,
+                    "have": i.have, "status": i.status,
+                }
+                for i in d.ingredients
+            ],
+            missing=d.missing,
+            note=d.note,
+        )
+        for d in proposals
+    ]
+
+
+@router.get("/dishes/recipe", response_model=RecipeDetailOut)
+async def dish_recipe(
+    title: str = Query(..., min_length=2, max_length=160),
+    user: User = Depends(get_current_user),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> RecipeDetailOut:
+    """Ricetta completa di un piatto (genera + cacha se assente)."""
+    recipe = await diet_dishes.get_or_build_recipe(session, title=title)
+    return RecipeDetailOut(
+        name=recipe.name,
+        ingredients=recipe.ingredients or [],
+        steps=recipe.steps,
+        source=recipe.source,
+    )
+
+
+@router.post("/dishes/shopping", status_code=201)
+async def dish_add_to_shopping(
+    payload: DishShoppingIn,
+    user: User = Depends(get_current_user),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> dict[str, int]:
+    """Aggiunge gli ingredienti mancanti di un piatto alla lista spesa."""
+    created = await diet_dishes.add_missing_to_shopping(
+        session, user_id=user.id, names=payload.names
+    )
+    # Publish family-bus events for each created item (best-effort).
+    try:
+        from cara.schemas.shopping import ShoppingItemOut
+        from cara.services.family_bus import publish as fb_publish
+        for item in created:
+            await fb_publish(
+                "shopping.created", user_id=user.id,
+                payload=ShoppingItemOut.model_validate(item).model_dump(mode="json"),
+            )
+    except Exception:  # noqa: BLE001 — bus is best-effort
+        pass
+    return {"added": len(created)}
 
 
 # ─── Week ──────────────────────────────────────────────────────────

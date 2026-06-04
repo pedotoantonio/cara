@@ -267,6 +267,43 @@ class BarcodeLogIn(BaseModel):
     logged_at: datetime | None = None
 
 
+# ─── "Cosa cucino?" — piatti dalla spesa ───────────────────────────
+
+
+class DishIngredientOut(BaseModel):
+    name: str
+    portion_g: int | None = None
+    kcal: int | None = None
+    have: bool = False
+    status: str | None = None
+
+
+class DishProposalOut(BaseModel):
+    slug: str
+    title: str
+    covers_category: str | None = None
+    kcal_estimate: int | None = None
+    ingredients: list[DishIngredientOut] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+    note: str | None = None
+
+
+class RecipeIngredient(BaseModel):
+    item: str
+    qty: str | None = None
+
+
+class RecipeDetailOut(BaseModel):
+    name: str
+    ingredients: list[RecipeIngredient] = Field(default_factory=list)
+    steps: str | None = None
+    source: str | None = None
+
+
+class DishShoppingIn(BaseModel):
+    names: list[str] = Field(..., min_length=1, max_length=20)
+
+
 class ExerciseLogIn(BaseModel):
     activity: str = Field(..., min_length=1, max_length=80)
     duration_min: int = Field(..., ge=1, le=600)
